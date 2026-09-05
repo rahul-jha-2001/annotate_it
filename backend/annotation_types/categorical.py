@@ -1,10 +1,29 @@
-from typing import Any, Dict, List, Optional, Type
-from pydantic import BaseModel
+from typing import Any, Dict, List, Literal, Type
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+class CategoricalConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    annotation_type: Literal["categorical"]
+    choices: List[str] = Field(min_length=1)
+    multi_select: bool = False
+
+    @field_validator("choices")
+    @classmethod
+    def validate_choices(cls, choices: List[str]) -> List[str]:
+        normalized = [choice.strip() for choice in choices]
+        if any(not choice for choice in normalized):
+            raise ValueError("choices cannot contain blank values")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("choices must be unique")
+        return normalized
 
 class SingleChoiceAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     value: str
 
 class MultiChoiceAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     values: List[str]
 
 class CategoricalType:
@@ -13,14 +32,28 @@ class CategoricalType:
     compatible_modalities = ["audio", "video", "image", "text"]
     supports_choices = True
     supports_multi_select = True
+
+    def validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        return CategoricalConfig.model_validate(config).model_dump()
     
     def get_answer_model(self, config: Dict[str, Any]) -> Type[BaseModel]:
         return MultiChoiceAnswer if config.get("multi_select") else SingleChoiceAnswer
+
+    def validate_answer(self, answer: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+        validated_config = CategoricalConfig.model_validate(config)
+        parsed = self.get_answer_model(config).model_validate(answer)
+        selected = parsed.values if validated_config.multi_select else [parsed.value]
+        unknown = sorted(set(selected) - set(validated_config.choices))
+        if unknown:
+            raise ValueError(f"unknown choices: {', '.join(unknown)}")
+        if len(selected) != len(set(selected)):
+            raise ValueError("selected choices must be unique")
+        return parsed.model_dump()
     
     def gold_match(self, answer: Dict[str, Any], gold_answer: Dict[str, Any], config: Dict[str, Any]) -> float:
         AnswerModel = self.get_answer_model(config)
-        ans = AnswerModel(**answer)
-        gold = AnswerModel(**gold_answer)
+        ans = AnswerModel.model_validate(answer)
+        gold = AnswerModel.model_validate(gold_answer)
         
         if config.get("multi_select"):
             set1 = set(ans.values)

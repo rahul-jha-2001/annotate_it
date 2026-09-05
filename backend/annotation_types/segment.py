@@ -1,12 +1,38 @@
-from typing import Any, Dict, List
-from pydantic import BaseModel
-from .base import AnnotationTypeSpec
+from typing import Any, Dict, List, Literal, Type
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+class SegmentConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    annotation_type: Literal["segment"]
+    choices: List[str] = Field(min_length=1)
+    multi_select: Literal[False] = False
+
+    @field_validator("choices")
+    @classmethod
+    def validate_choices(cls, choices: List[str]) -> List[str]:
+        normalized = [choice.strip() for choice in choices]
+        if any(not choice for choice in normalized):
+            raise ValueError("choices cannot contain blank values")
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("choices must be unique")
+        return normalized
 
 class Region(BaseModel):
-    start: float
-    end: float
+    model_config = ConfigDict(extra="forbid")
+
+    start: float = Field(ge=0)
+    end: float = Field(gt=0)
+
+    @model_validator(mode="after")
+    def end_must_follow_start(self):
+        if self.end <= self.start:
+            raise ValueError("region end must be greater than start")
+        return self
 
 class SegmentAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     label: str
     regions: List[Region]
 
@@ -46,17 +72,25 @@ def greedy_match_iou(regions_a: List[Region], regions_b: List[Region]) -> float:
     max_len = max(len(regions_a), len(regions_b))
     return total_iou / max_len if max_len > 0 else 0.0
 
-from typing import Type
-
 class SegmentType:
     key = "segment"
     name = "Segment / Region"
     compatible_modalities = ["audio", "video"]
     supports_choices = True
     supports_multi_select = False
+
+    def validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        return SegmentConfig.model_validate(config).model_dump()
     
     def get_answer_model(self, config: Dict[str, Any]) -> Type[BaseModel]:
         return SegmentAnswer
+
+    def validate_answer(self, answer: Dict[str, Any], config: Dict[str, Any]) -> Dict[str, Any]:
+        validated_config = SegmentConfig.model_validate(config)
+        parsed = SegmentAnswer.model_validate(answer)
+        if parsed.label not in validated_config.choices:
+            raise ValueError(f"unknown choice: {parsed.label}")
+        return parsed.model_dump()
     
     def gold_match(self, answer: Dict[str, Any], gold_answer: Dict[str, Any], config: Dict[str, Any]) -> float:
         AnswerModel = self.get_answer_model(config)

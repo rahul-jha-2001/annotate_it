@@ -1,5 +1,13 @@
-import React, { useState, useMemo, useEffect } from "react";
-import { UploadCloud, Plus, Settings, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowLeft, ArrowRight, Check, Plus, Settings, Trash2, UploadCloud } from "lucide-react";
+import AnnotationControl from "./annotator/AnnotationControl";
+import type { AnnotationAnswer, LabelSchema } from "./annotator/types";
+import {
+  parseDatasetBundle,
+  validateGold,
+  type MetadataFieldDefinition,
+  type ParsedDatasetRow,
+} from "./datasetBundle";
 
 interface AnnotationTypeInfo {
   key: string;
@@ -9,392 +17,356 @@ interface AnnotationTypeInfo {
   supports_multi_select: boolean;
 }
 
-export default function CreateExperiment() {
-  const [formData, setFormData] = useState({
-    name: "",
-    modality: "audio",
-    instructions: "",
-    overlap_n: 1,
-    gold_ratio: 0.1,
-  });
+interface QualificationQuestion {
+  key: string;
+  label: string;
+  type: "single_choice" | "multi_choice" | "boolean" | "number";
+  required: boolean;
+  options: string[];
+  minimum?: number;
+  maximum?: number;
+}
 
-  const [annotationType, setAnnotationType] = useState("categorical");
-  const [choices, setChoices] = useState("Good, Noisy, Unusable");
-  const [multiSelect, setMultiSelect] = useState(false);
-  const [files, setFiles] = useState<File[]>([]);
-  const [goldManifest, setGoldManifest] = useState<File | null>(null);
-  const [goldManifestText, setGoldManifestText] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+interface RoutingRule {
+  metadata_field: string;
+  operator: "equals" | "in" | "gte";
+  question_key: string;
+}
+
+const steps = ["Basics", "Task", "Dataset bundle", "Dataset preview", "Qualifications", "Review"];
+
+export default function CreateExperiment() {
+  const [step, setStep] = useState(0);
+  const [form, setForm] = useState({ name: "", modality: "audio", instructions: "", overlap_n: 2, gold_ratio: 0.1 });
   const [annotationTypes, setAnnotationTypes] = useState<AnnotationTypeInfo[]>([]);
+  const [annotationType, setAnnotationType] = useState("categorical");
+  const [labels, setLabels] = useState(["Good", "Noisy", "Unusable"]);
+  const [labelInput, setLabelInput] = useState("");
+  const [multiSelect, setMultiSelect] = useState(false);
+  const [previewAnswer, setPreviewAnswer] = useState<AnnotationAnswer>({});
+  const [files, setFiles] = useState<File[]>([]);
+  const [metadataFields, setMetadataFields] = useState<MetadataFieldDefinition[]>([]);
+  const [metadataCsv, setMetadataCsv] = useState("");
+  const [datasetRows, setDatasetRows] = useState<ParsedDatasetRow[]>([]);
+  const [datasetErrors, setDatasetErrors] = useState<string[]>([]);
+  const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
+  const [questions, setQuestions] = useState<QualificationQuestion[]>([]);
+  const [rules, setRules] = useState<RoutingRule[]>([]);
+  const [goldManifest, setGoldManifest] = useState("");
+  const [uploadStatus, setUploadStatus] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/annotation-types')
-      .then(res => res.json())
-      .then(data => {
-        setAnnotationTypes(data);
-        if (data.length > 0 && !data.find((t: any) => t.key === annotationType)) {
-          setAnnotationType(data[0].key);
-        }
-      })
-      .catch(err => console.error("Failed to load annotation types:", err));
+    fetch("/api/annotation-types").then(response => response.json()).then(setAnnotationTypes)
+      .catch(() => setError("Could not load annotation types"));
   }, []);
 
-  const availableTypes = useMemo(() => {
-    return annotationTypes.filter(t => t.compatible_modalities.includes(formData.modality));
-  }, [annotationTypes, formData.modality]);
+  const availableTypes = annotationTypes.filter(type => type.compatible_modalities.includes(form.modality));
+  const currentType = annotationTypes.find(type => type.key === annotationType);
+  useEffect(() => {
+    if (currentType && !currentType.supports_multi_select) setMultiSelect(false);
+  }, [currentType]);
 
   useEffect(() => {
-    if (availableTypes.length > 0 && !availableTypes.find(t => t.key === annotationType)) {
-      setAnnotationType(availableTypes[0].key);
-    }
-  }, [availableTypes, annotationType]);
+    setPreviewAnswer(annotationType === "segment" ? { regions: [] } : {});
+  }, [annotationType, multiSelect, labels]);
 
-  const currentTypeSpec = annotationTypes.find(t => t.key === annotationType);
-  
-  const previewJson = useMemo(() => {
-    const example: any = { filename: "clip_01.wav", answer: {} };
-    const firstChoice = choices.split(",")[0].trim() || "Label";
-    if (annotationType === "segment") {
-      example.answer = { label: firstChoice, regions: [{ start: 0.0, end: 5.0 }] };
-    } else if (annotationType === "categorical") {
-      if (multiSelect) {
-        example.answer.values = [firstChoice];
-      } else {
-        example.answer.value = firstChoice;
-      }
-    } else {
-      example.answer.value = "...";
-    }
-    return JSON.stringify([example], null, 2);
-  }, [annotationType, choices, multiSelect]);
+  useEffect(() => {
+    const urls = Object.fromEntries(files.map(file => [file.name, URL.createObjectURL(file)]));
+    setMediaUrls(urls);
+    return () => Object.values(urls).forEach(url => URL.revokeObjectURL(url));
+  }, [files]);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-    
+  const previewSchema: LabelSchema = {
+    annotation_type: annotationType,
+    choices: labels,
+    multi_select: multiSelect,
+  };
+
+  const duplicateFiles = useMemo(() => {
+    const names = files.map(file => file.name);
+    return new Set(names.filter((name, index) => names.indexOf(name) !== index));
+  }, [files]);
+  const goldCount = datasetRows.filter(row => row.goldAnswer).length;
+  const regularCount = datasetRows.length - goldCount;
+
+  const addLabel = () => {
+    const value = labelInput.trim();
+    if (value && !labels.includes(value)) setLabels(current => [...current, value]);
+    setLabelInput("");
+  };
+
+  const addQuestion = () => {
+    const index = questions.length + 1;
+    setQuestions(current => [...current, { key: `question_${index}`, label: `Qualification question ${index}`, type: "single_choice", required: true, options: ["Option 1"] }]);
+  };
+
+  const updateQuestion = (index: number, patch: Partial<QualificationQuestion>) => {
+    setQuestions(current => current.map((question, position) => position === index ? { ...question, ...patch } : question));
+  };
+
+  const addRule = () => {
+    if (!metadataFields.length || !questions.length) return;
+    const question = questions[0];
+    setRules(current => [...current, {
+      metadata_field: metadataFields[0].key,
+      operator: question.type === "multi_choice" ? "in" : "equals",
+      question_key: question.key,
+    }]);
+  };
+
+  const canContinue = (() => {
+    if (step === 0) return Boolean(form.name.trim() && form.instructions.trim());
+    if (step === 1) return Boolean(annotationType && labels.length);
+    if (step === 2) return files.length > 0 && duplicateFiles.size === 0;
+    if (step === 3) return datasetErrors.length === 0 && datasetRows.every(row => row.errors.length === 0);
+    return true;
+  })();
+
+  const assembleDataset = () => {
+    setError(null);
     try {
-      // 1. Create the experiment
-      const expRes = await fetch('/api/experiments', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: formData.name,
-          modality: formData.modality,
-          instructions: formData.instructions,
-          label_schema: {
-            annotation_type: annotationType,
-            choices: choices.split(",").map(c => c.trim()).filter(Boolean),
-            multi_select: multiSelect
-          },
-          overlap_n: formData.overlap_n,
-          gold_ratio: formData.gold_ratio
-        })
+      const parsed = parseDatasetBundle(files.map(file => file.name), metadataCsv, goldManifest, {
+        annotationType,
+        labels,
+        multiSelect,
       });
-      
-      if (!expRes.ok) throw new Error("Failed to create experiment");
-      const experiment = await expRes.json();
-      
-      // 2. If there are files, get presigned URLs and upload them
-      let dataUnits = [];
-      if (files.length > 0) {
-        const presignRes = await fetch('/api/uploads/presign', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filenames: files.map(f => f.name) })
+      setMetadataFields(parsed.metadataFields);
+      setDatasetRows(parsed.rows);
+      setDatasetErrors(parsed.errors);
+      setRules([]);
+      setStep(3);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not read the dataset bundle");
+    }
+  };
+
+  const updateRowMetadata = (filename: string, key: string, value: string | number | boolean | undefined) => {
+    setDatasetRows(current => current.map(row => {
+      if (row.filename !== filename) return row;
+      const metadata = { ...row.metadata };
+      if (value === undefined) delete metadata[key];
+      else metadata[key] = value;
+      return {
+        ...row,
+        metadata,
+        errors: row.errors.filter(message => message !== "No metadata row matches this media file"),
+      };
+    }));
+  };
+
+  const updateRowGold = (filename: string, text: string) => {
+    setDatasetRows(current => current.map(row => {
+      if (row.filename !== filename) return row;
+      const metadataErrors = row.errors.filter(message => message === "No metadata row matches this media file");
+      if (!text.trim()) return { ...row, goldAnswer: null, errors: metadataErrors };
+      try {
+        const answer = JSON.parse(text) as Record<string, unknown>;
+        return {
+          ...row,
+          goldAnswer: answer,
+          errors: [...metadataErrors, ...validateGold(answer, { annotationType, labels, multiSelect })],
+        };
+      } catch {
+        return { ...row, errors: [...metadataErrors, "Gold answer is not valid JSON"] };
+      }
+    }));
+  };
+
+  const deploy = async () => {
+    setSubmitting(true);
+    setError(null);
+    try {
+      if (!datasetRows.length || datasetErrors.length || datasetRows.some(row => row.errors.length)) {
+        throw new Error("Return to the dataset preview and resolve its validation errors");
+      }
+      if (form.gold_ratio > 0 && goldCount === 0) {
+        throw new Error('Add at least one gold answer or set quality-check frequency to "None"');
+      }
+      const datasetByFilename = new Map(datasetRows.map(row => [row.filename, row]));
+
+      const experimentResponse = await fetch("/api/experiments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...form,
+          status: "draft",
+          label_schema: { annotation_type: annotationType, choices: labels, multi_select: multiSelect },
+          metadata_schema: metadataFields,
+          qualification_form: questions,
+          routing_rules: rules,
+        }),
+      });
+      const experimentBody = await experimentResponse.json();
+      if (!experimentResponse.ok) throw new Error(typeof experimentBody.detail === "string" ? experimentBody.detail : "Invalid experiment configuration");
+
+      const presignResponse = await fetch("/api/uploads/presign", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filenames: files.map(file => file.name) }),
+      });
+      if (!presignResponse.ok) throw new Error("Could not prepare file uploads");
+      const presigned = (await presignResponse.json()).urls;
+      const dataUnits = await Promise.all(files.map(async file => {
+        const target = presigned.find((item: any) => item.filename === file.name);
+        if (!target) throw new Error(`Missing upload URL for ${file.name}`);
+        setUploadStatus(current => ({ ...current, [file.name]: "Uploading" }));
+        const response = await fetch(target.upload_url, { method: "PUT", body: file, headers: { "Content-Type": file.type } });
+        if (!response.ok) throw new Error(`Upload failed: ${file.name}`);
+        setUploadStatus(current => ({ ...current, [file.name]: "Uploaded" }));
+        return { raw_uri: target.s3_uri, metadata: datasetByFilename.get(file.name)?.metadata ?? {} };
+      }));
+
+      const unitsResponse = await fetch(`/api/experiments/${experimentBody.id}/data-units`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: dataUnits }),
+      });
+      if (!unitsResponse.ok) throw new Error((await unitsResponse.json()).detail || "Could not register dataset");
+
+      const goldEntries = datasetRows
+        .filter(row => row.goldAnswer)
+        .map(row => ({ filename: row.filename, answer: row.goldAnswer }));
+      if (goldEntries.length) {
+        const goldResponse = await fetch(`/api/experiments/${experimentBody.id}/gold-manifest`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ manifest: goldEntries }),
         });
-        
-        if (!presignRes.ok) throw new Error("Failed to get presigned URLs");
-        const presignData = await presignRes.json();
-        
-        // Upload each file and prepare DataUnit payload
-        for (let i = 0; i < files.length; i++) {
-          const file = files[i];
-          const presigned = presignData.urls.find((u: any) => u.filename === file.name);
-          
-          if (presigned) {
-            // PUT to MinIO
-            await fetch(presigned.upload_url, {
-              method: 'PUT',
-              body: file,
-              headers: { 'Content-Type': file.type }
-            });
-            
-            dataUnits.push({
-              raw_uri: presigned.s3_uri,
-              is_gold: false, // Gold items can be configured later in a full v1
-              gold_answer: null
-            });
-          }
-        }
+        const result = await goldResponse.json();
+        if (!goldResponse.ok || result.errors?.length) throw new Error(result.errors?.[0]?.error || "Could not apply gold answers");
       }
-      
-      // 3. Batch create data units
-      if (dataUnits.length > 0) {
-        await fetch(`/api/experiments/${experiment.id}/data-units`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ items: dataUnits })
-        });
-      }
-      
-      // 4. Gold manifest upload
-      let manifestErrors = 0;
-      if ((goldManifest || goldManifestText) && dataUnits.length > 0) {
-        try {
-          let text = goldManifestText;
-          if (goldManifest && !text) {
-             text = await goldManifest.text();
-          }
-          const parsed = JSON.parse(text);
-          const manifestRes = await fetch(`/api/experiments/${experiment.id}/gold-manifest`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ manifest: parsed })
-          });
-          const result = await manifestRes.json();
-          if (result.errors && result.errors.length > 0) {
-            manifestErrors = result.errors.length;
-            console.error("Gold manifest errors:", result.errors);
-          }
-        } catch (err) {
-          console.error("Manifest parsing error:", err);
-          alert("Failed to parse gold manifest. Was it valid JSON?");
-        }
-      }
-      
-      let msg = `Experiment created! Share token: ${experiment.share_token}`;
-      if (manifestErrors > 0) msg += `\nWarning: ${manifestErrors} entries in your gold manifest failed to process. Check console.`;
-      alert(msg);
-      // In a real app, redirect to dashboard here
-    } catch (err) {
-      console.error(err);
-      alert("Error creating experiment: " + err);
+
+      const deployResponse = await fetch(`/api/experiments/${experimentBody.id}/deploy`, { method: "POST" });
+      if (!deployResponse.ok) throw new Error((await deployResponse.json()).detail || "Could not deploy experiment");
+      window.location.assign(`/experiments/${experimentBody.id}`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not create experiment");
     } finally {
-      setIsSubmitting(false);
+      setSubmitting(false);
     }
   };
 
   return (
-    <div className="glass-panel" style={{ width: "100%", maxWidth: "1000px", margin: "0 auto" }}>
-      <div className="flex-row" style={{ marginBottom: "24px", borderBottom: "1px solid var(--border-color)", paddingBottom: "16px" }}>
-        <Settings className="app-logo-icon" size={24} />
-        <h2>Create New Experiment</h2>
+    <div className="wizard-shell">
+      <div className="wizard-steps">
+        {steps.map((label, index) => (
+          <div key={label} className={`wizard-step ${index === step ? "current" : ""} ${index < step ? "complete" : ""}`}>
+            <span>{index < step ? <Check size={15} /> : index + 1}</span>{label}
+          </div>
+        ))}
       </div>
 
-      <form onSubmit={handleSubmit} className="flex-col" style={{ gap: "24px" }}>
-        
-        {/* Basic Info */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px" }}>
-          <div className="form-group">
-            <label className="form-label">Experiment Name</label>
-            <input 
-              type="text" 
-              className="form-input" 
-              placeholder="e.g. Sentiment Analysis Audio"
-              value={formData.name}
-              onChange={(e) => setFormData({...formData, name: e.target.value})}
-              required
-            />
-          </div>
+      <div className="glass-panel wizard-panel">
+        <div className="wizard-title"><Settings size={24} className="app-logo-icon" /><div><h2>{steps[step]}</h2><p>{[
+          "Name the experiment and explain the work.",
+          "Choose what annotators will submit.",
+          "Add media, metadata, and gold answers together.",
+          "Inspect every assembled sample before upload.",
+          "Ask qualification questions and route matching samples.",
+          "Confirm quality settings and deploy.",
+        ][step]}</p></div></div>
 
-          <div className="form-group">
-            <label className="form-label">Modality</label>
-            <select 
-              className="form-select"
-              value={formData.modality}
-              onChange={(e) => setFormData({...formData, modality: e.target.value})}
-            >
-              <option value="audio">Audio (Wavesurfer.js)</option>
-              <option value="image" disabled>Image (Coming Soon)</option>
-            </select>
-          </div>
-        </div>
+        {step === 0 && <div className="flex-col">
+          <div className="form-group"><label className="form-label">Experiment name</label><input className="form-input" value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="Hindi speech quality" /></div>
+          <div className="form-group"><label className="form-label">Instructions for annotators</label><textarea className="form-textarea" value={form.instructions} onChange={event => setForm({ ...form, instructions: event.target.value })} placeholder="Explain what a good annotation looks like…" /></div>
+          <div className="form-group"><label className="form-label">Media type</label><select className="form-select" value={form.modality} onChange={event => setForm({ ...form, modality: event.target.value })}><option value="audio">Audio</option></select></div>
+        </div>}
 
-        <div className="form-group">
-          <label className="form-label">Instructions for Annotators</label>
-          <textarea 
-            className="form-textarea" 
-            placeholder="Describe exactly what annotators should look for..."
-            value={formData.instructions}
-            onChange={(e) => setFormData({...formData, instructions: e.target.value})}
-          />
-        </div>
-
-        {/* Quality Settings */}
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "20px", background: "rgba(0,0,0,0.15)", padding: "16px", borderRadius: "12px" }}>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Overlap N (Annotators per item)</label>
-            <input 
-              type="number" 
-              className="form-input" 
-              min="1" max="10"
-              value={formData.overlap_n}
-              onChange={(e) => setFormData({...formData, overlap_n: parseInt(e.target.value)})}
-            />
-          </div>
-          <div className="form-group" style={{ marginBottom: 0 }}>
-            <label className="form-label">Gold Ratio (0.0 to 1.0)</label>
-            <input 
-              type="number" 
-              className="form-input" 
-              min="0" max="1" step="0.05"
-              value={formData.gold_ratio}
-              onChange={(e) => setFormData({...formData, gold_ratio: parseFloat(e.target.value)})}
-            />
-          </div>
-        </div>
-
-        {/* Schema Definition */}
-        <div className="form-group">
-          <label className="form-label">Annotation Schema</label>
-          <div className="flex-col" style={{ gap: "12px", background: "rgba(255,255,255,0.02)", padding: "16px", borderRadius: "8px", border: "1px solid rgba(255,255,255,0.05)" }}>
-            <div className="flex-row" style={{ gap: "12px", alignItems: "center" }}>
-              <span style={{ width: "120px", color: "var(--text-secondary)", fontSize: "0.9rem" }}>Type:</span>
-              <select 
-                className="form-select" 
-                style={{ flex: 1 }}
-                value={annotationType}
-                onChange={(e) => setAnnotationType(e.target.value)}
-              >
-                {availableTypes.map(t => (
-                  <option key={t.key} value={t.key}>{t.name}</option>
-                ))}
-              </select>
-            </div>
-            
-            {currentTypeSpec?.supports_choices && (
-              <div className="flex-row" style={{ gap: "12px", alignItems: "center" }}>
-                <span style={{ width: "120px", color: "var(--text-secondary)", fontSize: "0.9rem" }}>Choices:</span>
-                <input 
-                  type="text" 
-                  className="form-input" 
-                  style={{ flex: 1 }}
-                  placeholder="Comma separated choices (e.g. Good, Bad)"
-                  value={choices}
-                  onChange={(e) => setChoices(e.target.value)}
-                />
+        {step === 1 && <div className="flex-col">
+          <div className="task-type-grid">{availableTypes.map(type => <button type="button" key={type.key} className={`task-type-card ${annotationType === type.key ? "selected" : ""}`} onClick={() => setAnnotationType(type.key)}><strong>{type.name}</strong><span>{type.key === "categorical" ? "Choose one or more labels for the whole sample" : "Mark labeled time regions in audio"}</span></button>)}</div>
+          <div className="form-group"><label className="form-label">Labels or choices</label><div className="chip-editor"><div className="label-chips">{labels.map(label => <span className="label-chip" key={label}>{label}<button type="button" onClick={() => setLabels(current => current.filter(value => value !== label))}>×</button></span>)}</div><div className="flex-row"><input className="form-input" value={labelInput} onChange={event => setLabelInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addLabel(); } }} placeholder="Add a label" /><button type="button" className="btn btn-secondary" onClick={addLabel}><Plus size={16} /> Add</button></div></div></div>
+          {currentType?.supports_multi_select && <label className="choice-option"><input type="checkbox" checked={multiSelect} onChange={event => setMultiSelect(event.target.checked)} />Allow annotators to select multiple choices</label>}
+          <div className="config-preview">
+            <span>Interactive annotator preview</span>
+            {annotationType === "segment" && (
+              <div className="segment-preview">
+                <div className="segment-preview-wave">
+                  {(previewAnswer.regions?.length ?? 0) > 0 && <div className="segment-preview-region">Example region</div>}
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setPreviewAnswer(current => ({
+                    ...current,
+                    regions: current.regions?.length ? [] : [{ start: 1.25, end: 3.75 }],
+                  }))}
+                >
+                  {previewAnswer.regions?.length ? "Remove example region" : "Add example region"}
+                </button>
               </div>
             )}
-            
-            {currentTypeSpec?.supports_multi_select && (
-              <div className="flex-row" style={{ gap: "12px", alignItems: "center" }}>
-                <span style={{ width: "120px", color: "var(--text-secondary)", fontSize: "0.9rem" }}>Multi-select:</span>
-                <label style={{ display: "flex", alignItems: "center", gap: "8px", cursor: "pointer" }}>
-                  <input 
-                    type="checkbox" 
-                    checked={multiSelect}
-                    onChange={(e) => setMultiSelect(e.target.checked)}
-                  />
-                  <span style={{ fontSize: "0.9rem" }}>Allow multiple selections per item</span>
-                </label>
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* Data Upload */}
-        <div className="form-group">
-          <label className="form-label">Upload Dataset (Audio Files)</label>
-          <label className="dropzone">
-            <UploadCloud className="dropzone-icon" />
-            <div>
-              <p style={{ margin: 0, fontWeight: 500, color: "var(--text-primary)" }}>Click to browse or drag files here</p>
-              <p style={{ margin: 0, fontSize: "0.85rem", marginTop: "4px" }}>Select audio files (.mp3, .wav). You can mark gold items later.</p>
-            </div>
-            <input 
-              type="file" 
-              multiple 
-              accept="audio/*" 
-              style={{ display: 'none' }}
-              onChange={(e) => {
-                if (e.target.files) {
-                  setFiles(Array.from(e.target.files));
-                }
-              }}
+            <AnnotationControl
+              schema={previewSchema}
+              answer={previewAnswer}
+              onChange={setPreviewAnswer}
             />
-          </label>
-          
-          {files.length > 0 && (
-            <div style={{ marginTop: "12px", fontSize: "0.9rem", color: "var(--text-secondary)" }}>
-              <div style={{ marginBottom: "8px", fontWeight: 500 }}>{files.length} file(s) selected:</div>
-              <ul style={{ 
-                listStyle: "none", 
-                padding: "8px 12px", 
-                margin: 0, 
-                background: "rgba(0,0,0,0.2)", 
-                borderRadius: "6px", 
-                maxHeight: "150px", 
-                overflowY: "auto",
-                border: "1px solid rgba(255,255,255,0.05)"
-              }}>
-                {files.map((file, idx) => (
-                  <li key={idx} style={{ padding: "4px 0", borderBottom: idx < files.length - 1 ? "1px solid rgba(255,255,255,0.05)" : "none", display: "flex", alignItems: "center", gap: "8px" }}>
-                    <span style={{ fontSize: "0.75rem", opacity: 0.5, width: "24px" }}>{idx + 1}.</span>
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1, color: "var(--text-primary)" }}>{file.name}</span>
-                    <span style={{ fontSize: "0.75rem", opacity: 0.5 }}>{(file.size / 1024).toFixed(1)} KB</span>
-                  </li>
-                ))}
-              </ul>
+            <div className="preview-payload">
+              <span>Answer payload</span>
+              <code>{JSON.stringify(previewAnswer)}</code>
             </div>
-          )}
-        </div>
-        
-        {/* Gold Manifest Upload */}
-        <div className="form-group">
-          <label className="form-label">Upload Gold Manifest (Optional)</label>
-          <div style={{ background: "rgba(0,0,0,0.2)", padding: "12px", borderRadius: "8px", fontFamily: "monospace", fontSize: "0.85rem", whiteSpace: "pre-wrap", marginBottom: "12px", color: "var(--text-secondary)" }}>
-            Your gold manifest JSON should look like:
-            <br />
-            {previewJson}
           </div>
-          <div style={{ display: "flex", gap: "12px", flexDirection: "column" }}>
-            <textarea
-              className="form-input"
-              style={{ minHeight: "120px", fontFamily: "monospace", fontSize: "0.85rem" }}
-              placeholder="Paste JSON manifest here..."
-              value={goldManifestText}
-              onChange={(e) => setGoldManifestText(e.target.value)}
-            />
-            
-            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-              <div style={{ flex: 1, height: "1px", background: "rgba(255,255,255,0.1)" }}></div>
-              <span style={{ fontSize: "0.85rem", color: "var(--text-secondary)" }}>OR UPLOAD FILE</span>
-              <div style={{ flex: 1, height: "1px", background: "rgba(255,255,255,0.1)" }}></div>
-            </div>
+        </div>}
 
-            <label className="dropzone">
-              <UploadCloud className="dropzone-icon" />
-              <div>
-                <p style={{ margin: 0, fontWeight: 500, color: "var(--text-primary)" }}>Click to browse or drag JSON file here</p>
-                <p style={{ margin: 0, fontSize: "0.85rem", marginTop: "4px" }}>Upload a .json file containing answers for your gold standard items.</p>
-              </div>
-              <input 
-                type="file" 
-                accept="application/json" 
-                style={{ display: 'none' }}
-                onChange={(e) => {
-                  if (e.target.files && e.target.files.length > 0) {
-                    setGoldManifest(e.target.files[0]);
-                    setGoldManifestText(""); // Clear text if file selected
-                  }
-                }}
-              />
-            </label>
+        {step === 2 && <div className="flex-col">
+          <div className="bundle-grid">
+            <label className="dropzone"><UploadCloud className="dropzone-icon" /><strong>1. Choose audio files</strong><span>MP3, WAV, or other browser-supported audio</span><input type="file" multiple accept="audio/*" hidden onChange={event => { setFiles(Array.from(event.target.files ?? [])); setDatasetRows([]); }} /></label>
+            <label className="dropzone compact"><UploadCloud className="dropzone-icon" /><strong>2. Upload metadata CSV (optional)</strong><span>{metadataCsv ? "CSV loaded — choose another to replace it" : 'Must contain a "filename" column'}</span><input type="file" accept=".csv,text/csv" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setMetadataCsv(await file.text()); setDatasetRows([]); } }} /></label>
+            <label className="dropzone compact"><UploadCloud className="dropzone-icon" /><strong>3. Upload gold answers JSON (optional)</strong><span>{goldManifest ? "JSON loaded — choose another to replace it" : "Only include samples used as quality checks"}</span><input type="file" accept=".json,application/json" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setGoldManifest(await file.text()); setDatasetRows([]); } }} /></label>
           </div>
-          
-          {goldManifest && !goldManifestText && (
-            <div style={{ marginTop: "12px", fontSize: "0.9rem", color: "var(--text-secondary)" }}>
-              Selected manifest: {goldManifest.name}
-            </div>
-          )}
-        </div>
+          {(metadataCsv || goldManifest) && <div className="bundle-actions">{metadataCsv && <button type="button" className="btn btn-secondary" onClick={() => { setMetadataCsv(""); setDatasetRows([]); }}>Remove metadata CSV</button>}{goldManifest && <button type="button" className="btn btn-secondary" onClick={() => { setGoldManifest(""); setDatasetRows([]); }}>Remove gold JSON</button>}</div>}
+          {files.length > 0 && <div className="file-list">{files.map(file => <div key={`${file.name}-${file.size}`}><span>{file.name}</span><span>{uploadStatus[file.name] || `${(file.size / 1024).toFixed(0)} KB`}</span></div>)}</div>}
+          {duplicateFiles.size > 0 && <p className="form-error">Duplicate filenames are not allowed: {[...duplicateFiles].join(", ")}</p>}
+          <details><summary>Input formats</summary><p className="help-text">Metadata CSV example: <code>filename,language,difficulty</code>. Gold JSON example: <code>{`[{"filename":"clip.wav","answer":{"value":"Good"}}]`}</code>. Filenames must match the selected media exactly.</p></details>
+          {error && <p className="form-error">{error}</p>}
+        </div>}
 
-        <div style={{ marginTop: "16px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="submit" className="btn btn-primary" disabled={isSubmitting}>
-            {isSubmitting ? "Deploying..." : "Create & Deploy Experiment"}
-          </button>
+        {step === 3 && <div className="flex-col">
+          <div className="dataset-summary">
+            <div><strong>{datasetRows.length}</strong><span>samples</span></div>
+            <div><strong>{metadataFields.length}</strong><span>metadata fields</span></div>
+            <div><strong>{goldCount}</strong><span>gold samples</span></div>
+            <div><strong>{datasetErrors.length + datasetRows.filter(row => row.errors.length).length}</strong><span>issues</span></div>
+          </div>
+          {datasetErrors.map(message => <p className="form-error" key={message}>{message}</p>)}
+          <div className="dataset-table-wrap"><table className="dataset-table"><thead><tr><th>Sample</th><th>Preview</th>{metadataFields.map(field => <th key={field.key}>{field.label}</th>)}<th>Gold answer</th><th>Status</th></tr></thead><tbody>
+            {datasetRows.map(row => <tr key={row.filename} className={row.errors.length ? "invalid" : ""}>
+              <td><strong>{row.filename}</strong></td>
+              <td><audio controls preload="metadata" src={mediaUrls[row.filename]} /></td>
+              {metadataFields.map(field => <td key={field.key}>
+                {field.type === "choice" ? <select className="table-input" value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value || undefined)}><option value="">—</option>{field.options.map(option => <option key={option}>{option}</option>)}</select>
+                  : field.type === "boolean" ? <select className="table-input" value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value ? event.target.value === "true" : undefined)}><option value="">—</option><option value="true">Yes</option><option value="false">No</option></select>
+                    : <input className="table-input" type={field.type === "number" ? "number" : "text"} value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value ? (field.type === "number" ? event.target.valueAsNumber : event.target.value) : undefined)} />}
+              </td>)}
+              <td><textarea className="table-input gold-cell" defaultValue={row.goldAnswer ? JSON.stringify(row.goldAnswer) : ""} placeholder="Not gold" onBlur={event => updateRowGold(row.filename, event.target.value)} /></td>
+              <td>{row.errors.length ? <span className="status-error" title={row.errors.join("; ")}>Needs attention</span> : <span className="status-ready">Ready</span>}{row.errors.map(message => <small className="row-error" key={message}>{message}</small>)}</td>
+            </tr>)}
+          </tbody></table></div>
+          <p className="help-text">Metadata cells and gold JSON can be corrected here. Use “Back” to replace any source file.</p>
+        </div>}
+
+        {step === 4 && <div className="flex-col">
+          <div className="section-heading"><div><h3>Qualification form</h3><p>Questions appear once before annotation begins.</p></div><button type="button" className="btn btn-secondary" onClick={addQuestion}><Plus size={16} /> Add question</button></div>
+          {questions.length === 0 && <div className="empty-builder">No qualification form. Every annotator can receive every sample.</div>}
+          {questions.map((question, index) => <div className="builder-card" key={index}>
+            <div className="builder-row"><input className="form-input" value={question.label} onChange={event => updateQuestion(index, { label: event.target.value })} /><select className="form-select" value={question.type} onChange={event => updateQuestion(index, { type: event.target.value as QualificationQuestion["type"] })}><option value="single_choice">Single choice</option><option value="multi_choice">Multiple choice</option><option value="boolean">Yes / No</option><option value="number">Number / proficiency</option></select><button type="button" className="icon-button" onClick={() => { setQuestions(current => current.filter((_, position) => position !== index)); setRules([]); }}><Trash2 size={17} /></button></div>
+            {question.type.includes("choice") && <input className="form-input" value={question.options.join(", ")} onChange={event => updateQuestion(index, { options: event.target.value.split(",").map(value => value.trim()).filter(Boolean) })} placeholder="Hindi, English, Marathi" />}
+            {question.type === "number" && <div className="flex-row"><input className="form-input" type="number" value={question.minimum ?? 1} onChange={event => updateQuestion(index, { minimum: event.target.valueAsNumber })} placeholder="Minimum" /><input className="form-input" type="number" value={question.maximum ?? 5} onChange={event => updateQuestion(index, { maximum: event.target.valueAsNumber })} placeholder="Maximum" /></div>}
+          </div>)}
+          {metadataFields.length > 0 && questions.length > 0 && <><div className="section-heading"><div><h3>Routing rules</h3><p>All rules must match before a sample is served.</p></div><button type="button" className="btn btn-secondary" onClick={addRule}><Plus size={16} /> Add rule</button></div>{rules.map((rule, index) => <div className="routing-row" key={index}><select className="form-select" value={rule.metadata_field} onChange={event => setRules(current => current.map((value, position) => position === index ? { ...value, metadata_field: event.target.value } : value))}>{metadataFields.map(field => <option key={field.key} value={field.key}>Sample: {field.label}</option>)}</select><select className="form-select" value={rule.operator} onChange={event => setRules(current => current.map((value, position) => position === index ? { ...value, operator: event.target.value as RoutingRule["operator"] } : value))}><option value="equals">equals answer</option><option value="in">is in selected answers</option><option value="gte">requires proficiency ≥</option></select><select className="form-select" value={rule.question_key} onChange={event => setRules(current => current.map((value, position) => position === index ? { ...value, question_key: event.target.value } : value))}>{questions.map(question => <option key={question.key} value={question.key}>Answer: {question.label}</option>)}</select><button type="button" className="icon-button" onClick={() => setRules(current => current.filter((_, position) => position !== index))}><Trash2 size={17} /></button></div>)}</>}
+        </div>}
+
+        {step === 5 && <div className="flex-col">
+          <div className="quality-grid"><div className="form-group"><label className="form-label">People per regular sample</label><input className="form-input" type="number" min="1" max="100" value={form.overlap_n} onChange={event => setForm({ ...form, overlap_n: event.target.valueAsNumber })} /></div><div className="form-group"><label className="form-label">Quality-check frequency</label><select className="form-select" value={form.gold_ratio} onChange={event => setForm({ ...form, gold_ratio: Number(event.target.value) })}><option value="0">None</option><option value="0.05">Light — 5%</option><option value="0.1">Recommended — 10%</option><option value="0.2">Strict — 20%</option></select></div></div>
+          <div className="workload-card"><strong>Estimated regular assignments</strong><span>{regularCount} regular samples × {form.overlap_n} people</span><h2>{regularCount * form.overlap_n}</h2></div>
+          <div className="review-grid"><div><span>Name</span><strong>{form.name}</strong></div><div><span>Task</span><strong>{currentType?.name}</strong></div><div><span>Samples</span><strong>{datasetRows.length} ({goldCount} gold)</strong></div><div><span>Metadata fields</span><strong>{metadataFields.length}</strong></div><div><span>Qualification questions</span><strong>{questions.length}</strong></div><div><span>Routing rules</span><strong>{rules.length}</strong></div></div>
+          {form.gold_ratio > 0 && goldCount === 0 && <p className="form-error">Add at least one gold answer or set quality-check frequency to “None”.</p>}
+          {error && <p className="form-error">{error}</p>}
+        </div>}
+
+        <div className="wizard-actions">
+          <button type="button" className="btn btn-secondary" disabled={step === 0 || submitting} onClick={() => setStep(value => value - 1)}><ArrowLeft size={17} /> Back</button>
+          {step < steps.length - 1 ? <button type="button" className="btn btn-primary" disabled={!canContinue} onClick={step === 2 ? assembleDataset : () => setStep(value => value + 1)}>{step === 2 ? "Assemble & preview" : "Continue"} <ArrowRight size={17} /></button> : <button type="button" className="btn btn-primary" disabled={submitting || (form.gold_ratio > 0 && goldCount === 0)} onClick={deploy}>{submitting ? "Creating experiment…" : "Create & deploy"} <Check size={17} /></button>}
         </div>
-      </form>
+      </div>
     </div>
   );
 }

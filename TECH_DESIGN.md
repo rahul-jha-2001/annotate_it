@@ -133,6 +133,47 @@ Needed so `overlap_n` and `gold_ratio` are actually honored, not just configured
 - Interleave gold items: e.g. every 1/`gold_ratio` items served to a given annotator should be a gold item they haven't seen yet, picked pseudo-randomly from the gold set — not always the same first N items.
 - Keep this allocator as its own function/module (`allocate_next_item(experiment, annotator)`) even in v1 — it's a small piece of logic but it's load-bearing for the scoring math being valid, and it's easy to accidentally entangle with the API handler if not kept separate.
 
+### 5.1 Metadata and qualification routing
+
+Each `DataUnit` may carry typed JSONB metadata validated against the experiment's
+`metadata_schema`. Experiments may also define a `qualification_form` and a list
+of constrained `routing_rules`. Annotator qualification answers are stored
+separately from annotation answers.
+
+Supported qualification questions are single choice, multiple choice, boolean,
+and numeric/proficiency. Supported routing comparisons are:
+
+- sample metadata equals an annotator answer;
+- a sample metadata value is contained in an annotator's multi-choice answer;
+- annotator numeric proficiency is greater than or equal to a sample requirement.
+
+All routing rules use AND semantics. The allocation order is:
+
+1. require an active experiment and annotator;
+2. require the qualification form to be complete;
+3. exclude samples that do not match routing rules;
+4. exclude samples already seen by the annotator;
+5. enforce the non-gold overlap limit;
+6. apply gold-item cadence among eligible samples.
+
+Gold samples follow the same metadata routing rules as regular samples. The API
+distinguishes a truly exhausted queue from remaining work that does not match an
+annotator's qualifications.
+
+### 5.2 Dataset bundle import
+
+Experiment creation stages media, metadata, and gold answers together in the
+browser before deployment. Metadata uses CSV with a required `filename` column;
+gold answers use a JSON array with `filename` and `answer`. The client joins both
+to media by exact filename, infers metadata field types, validates gold answers
+against the task schema, and displays the assembled rows in an editable table.
+Duplicate filenames, orphan manifest entries, missing metadata rows, and invalid
+gold answers block deployment.
+
+After preview validation, the draft-first API flow uploads media, registers typed
+metadata, applies gold answers, and only then activates the experiment. Incomplete
+imports therefore remain inaccessible through the public share link.
+
 ## 6. Build order (match to PRD milestones)
 
 1. **Schema + migrations** — all 6 tables above, running locally via Docker Postgres. No app logic yet.
@@ -143,4 +184,3 @@ Needed so `overlap_n` and `gold_ratio` are actually honored, not just configured
 6. **Export** — `GET /experiments/{id}/export` → JSON/JSONL data pack.
 
 Do not start step 3 before step 1–2 are solid — the schema is the contract every later step depends on, and reworking it after the annotation UI exists is expensive.
-

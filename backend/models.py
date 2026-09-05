@@ -18,6 +18,10 @@ class Experiment(Base):
     overlap_n = Column(Integer, nullable=False, default=1)
     gold_ratio = Column(Float, nullable=False, default=0.1)
     share_token = Column(String, unique=True, nullable=False)
+    status = Column(String, nullable=False, default='active')
+    metadata_schema = Column(JSONB, nullable=False, default=list)
+    qualification_form = Column(JSONB, nullable=False, default=list)
+    routing_rules = Column(JSONB, nullable=False, default=list)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     data_units = relationship("DataUnit", back_populates="experiment", cascade="all, delete-orphan")
@@ -31,6 +35,7 @@ class DataUnit(Base):
     raw_uri = Column(String, nullable=False)
     is_gold = Column(Boolean, nullable=False, default=False)
     gold_answer = Column(JSONB)
+    metadata_json = Column("metadata", JSONB, nullable=False, default=dict)
 
     experiment = relationship("Experiment", back_populates="data_units")
     annotations = relationship("Annotation", back_populates="data_unit", cascade="all, delete-orphan")
@@ -43,6 +48,8 @@ class Annotator(Base):
     experiment_id = Column(UUID(as_uuid=True), ForeignKey('experiment.id', ondelete='CASCADE'), nullable=False)
     session_token = Column(String, unique=True, nullable=False)
     status = Column(String, nullable=False, default='active')
+    qualification_answers = Column(JSONB)
+    qualified_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     experiment = relationship("Experiment", back_populates="annotators")

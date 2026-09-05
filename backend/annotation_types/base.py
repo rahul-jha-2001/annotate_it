@@ -8,6 +8,10 @@ class AnnotationTypeSpec(Protocol):
     compatible_modalities: List[str]
     supports_choices: bool
     supports_multi_select: bool
+
+    def validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate and normalize an experiment's label schema."""
+        ...
     
     def get_answer_model(self, config: Dict[str, Any]) -> Type[BaseModel]:
         """
@@ -16,6 +20,12 @@ class AnnotationTypeSpec(Protocol):
         different shape). Must be called with the experiment's
         label_schema dict; never assume a single static shape.
         """
+        ...
+
+    def validate_answer(
+        self, answer: Dict[str, Any], config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Validate an answer, including constraints imposed by the config."""
         ...
         
     def gold_match(

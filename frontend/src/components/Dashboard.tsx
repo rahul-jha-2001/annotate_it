@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
-import { Plus, Activity, ExternalLink, Clipboard, Share2 } from "lucide-react";
+import { Plus, Activity, ExternalLink, Eye, Share2 } from "lucide-react";
 
 export default function Dashboard() {
   const [experiments, setExperiments] = useState<any[]>([]);
@@ -63,19 +63,24 @@ export default function Dashboard() {
                 <div className="flex-row" style={{ gap: "16px", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
                   <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                     <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "var(--accent-primary)" }}></span>
-                    Active
+                    {exp.status === "draft" ? "Draft" : "Active"}
                   </span>
                   <span>Created: {new Date(exp.created_at).toLocaleDateString()}</span>
                   <span>ID: {exp.id.split("-")[0]}...</span>
                 </div>
               </div>
               <div className="flex-row" style={{ gap: "12px" }}>
-                <button className="btn btn-secondary" onClick={() => copyLink(exp.share_token)} title="Copy Share Link">
+                <button className="btn btn-secondary" disabled={exp.status === "draft"} onClick={() => copyLink(exp.share_token)} title="Copy Share Link">
                   <Share2 size={16} />
                 </button>
                 <Link href={`/experiments/${exp.id}`}>
                   <button className="btn btn-secondary">
                     View Stats <ExternalLink size={16} />
+                  </button>
+                </Link>
+                <Link href={`/experiments/${exp.id}/review`}>
+                  <button className="btn btn-secondary">
+                    Review <Eye size={16} />
                   </button>
                 </Link>
               </div>

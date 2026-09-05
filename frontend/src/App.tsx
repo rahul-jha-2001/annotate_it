@@ -1,8 +1,10 @@
 import { Route, Switch, Link } from "wouter";
-import { Activity } from "lucide-react";
+import { Activity, LayoutDashboard, Plus } from "lucide-react";
 import Dashboard from "./components/Dashboard";
 import CreateExperiment from "./components/CreateExperiment";
 import Annotator from "./components/Annotator";
+import ExperimentDashboard from "./components/ExperimentDashboard";
+import ReviewAnnotations from "./components/ReviewAnnotations";
 
 function App() {
   return (
@@ -12,8 +14,13 @@ function App() {
           <Activity className="app-logo-icon" size={28} />
           Annotate It
         </Link>
-        <nav>
-          {/* Add navigation items if needed */}
+        <nav className="app-nav" aria-label="Main navigation">
+          <Link href="/" className="nav-link">
+            <LayoutDashboard size={17} /> Dashboard
+          </Link>
+          <Link href="/experiments/new" className="nav-link nav-link-primary">
+            <Plus size={17} /> New Experiment
+          </Link>
         </nav>
       </header>
 
@@ -31,8 +38,11 @@ function App() {
               <CreateExperiment />
             </div>
           </Route>
+          <Route path="/experiments/:id/review">
+            {(params) => <ReviewAnnotations experimentId={params.id!} />}
+          </Route>
           <Route path="/experiments/:id">
-            {(params) => <div className="container">Experiment {params.id} Details Page - Coming soon</div>}
+            {(params) => <ExperimentDashboard experimentId={params.id!} />}
           </Route>
           <Route path="/annotate/:shareToken">
             {(params) => <Annotator shareToken={params.shareToken!} />}
