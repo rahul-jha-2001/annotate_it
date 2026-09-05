@@ -14,14 +14,15 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from annotation_types import REGISTRY, get_type, get_valid_types_for_modality
+from annotation_types import REGISTRY, get_compatible_modalities, get_type, get_valid_types_for_modality
 from config import CORS_ORIGINS, MINIO_ACCESS_KEY, MINIO_BUCKET, MINIO_SECRET_KEY, MINIO_URL
 from database import get_db
+from modalities import REGISTRY as MODALITY_REGISTRY
 from models import Annotation, Annotator, DataUnit, Experiment, ItemAgreement
 from schemas import (
     AnnotationCreate, AnnotationTypeResponse, AnnotatorStatusUpdate,
     DataUnitBatchCreate, ExperimentCreate, ExperimentListResponse,
-    ExperimentResponse, GoldManifestRequest, NextItemResponse, PresignRequest,
+    ExperimentResponse, GoldManifestRequest, ModalityResponse, NextItemResponse, PresignRequest,
     PresignResponse, PresignResponseItem, QualificationSubmission, SessionResponse,
 )
 from schema_compat import normalize_label_schema
@@ -89,12 +90,18 @@ def get_annotation_types():
     return [
         AnnotationTypeResponse(
             key=spec.key, name=spec.name,
-            compatible_modalities=spec.compatible_modalities,
+            compatible_modalities=get_compatible_modalities(spec),
             supports_choices=spec.supports_choices,
             supports_multi_select=spec.supports_multi_select,
+            required_interaction=spec.required_interaction,
         )
         for spec in REGISTRY.values()
     ]
+
+
+@app.get("/modalities", response_model=List[ModalityResponse])
+def get_modalities():
+    return list(MODALITY_REGISTRY.values())
 
 
 @app.get("/experiments", response_model=ExperimentListResponse)
@@ -393,6 +400,13 @@ def experiment_dashboard(experiment_id: uuid.UUID, db: Session = Depends(get_db)
     required = len(regular_units) * experiment.overlap_n
     completed = sum(min(counts.get(unit.id, 0), experiment.overlap_n) for unit in regular_units)
     annotators = db.query(Annotator).filter_by(experiment_id=experiment.id).order_by(Annotator.created_at).all()
+    last_submissions = dict(
+        db.query(Annotation.annotator_id, func.max(Annotation.submitted_at))
+        .join(DataUnit, DataUnit.id == Annotation.data_unit_id)
+        .filter(DataUnit.experiment_id == experiment.id)
+        .group_by(Annotation.annotator_id)
+        .all()
+    )
     agreements = (
         db.query(ItemAgreement).join(DataUnit, DataUnit.id == ItemAgreement.data_unit_id)
         .filter(
@@ -401,7 +415,12 @@ def experiment_dashboard(experiment_id: uuid.UUID, db: Session = Depends(get_db)
         ).all()
     )
     return {
-        "experiment": {"id": experiment.id, "name": experiment.name, "share_token": experiment.share_token},
+        "experiment": {
+            "id": experiment.id,
+            "name": experiment.name,
+            "share_token": experiment.share_token,
+            "qualification_form": experiment.qualification_form or [],
+        },
         "completion": {
             "completed_assignments": completed, "required_assignments": required,
             "percent": 100 * completed / required if required else 100.0,
@@ -416,7 +435,13 @@ def experiment_dashboard(experiment_id: uuid.UUID, db: Session = Depends(get_db)
                 "gold_items_seen": annotator.score.gold_items_seen if annotator.score else 0,
                 "rolling_gold_accuracy": annotator.score.rolling_gold_accuracy if annotator.score else None,
                 "rolling_agreement_score": annotator.score.rolling_agreement_score if annotator.score else None,
+                "qualification_answers": annotator.qualification_answers or {},
                 "qualified_at": annotator.qualified_at,
+                "last_activity_at": (
+                    last_submissions.get(annotator.id)
+                    or annotator.qualified_at
+                    or annotator.created_at
+                ),
             }
             for annotator in annotators
         ],

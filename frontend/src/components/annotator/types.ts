@@ -17,7 +17,7 @@ export interface AnnotationSession {
 export interface QualificationQuestion {
   key: string;
   label: string;
-  type: "single_choice" | "multi_choice" | "boolean" | "number";
+  type: "single_choice" | "multi_choice" | "boolean" | "number" | "text";
   required: boolean;
   options: string[];
   minimum?: number | null;

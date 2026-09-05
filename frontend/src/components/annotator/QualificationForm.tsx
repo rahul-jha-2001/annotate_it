@@ -15,6 +15,7 @@ export default function QualificationForm({ questions, submitting, onSubmit, err
     if (!question.required) return true;
     const answer = answers[question.key];
     if (question.type === "multi_choice") return Array.isArray(answer) && answer.length > 0;
+    if (question.type === "text") return typeof answer === "string" && answer.trim().length > 0;
     return answer !== undefined && answer !== "";
   }), [answers, questions]);
 
@@ -27,7 +28,7 @@ export default function QualificationForm({ questions, submitting, onSubmit, err
       <div className="glass-panel">
         <p className="sample-number">Before you begin</p>
         <h1 style={{ fontSize: "2rem" }}>Qualification form</h1>
-        <p>Your answers are used only to match you with samples you are qualified to annotate.</p>
+        <p>Your answers describe your qualifications. Structured answers may also be used to match you with suitable samples.</p>
         <div className="flex-col" style={{ gap: "22px", marginTop: "24px" }}>
           {questions.map(question => (
             <div key={question.key} className="form-group" style={{ margin: 0 }}>
@@ -89,10 +90,19 @@ export default function QualificationForm({ questions, submitting, onSubmit, err
                   )}
                 />
               )}
+              {question.type === "text" && (
+                <textarea
+                  className="form-textarea"
+                  maxLength={2000}
+                  value={(answers[question.key] as string | undefined) ?? ""}
+                  placeholder="Enter your response"
+                  onChange={event => setAnswer(question.key, event.target.value || undefined)}
+                />
+              )}
             </div>
           ))}
         </div>
-        {error && <p style={{ color: "#fca5a5", marginTop: "18px" }}>{error}</p>}
+        {error && <p style={{ color: "var(--danger)", marginTop: "18px" }}>{error}</p>}
         <button
           className="btn btn-primary"
           style={{ width: "100%", marginTop: "28px" }}

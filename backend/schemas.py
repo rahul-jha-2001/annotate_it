@@ -8,6 +8,12 @@ class AnnotationTypeResponse(BaseModel):
     compatible_modalities: List[str]
     supports_choices: bool
     supports_multi_select: bool
+    required_interaction: str
+
+class ModalityResponse(BaseModel):
+    key: str
+    name: str
+    supported_interactions: List[str]
 
 class MetadataFieldDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -36,7 +42,7 @@ class QualificationQuestionDefinition(BaseModel):
 
     key: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
     label: str = Field(min_length=1)
-    type: Literal["single_choice", "multi_choice", "boolean", "number"]
+    type: Literal["single_choice", "multi_choice", "boolean", "number", "text"]
     required: bool = True
     options: List[str] = Field(default_factory=list)
     minimum: Optional[float] = None
@@ -96,6 +102,8 @@ class ExperimentCreate(BaseModel):
                 continue
             metadata_field = metadata_by_key[rule.metadata_field]
             question = questions_by_key[rule.question_key]
+            if question.type == "text":
+                raise ValueError("text qualification questions cannot be used for routing")
             if rule.operator == "in" and question.type != "multi_choice":
                 raise ValueError("the 'in' routing operator requires a multi-choice question")
             if rule.operator == "gte" and (

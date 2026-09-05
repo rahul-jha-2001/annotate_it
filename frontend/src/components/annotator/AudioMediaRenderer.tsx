@@ -2,25 +2,23 @@ import { useEffect, useRef, useState } from "react";
 import { Pause, Play } from "lucide-react";
 import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.esm.js";
+import type { MediaRendererProps } from "../../plugins/contracts";
 
-interface Props {
-  mediaUrl: string;
-  regionsEnabled: boolean;
-  onRegionsChange: (regions: Array<{ start: number; end: number }>) => void;
-}
-
-export default function AudioMediaRenderer({ mediaUrl, regionsEnabled, onRegionsChange }: Props) {
+export default function AudioMediaRenderer({ mediaUrl, interaction }: MediaRendererProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
+  const interactionRef = useRef(interaction);
   const [isPlaying, setIsPlaying] = useState(false);
+  interactionRef.current = interaction;
+  const regionsEnabled = interaction.kind === "temporal-regions";
 
   useEffect(() => {
     if (!containerRef.current) return;
     const wavesurfer = WaveSurfer.create({
       container: containerRef.current,
-      waveColor: "#6366f1",
-      progressColor: "#4f46e5",
-      cursorColor: "#fff",
+      waveColor: "#92EEFF",
+      progressColor: "#087796",
+      cursorColor: "#102A32",
       barWidth: 2,
       barRadius: 2,
       height: 120,
@@ -28,10 +26,15 @@ export default function AudioMediaRenderer({ mediaUrl, regionsEnabled, onRegions
     wavesurferRef.current = wavesurfer;
     const regionPlugin = wavesurfer.registerPlugin(RegionsPlugin.create());
     if (regionsEnabled) {
-      regionPlugin.enableDragSelection({ color: "rgba(99, 102, 241, 0.4)" });
-      const syncRegions = () => onRegionsChange(
-        regionPlugin.getRegions().map(region => ({ start: region.start, end: region.end }))
-      );
+      regionPlugin.enableDragSelection({ color: "rgba(48, 175, 255, 0.38)" });
+      const syncRegions = () => {
+        const currentInteraction = interactionRef.current;
+        if (currentInteraction.kind === "temporal-regions") {
+          currentInteraction.onChange(
+            regionPlugin.getRegions().map(region => ({ start: region.start, end: region.end })),
+          );
+        }
+      };
       regionPlugin.on("region-created", syncRegions);
       regionPlugin.on("region-updated", syncRegions);
       regionPlugin.on("region-removed", syncRegions);
@@ -45,7 +48,7 @@ export default function AudioMediaRenderer({ mediaUrl, regionsEnabled, onRegions
       wavesurferRef.current = null;
       setIsPlaying(false);
     };
-  }, [mediaUrl, regionsEnabled, onRegionsChange]);
+  }, [mediaUrl, regionsEnabled]);
 
   return (
     <div className="glass-panel" style={{ marginBottom: "20px" }}>

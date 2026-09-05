@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { Send } from "lucide-react";
 import AnnotationControl, { isAnswerComplete } from "./annotator/AnnotationControl";
-import AudioMediaRenderer from "./annotator/AudioMediaRenderer";
 import QualificationForm from "./annotator/QualificationForm";
 import type { AnnotationAnswer, AnnotationSession } from "./annotator/types";
+import { getAnnotationPlugin } from "../plugins/annotations/registry";
+import { getMediaPlugin, supportsAnnotation } from "../plugins/media/registry";
 
 interface NextItem {
   data_unit_id: string;
@@ -78,10 +79,6 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
     initialize();
   }, [fetchNextItem, shareToken]);
 
-  const updateRegions = useCallback((regions: Array<{ start: number; end: number }>) => {
-    setAnswer(current => ({ ...current, regions }));
-  }, []);
-
   const submitAnnotation = async () => {
     if (!session || !nextItem || !isAnswerComplete(session.label_schema, answer)) return;
     setSubmitting(true);
@@ -153,32 +150,45 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
     );
   }
 
-  const regionsEnabled = session.label_schema.annotation_type === "segment";
+  const mediaPlugin = getMediaPlugin(session.modality);
+  const annotationPlugin = getAnnotationPlugin(session.label_schema.annotation_type);
+  const compatible = Boolean(
+    mediaPlugin && annotationPlugin && supportsAnnotation(mediaPlugin, annotationPlugin.requiredInteraction),
+  );
+  const interaction = annotationPlugin?.createInteraction(answer, setAnswer) ?? { kind: "none" as const };
+  const MediaRenderer = mediaPlugin?.AnnotationRenderer;
   return (
     <div className="container animate-fade-in" style={{ width: "100%", maxWidth: "1000px" }}>
       <div className="glass-panel" style={{ marginBottom: "20px" }}>
         <h2>Instructions</h2>
         <p>{session.instructions || "Review the item and provide your annotation."}</p>
       </div>
-      {session.modality === "audio" ? (
-        <AudioMediaRenderer
-          key={nextItem.data_unit_id}
-          mediaUrl={nextItem.media_url}
-          regionsEnabled={regionsEnabled}
-          onRegionsChange={updateRegions}
-        />
+      {compatible && MediaRenderer ? (
+        <Suspense fallback={<div className="glass-panel">Loading media tools…</div>}>
+          <MediaRenderer
+            key={nextItem.data_unit_id}
+            mediaUrl={nextItem.media_url}
+            interaction={interaction}
+          />
+        </Suspense>
       ) : (
-        <div className="glass-panel">Unsupported media modality: {session.modality}</div>
+        <div className="glass-panel">
+          {!mediaPlugin
+            ? `Unsupported media modality: ${session.modality}`
+            : !annotationPlugin
+              ? `Unsupported annotation type: ${session.label_schema.annotation_type}`
+              : `${annotationPlugin.key} annotations are not compatible with ${mediaPlugin.name.toLowerCase()}`}
+        </div>
       )}
       <div className="glass-panel">
         <h3 style={{ marginBottom: "16px" }}>Submit Annotation</h3>
         <AnnotationControl schema={session.label_schema} answer={answer} onChange={setAnswer} />
-        {error && <p style={{ color: "#fca5a5", marginTop: "16px" }}>{error}</p>}
+        {error && <p style={{ color: "var(--danger)", marginTop: "16px" }}>{error}</p>}
         <button
           className="btn btn-primary"
           style={{ width: "100%", marginTop: "20px" }}
           onClick={submitAnnotation}
-          disabled={submitting || !isAnswerComplete(session.label_schema, answer)}
+          disabled={submitting || !compatible || !isAnswerComplete(session.label_schema, answer)}
         >
           <Send size={18} /> {submitting ? "Submitting…" : "Submit & Next"}
         </button>

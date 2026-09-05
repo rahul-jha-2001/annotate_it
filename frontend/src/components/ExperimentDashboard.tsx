@@ -3,7 +3,12 @@ import { Download, Eye, Pause, Play, RefreshCw } from "lucide-react";
 import { Link } from "wouter";
 
 interface DashboardData {
-  experiment: { id: string; name: string; share_token: string };
+  experiment: {
+    id: string;
+    name: string;
+    share_token: string;
+    qualification_form: Array<{ key: string; label: string; type: string }>;
+  };
   completion: {
     completed_assignments: number;
     required_assignments: number;
@@ -18,12 +23,22 @@ interface DashboardData {
     gold_items_seen: number;
     rolling_gold_accuracy: number | null;
     rolling_agreement_score: number | null;
+    qualification_answers: Record<string, unknown>;
     qualified_at: string | null;
+    last_activity_at: string;
   }>;
   items: Array<{ data_unit_id: string; agreement_score: number; n_annotations: number }>;
 }
 
 const formatScore = (score: number | null) => score == null ? "—" : `${(score * 100).toFixed(0)}%`;
+const formatAnswer = (answer: unknown) => {
+  if (Array.isArray(answer)) return answer.join(", ");
+  if (typeof answer === "boolean") return answer ? "Yes" : "No";
+  return String(answer ?? "—");
+};
+const formatDate = (value: string | null) => value
+  ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value))
+  : "—";
 
 export default function ExperimentDashboard({ experimentId }: { experimentId: string }) {
   const [data, setData] = useState<DashboardData | null>(null);
@@ -90,7 +105,7 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
           <button className="btn btn-primary" onClick={downloadExport}><Download size={16} /> Export</button>
         </div>
       </div>
-      {error && <p style={{ color: "#fca5a5" }}>{error}</p>}
+      {error && <p style={{ color: "var(--danger)" }}>{error}</p>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "16px", marginBottom: "24px" }}>
         <div className="glass-panel"><p>Completion</p><h2>{data.completion.percent.toFixed(0)}%</h2></div>
         <div className="glass-panel"><p>Assignments</p><h2>{data.completion.completed_assignments}/{data.completion.required_assignments}</h2></div>
@@ -100,22 +115,23 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
       <div className="glass-panel" style={{ marginBottom: "24px", overflowX: "auto" }}>
         <h2>Annotators</h2>
         <table className="data-table">
-          <thead><tr><th>Session</th><th>Status</th><th>Qualified</th><th>Items</th><th>Gold accuracy</th><th>Agreement</th><th /></tr></thead>
+          <thead><tr><th>Anonymous ID</th><th>Status</th><th>Questionnaire</th><th>Items</th><th>Gold accuracy</th><th>Agreement</th><th>Last activity</th><th /></tr></thead>
           <tbody>
             {data.annotators.map(annotator => (
               <tr key={annotator.id}>
-                <td>{annotator.id.slice(0, 8)}</td><td>{annotator.status}</td>
-                <td>{annotator.qualified_at ? "Yes" : "—"}</td>
+                <td><span className="anonymous-id">Anonymous {annotator.id.slice(0, 8)}</span></td><td>{annotator.status}</td>
+                <td>{annotator.qualified_at ? <details className="annotator-profile"><summary>View answers</summary><dl>{data.experiment.qualification_form.map(question => <div key={question.key}><dt>{question.label}</dt><dd>{formatAnswer(annotator.qualification_answers[question.key])}</dd></div>)}</dl></details> : data.experiment.qualification_form.length ? "Not completed" : "Not required"}</td>
                 <td>{annotator.items_completed}</td>
                 <td>{formatScore(annotator.rolling_gold_accuracy)} (n={annotator.gold_items_seen})</td>
                 <td>{formatScore(annotator.rolling_agreement_score)}</td>
+                <td title={formatDate(annotator.last_activity_at)}>{formatDate(annotator.last_activity_at)}</td>
                 <td><button className="btn btn-secondary" onClick={() => toggleAnnotator(annotator.id, annotator.status)}>
                   {annotator.status === "active" ? <Pause size={15} /> : <Play size={15} />}
                   {annotator.status === "active" ? "Pause" : "Resume"}
                 </button></td>
               </tr>
             ))}
-            {data.annotators.length === 0 && <tr><td colSpan={7}>No annotators yet.</td></tr>}
+            {data.annotators.length === 0 && <tr><td colSpan={8}>No annotators yet.</td></tr>}
           </tbody>
         </table>
       </div>

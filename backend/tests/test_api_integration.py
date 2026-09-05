@@ -262,6 +262,18 @@ class ApiIntegrationTests(unittest.TestCase):
             json={"answer": {"value": "Good"}},
         )
         self.assertEqual(submitted.status_code, 200, submitted.text)
+        dashboard = self.client.get(f"/experiments/{experiment['id']}/dashboard")
+        self.assertEqual(dashboard.status_code, 200, dashboard.text)
+        dashboard_body = dashboard.json()
+        self.assertEqual(
+            dashboard_body["experiment"]["qualification_form"][0]["label"],
+            "Languages understood",
+        )
+        self.assertEqual(
+            dashboard_body["annotators"][0]["qualification_answers"],
+            {"languages": ["Hindi"]},
+        )
+        self.assertIsNotNone(dashboard_body["annotators"][0]["last_activity_at"])
         no_match = self.client.get(
             f"/annotate/{experiment['share_token']}/next", params={"session_token": session}
         ).json()

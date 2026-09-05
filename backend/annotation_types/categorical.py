@@ -29,7 +29,7 @@ class MultiChoiceAnswer(BaseModel):
 class CategoricalType:
     key = "categorical"
     name = "Categorical"
-    compatible_modalities = ["audio", "video", "image", "text"]
+    required_interaction = "none"
     supports_choices = True
     supports_multi_select = True
 

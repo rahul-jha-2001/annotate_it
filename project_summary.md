@@ -18,16 +18,30 @@ quality during collection through gold answers and inter-annotator agreement.
 - Environment-driven database, object-storage, CORS, and score-window settings.
 - Six-step experiment wizard covering basics, annotation task, a combined dataset
   bundle, dataset preview, annotator qualifications/routing, and final review.
+- Task selection includes an interactive annotator preview and a dynamic gold-data
+  reference panel. The required JSON shape and example update for categorical
+  single-select, categorical multi-select, and segment tasks.
 - Draft-first deployment: an experiment becomes public only after its files and
   configuration have been registered successfully.
-- Audio, metadata CSV, and gold-answer JSON are assembled by exact filename
+- Media, metadata CSV, and gold-answer JSON are assembled by exact filename
   before upload. The preview table plays each sample, displays and edits its
   inferred typed metadata and gold answer, and blocks invalid rows.
+- Audio and video are registered media plugins. Each owns accepted upload types,
+  dataset/review previews, and its lazy-loaded annotation renderer.
+- Video supports categorical tasks and labeled temporal regions using native
+  playback plus start/end region controls.
+- The shared Aqua Lab visual system uses white surfaces, cyan interaction states,
+  mint completion/validation feedback, dark ocean text, and reserved amber for
+  gold-data semantics across designer and annotator screens.
 
 ### Qualification-aware routing
 
 - Experiment-defined qualification forms with single-choice, multi-choice,
-  yes/no, and numeric/proficiency questions.
+  yes/no, numeric/proficiency, and free-text questions. Free-text responses are
+  collected for review but intentionally excluded from automatic routing.
+- The qualification builder explains the designer's decision in plain language,
+  suggests questions and options from dataset metadata, and expresses routing
+  rules as readable sample-to-answer matching sentences.
 - Qualification answers are validated and stored separately from annotation
   answers.
 - Constrained routing rules support equality, membership, and minimum numeric
@@ -40,7 +54,12 @@ quality during collection through gold answers and inter-annotator agreement.
 
 - One annotation type per experiment, with choices as labels/options within it.
 - Registry-based backend contract covering config validation, answer validation,
-  gold matching, agreement calculation, and modality compatibility.
+  gold matching, and agreement calculation.
+- Capability-based backend modality registry. Annotation types declare a required
+  interaction and modality compatibility is derived from modality capabilities.
+- Typed frontend media and annotation plugin registries centralize upload rules,
+  renderers, answer controls, gold examples/validation, summaries, and answer-to-
+  media interaction mapping.
 - Strict, distinct categorical answer models:
   - single-select: `{ "value": "Choice" }`
   - multi-select: `{ "values": ["Choice"] }`
@@ -51,10 +70,10 @@ quality during collection through gold answers and inter-annotator agreement.
 ### Annotator application
 
 - Anonymous session creation/resumption using a locally persisted token.
-- Schema-driven annotation controls for categorical single-select,
-  categorical multi-select, and audio segments.
-- Media rendering is separated from answer controls so future modalities and
-  annotation types do not need to be hard-coded into the page coordinator.
+- Plugin-driven annotation controls for categorical single-select, categorical
+  multi-select, and temporal segments over audio or video.
+- Experiment creation, dataset preview, annotation runtime, and review resolve
+  behavior through registries and contain no audio/video task-routing branches.
 - Submission errors, paused sessions, loading states, queue completion, and
   per-item state reset are handled.
 
@@ -77,6 +96,9 @@ quality during collection through gold answers and inter-annotator agreement.
 
 - Polling experiment dashboard with completion, remaining work, active
   annotators, gold accuracy with sample count, and agreement metrics.
+- Anonymous annotators remain experiment-scoped profiles: the dashboard shows a
+  stable anonymous ID, saved questionnaire answers, progress, quality metrics,
+  status, and last submission/qualification activity.
 - Manual annotator pause/resume.
 - JSON export with experiment configuration, data-unit metadata, gold answers,
   qualification provenance, annotations, timestamps, and agreement scores.
@@ -84,10 +106,12 @@ quality during collection through gold answers and inter-annotator agreement.
 ## Verification
 
 - Frontend TypeScript and Vite production build passes.
-- Frontend unit tests cover annotation completion rules plus quoted CSV parsing,
-  metadata type inference, filename joining, and bundle validation errors.
-- Backend unit tests cover strict categorical shapes, choice validation,
-  Jaccard similarity, segment boundaries, IoU, and unmatched regions.
+- Frontend unit tests cover plugin discovery, capability compatibility, temporal
+  interaction mapping, annotation completion, quoted CSV parsing, metadata type
+  inference, filename joining, and bundle validation errors.
+- Backend unit tests cover modality capability derivation, strict categorical
+  shapes, choice validation, Jaccard similarity, segment boundaries, IoU,
+  unmatched regions, and free-text qualification validation.
 - Database-backed API integration test covers experiment creation, allocation,
   invalid-answer rejection, two-annotator overlap, scoring, dashboard, export,
   cross-experiment session isolation, draft deployment, qualification onboarding,
@@ -102,14 +126,14 @@ quality during collection through gold answers and inter-annotator agreement.
   Cohen/Fleiss kappa after enough production data is available.
 - Decide whether segment gold correctness needs an explicit pass/fail IoU
   threshold in addition to the current continuous score.
-- Add image/text renderers and bbox/polygon annotation plugins when audio is
-  validated with real users.
+- Add image/text media plugins and spatial-shape/text-range annotation plugins
+  after validating the audio/video flows with real users.
 - Add browser-level tests for waveform interactions and direct MinIO uploads.
 - Push metadata filtering into SQL or a dedicated routing index if experiments
   grow beyond the current in-process v1 allocator scale.
 
 ## Recommended Next Action
 
-Run a small real audio experiment with at least three annotators. Use it to
-validate the gold cadence, segment ergonomics, and whether the displayed quality
-metrics are understandable before adding more modalities.
+Run one small audio experiment and one video experiment with at least three
+annotators. Use them to validate gold cadence, temporal-region ergonomics, media
+compatibility, and whether the displayed quality metrics are understandable.

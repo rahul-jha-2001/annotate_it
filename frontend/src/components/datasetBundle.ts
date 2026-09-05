@@ -1,3 +1,6 @@
+import { getAnnotationPlugin } from "../plugins/annotations/registry";
+import type { LabelSchema } from "./annotator/types";
+
 export interface MetadataFieldDefinition {
   key: string;
   label: string;
@@ -93,28 +96,14 @@ function coerce(value: string, field: MetadataFieldDefinition): string | number 
 }
 
 export function validateGold(answer: unknown, options: BundleOptions): string[] {
-  if (!answer || typeof answer !== "object" || Array.isArray(answer)) return ["Gold answer must be an object"];
-  const value = answer as Record<string, unknown>;
-  if (options.annotationType === "categorical") {
-    if (options.multiSelect) {
-      if (!Array.isArray(value.values) || value.values.length === 0) return ["Gold answer requires a non-empty values array"];
-      const unknown = value.values.find(label => typeof label !== "string" || !options.labels.includes(label));
-      return unknown ? [`Unknown gold label: ${String(unknown)}`] : [];
-    }
-    if (typeof value.value !== "string") return ["Gold answer requires a value"];
-    return options.labels.includes(value.value) ? [] : [`Unknown gold label: ${value.value}`];
-  }
-  if (options.annotationType === "segment") {
-    if (typeof value.label !== "string" || !options.labels.includes(value.label)) return ["Gold answer has an unknown or missing label"];
-    if (!Array.isArray(value.regions)) return ["Gold answer requires a regions array"];
-    const invalid = value.regions.some(region => {
-      if (!region || typeof region !== "object") return true;
-      const candidate = region as Record<string, unknown>;
-      return typeof candidate.start !== "number" || typeof candidate.end !== "number" || candidate.start < 0 || candidate.end <= candidate.start;
-    });
-    return invalid ? ["Gold answer has an invalid time region"] : [];
-  }
-  return [];
+  const plugin = getAnnotationPlugin(options.annotationType);
+  if (!plugin) return [`Unsupported annotation type: ${options.annotationType}`];
+  const schema: LabelSchema = {
+    annotation_type: options.annotationType,
+    choices: options.labels,
+    multi_select: options.multiSelect,
+  };
+  return plugin.validateGold(answer, schema);
 }
 
 export function parseDatasetBundle(

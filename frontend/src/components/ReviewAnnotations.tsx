@@ -1,16 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, BarChart3, RefreshCw } from "lucide-react";
 import { Link } from "wouter";
+import { getAnnotationPlugin } from "../plugins/annotations/registry";
+import { getMediaPlugin } from "../plugins/media/registry";
+import type { AnnotationAnswer } from "./annotator/types";
 
 interface AnnotationRecord {
   id: string;
   annotator_id: string;
-  answer: {
-    value?: string;
-    values?: string[];
-    label?: string;
-    regions?: Array<{ start: number; end: number }>;
-  };
+  answer: AnnotationAnswer;
   submitted_at: string;
 }
 
@@ -37,27 +35,6 @@ interface ReviewData {
   samples: ReviewSample[];
 }
 
-function AnswerView({ answer }: { answer: AnnotationRecord["answer"] }) {
-  if (answer.value !== undefined) return <span>{answer.value}</span>;
-  if (answer.values !== undefined) return <span>{answer.values.join(", ") || "No choices"}</span>;
-  if (answer.label !== undefined) {
-    return (
-      <div>
-        <strong>{answer.label}</strong>
-        <div className="region-list">
-          {(answer.regions ?? []).map((region, index) => (
-            <span key={`${region.start}-${region.end}-${index}`} className="metadata-chip">
-              {region.start.toFixed(2)}s–{region.end.toFixed(2)}s
-            </span>
-          ))}
-          {(answer.regions ?? []).length === 0 && <span>No regions</span>}
-        </div>
-      </div>
-    );
-  }
-  return <code>{JSON.stringify(answer)}</code>;
-}
-
 const formatScore = (score: number | null) => score == null ? "Pending" : `${(score * 100).toFixed(0)}%`;
 
 export default function ReviewAnnotations({ experimentId }: { experimentId: string }) {
@@ -82,6 +59,10 @@ export default function ReviewAnnotations({ experimentId }: { experimentId: stri
 
   if (loading) return <div className="container text-center">Loading annotations…</div>;
   if (!data) return <div className="container text-center">{error || "Experiment not found"}</div>;
+  const mediaPlugin = getMediaPlugin(data.experiment.modality);
+  const annotationPlugin = getAnnotationPlugin(data.experiment.label_schema.annotation_type);
+  const AnswerView = annotationPlugin?.AnswerView;
+  const MediaPreview = mediaPlugin?.PreviewRenderer;
 
   return (
     <div className="container animate-fade-in" style={{ maxWidth: "1200px" }}>
@@ -101,7 +82,7 @@ export default function ReviewAnnotations({ experimentId }: { experimentId: stri
           </button>
         </div>
       </div>
-      {error && <p style={{ color: "#fca5a5" }}>{error}</p>}
+      {error && <p style={{ color: "var(--danger)" }}>{error}</p>}
       {data.samples.length === 0 ? (
         <div className="glass-panel text-center"><h3>No samples</h3><p>Upload data to begin collecting annotations.</p></div>
       ) : (
@@ -120,11 +101,9 @@ export default function ReviewAnnotations({ experimentId }: { experimentId: stri
                 </div>
               </div>
 
-              {data.experiment.modality === "audio" && (
-                <audio className="review-audio" controls preload="metadata" src={sample.media_url}>
-                  Your browser does not support audio playback.
-                </audio>
-              )}
+              {MediaPreview
+                ? <MediaPreview mediaUrl={sample.media_url} title={sample.filename} />
+                : <p>Unsupported media modality: {data.experiment.modality}</p>}
 
               {Object.keys(sample.metadata).length > 0 && (
                 <div className="sample-metadata" style={{ marginBottom: "20px" }}>
@@ -137,7 +116,7 @@ export default function ReviewAnnotations({ experimentId }: { experimentId: stri
               {sample.gold_answer && (
                 <div className="gold-answer">
                   <span className="annotation-label">Gold answer</span>
-                  <AnswerView answer={sample.gold_answer} />
+                  {AnswerView ? <AnswerView answer={sample.gold_answer} /> : <code>{JSON.stringify(sample.gold_answer)}</code>}
                 </div>
               )}
 
@@ -152,7 +131,7 @@ export default function ReviewAnnotations({ experimentId }: { experimentId: stri
                       <span>Annotator {annotation.annotator_id.slice(0, 8)}</span>
                       <time>{new Date(annotation.submitted_at).toLocaleString()}</time>
                     </div>
-                    <AnswerView answer={annotation.answer} />
+                    {AnswerView ? <AnswerView answer={annotation.answer} /> : <code>{JSON.stringify(annotation.answer)}</code>}
                   </article>
                 ))}
               </div>

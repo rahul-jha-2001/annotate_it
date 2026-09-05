@@ -5,7 +5,7 @@ from typing import Protocol
 class AnnotationTypeSpec(Protocol):
     key: str
     name: str
-    compatible_modalities: List[str]
+    required_interaction: str
     supports_choices: bool
     supports_multi_select: bool
 

@@ -2,6 +2,9 @@
 
 Companion to PRD.md. This is the implementation spec — hand this to engineering agents alongside the PRD.
 
+For implementation checklists and extension examples, see
+[`ANNOTATION_EXTENSION_GUIDE.md`](ANNOTATION_EXTENSION_GUIDE.md).
+
 ## 1. Stack
 - **Backend**: FastAPI (Python 3.11+)
 - **DB**: PostgreSQL (JSONB for flexible schema/answer fields)
@@ -9,6 +12,7 @@ Companion to PRD.md. This is the implementation spec — hand this to engineerin
 - **Object storage**: S3-compatible (S3, or R2/B2) and local for testing for raw media files; DB stores URIs only, never bytes
 - **Frontend**: React + Vite (no Next.js — no SSR requirement for v1)
 - **Audio annotation UI**: wavesurfer.js (waveform render + region/point selection)
+- **Video annotation UI**: native browser video playback with plugin-owned temporal region controls
 - **Image annotation UI** (stretch, not v1 blocking): Konva.js / react-konva for bbox/polygon
 - **Live dashboard updates**: polling (3–5s interval) against derived scoring tables — no websockets in v1
 - **Repo layout**: monorepo
@@ -18,6 +22,40 @@ Companion to PRD.md. This is the implementation spec — hand this to engineerin
   ```
 - **Deployment**: Dockerize the application as frontend and backend seprately
 
+### 1.1 Modality and annotation plugin architecture
+
+The extension boundary is capability-based. Media modalities and annotation
+types are independent plugins joined by a small interaction contract; screens
+must not switch directly on modality or annotation-type strings.
+
+Frontend media plugins live under `frontend/src/plugins/media/` and declare a
+stable key, display name, upload rules, supported interactions, dataset/review
+preview, and lazy-loaded annotator renderer. Frontend annotation plugins live
+under `frontend/src/plugins/annotations/` and declare their required interaction,
+answer control, completeness check, answer summary, initial state, gold format,
+validation, examples, and answer-to-media interaction mapping.
+
+The coordinator passes a discriminated `MediaInteraction` to the selected media
+renderer. A segment task therefore produces `temporal-regions` without knowing
+whether audio or video renders it. Audio and video consume that interaction
+without knowing the task's answer schema.
+
+Backend modalities are registered in `backend/modalities.py` with their
+supported interactions. Backend annotation specs declare one
+`required_interaction`; compatible modalities are derived rather than repeated
+inside every annotation type. The backend remains authoritative for experiment,
+answer, gold, and compatibility validation.
+
+Architectural invariant:
+
+> Adding or modifying a modality may change its media plugin, backend modality
+> descriptor, and tests, but must not require changes to experiment creation,
+> dataset preview, annotator coordination, or review screens.
+
+Audio and video are the first implemented frontend media plugins. Categorical
+and temporal segment are the first annotation plugins. Heavy annotator renderers
+use `React.lazy`, keeping modality-specific dependencies out of the coordinator.
+
 ## 2. Data model
 
 ```sql
@@ -25,12 +63,16 @@ Companion to PRD.md. This is the implementation spec — hand this to engineerin
 CREATE TABLE experiment (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
-    modality TEXT NOT NULL,                 -- 'audio' | 'image' (v1: 'audio' only enforced at app layer)
+    modality TEXT NOT NULL,                 -- registered media-plugin key, e.g. 'audio' or 'video'
     instructions TEXT,
     label_schema JSONB NOT NULL,            -- label set, annotation type (point|segment|bbox|polygon), cardinality rules
     overlap_n INT NOT NULL DEFAULT 1,        -- how many distinct annotators must see each non-gold item
     gold_ratio FLOAT NOT NULL DEFAULT 0.1,   -- fraction of each annotator's queue that is gold, interleaved
     share_token TEXT UNIQUE NOT NULL,        -- public link identifier, e.g. nanoid
+    status TEXT NOT NULL DEFAULT 'active',   -- 'draft' | 'active'
+    metadata_schema JSONB NOT NULL DEFAULT '[]',
+    qualification_form JSONB NOT NULL DEFAULT '[]',
+    routing_rules JSONB NOT NULL DEFAULT '[]',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -40,15 +82,18 @@ CREATE TABLE data_unit (
     experiment_id UUID NOT NULL REFERENCES experiment(id) ON DELETE CASCADE,
     raw_uri TEXT NOT NULL,                   -- S3 URI to the raw audio/image file
     is_gold BOOLEAN NOT NULL DEFAULT FALSE,
-    gold_answer JSONB                        -- null unless is_gold; shape matches label_schema
+    gold_answer JSONB,                       -- null unless is_gold; shape matches label_schema
+    metadata JSONB NOT NULL DEFAULT '{}'
 );
 
 -- Annotator: anonymous, session-token identified
 CREATE TABLE annotator (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     experiment_id UUID NOT NULL REFERENCES experiment(id) ON DELETE CASCADE,
-    session_token TEXT UNIQUE NOT NULL,      -- set via cookie on first visit to share link
+    session_token TEXT UNIQUE NOT NULL,      -- persisted in browser local storage
     status TEXT NOT NULL DEFAULT 'active',   -- 'active' | 'paused' (manual designer action)
+    qualification_answers JSONB,
+    qualified_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -83,26 +128,41 @@ CREATE TABLE item_agreement (
 
 Notes for implementing agents:
 - `label_schema` and `answer`/`gold_answer` are intentionally loosely typed (JSONB) at the DB layer — validate their shape in the application layer against `label_schema` on write, not via DB constraints.
+- `metadata_schema`, `qualification_form`, and `routing_rules` are constrained
+  application-level schemas. Metadata and qualification answers must be validated
+  before persistence; arbitrary client-defined routing expressions are not allowed.
 - `annotator_score` and `item_agreement` are **derived tables**, not sources of truth. They must always be re-derivable from `annotation` + `data_unit`. Do not let them drift into being edited directly.
 
 ## 3. API surface (v1)
 
 ### Designer-facing (no auth in v1 — add an API key or session later, not blocking)
-- `POST /experiments` — create experiment (name, modality, instructions, label_schema, overlap_n, gold_ratio) → returns `share_token`
-- `POST /experiments/{id}/data-units` — batch upload: accepts list of raw file references (already uploaded to S3 via presigned URL, see below) plus optional `is_gold`/`gold_answer` per item
+- `GET /annotation-types` — list registered task types and modality capabilities.
+- `GET /modalities` — list registered modalities and their interaction capabilities.
+- `GET /experiments` — list experiments for the designer landing page.
+- `POST /experiments` — create a draft or active experiment with label schema,
+  metadata schema, qualification form, routing rules, overlap, and gold cadence.
+- `POST /experiments/{id}/data-units` — register uploaded raw references with
+  validated per-sample metadata and optional inline gold configuration.
+- `POST /experiments/{id}/gold-manifest` — apply validated gold answers to
+  registered samples by exact filename, returning per-entry errors.
+- `POST /experiments/{id}/deploy` — activate a populated draft experiment.
 - `GET /experiments/{id}/dashboard` — returns completion %, annotator list with scores, item agreement summary (this is what the dashboard polls)
 - `PATCH /annotators/{id}` — set status to `paused` (manual removal from pool)
+- `GET /experiments/{id}/review` — return samples with media URLs, metadata,
+  gold answers, agreement, and all annotations for designer inspection.
 - `GET /experiments/{id}/export` — returns the data pack (JSON/JSONL: data_unit + all annotations + agreement/gold scores + provenance)
 - `POST /uploads/presign` — returns a presigned S3 URL so raw files go directly from browser to object storage, not through the FastAPI app
 
 ### Annotator-facing (share_token based, session-token identified)
 - `GET /annotate/{share_token}/session` — creates or resumes an annotator session (sets/reads session token), returns experiment instructions + label_schema
+- `POST /annotate/{share_token}/qualifications` — validate and persist the
+  annotator's qualification answers before allocation.
 - `GET /annotate/{share_token}/next` — returns the next item for this annotator's queue (gold-interleaved per `gold_ratio`, respecting `overlap_n` so the allocator doesn't over/under-assign)
 - `POST /annotate/{share_token}/items/{data_unit_id}/annotations` — submit an answer; triggers the scoring event handler (see below)
 
 ## 4. Scoring logic (the core differentiated piece — build carefully)
 
-Triggered synchronously or via a lightweight background task on every `POST .../annotations`:
+Triggered synchronously in the annotation transaction on every `POST .../annotations`:
 
 ```
 on_annotation_submitted(annotation):
@@ -121,17 +181,26 @@ on_annotation_submitted(annotation):
 ```
 
 - **`compare()` / `compute_agreement()` dispatch by `label_schema.annotation_type`**:
-  - Categorical label (single class per item): exact match for gold; Cohen's kappa (2 annotators) or Fleiss' kappa (3+) for overlap agreement.
-  - Segment/region (audio) or bbox/polygon (image): IoU-based — threshold match (e.g. IoU ≥ 0.5) for gold correctness; average pairwise IoU for overlap agreement.
-- **Rolling window**: use a fixed-size window (e.g. last 20 gold items) or exponential decay, not a lifetime average — an annotator's early mistakes shouldn't permanently haunt their score. Pick fixed-window for v1 simplicity; exponential decay is a reasonable v1.1 upgrade, not a blocker.
+  - Categorical single-select: exact equality for gold and average pairwise equality for overlap agreement.
+  - Categorical multi-select: Jaccard similarity for gold and average pairwise Jaccard similarity for agreement.
+  - Temporal segment/region (audio or video): labels must match, then greedily matched temporal regions are scored by IoU for both gold and pairwise agreement.
+- **Rolling window**: annotator gold accuracy and agreement are recomputed from a
+  configurable fixed-size recent window (default 20). Derived values can be
+  rebuilt from source annotations with `rebuild_scores.py`.
 - **Low-N caveat**: when `n_annotations < overlap_n` is impossible by construction (agreement only computes at exactly `overlap_n`), but do surface `n_annotations` alongside every agreement score in the API/dashboard response so the UI can (and should) visually de-emphasize scores based on very few gold items too (e.g. "accuracy: 80% (n=4)" reads very differently from "n=40").
 
 ## 5. Task allocation (assigning items to annotators)
 
-Needed so `overlap_n` and `gold_ratio` are actually honored, not just configured:
-- Maintain, per experiment, a simple counter per `data_unit` of how many *non-gold* annotations it has so far; `GET .../next` should prefer items with `count < overlap_n` and exclude items the requesting annotator has already annotated (enforced by the `UNIQUE` constraint anyway, but check before serving to avoid a wasted round trip).
-- Interleave gold items: e.g. every 1/`gold_ratio` items served to a given annotator should be a gold item they haven't seen yet, picked pseudo-randomly from the gold set — not always the same first N items.
-- Keep this allocator as its own function/module (`allocate_next_item(experiment, annotator)`) even in v1 — it's a small piece of logic but it's load-bearing for the scoring math being valid, and it's easy to accidentally entangle with the API handler if not kept separate.
+`overlap_n` and `gold_ratio` are enforced by the isolated
+`allocate_next_item(db, experiment, annotator)` service:
+
+- Query annotation counts and prefer regular items with the lowest count below
+  `overlap_n`; exclude samples already seen by the current annotator.
+- Determine whether gold is due from the annotator's completed/gold counts and
+  configured ratio. Pick unseen eligible gold randomly, with a regular fallback.
+- Apply metadata/qualification routing to both regular and gold candidates.
+- A row lock and a second count check during submission prevent concurrent
+  requests from exceeding the regular-item overlap limit.
 
 ### 5.1 Metadata and qualification routing
 
@@ -141,7 +210,8 @@ of constrained `routing_rules`. Annotator qualification answers are stored
 separately from annotation answers.
 
 Supported qualification questions are single choice, multiple choice, boolean,
-and numeric/proficiency. Supported routing comparisons are:
+numeric/proficiency, and free text. Free-text responses are stored as annotator
+qualifications but cannot participate in routing. Supported routing comparisons are:
 
 - sample metadata equals an annotator answer;
 - a sample metadata value is contained in an annotator's multi-choice answer;
@@ -160,6 +230,21 @@ Gold samples follow the same metadata routing rules as regular samples. The API
 distinguishes a truly exhausted queue from remaining work that does not match an
 annotator's qualifications.
 
+#### Anonymous annotator identity
+
+Anonymous access removes the account requirement but does not remove the
+experiment-scoped identity. The first session request creates an `Annotator` row
+and returns a random session token, which the browser stores under a key scoped to
+the experiment share token. Questionnaire answers and `qualified_at` are saved on
+that annotator; annotations and derived scores reference its UUID.
+
+The designer dashboard exposes the stable anonymous ID, questionnaire answers,
+completion count, gold/agreement metrics, status, and last activity. The review
+and export endpoints use the same annotator UUID, allowing individual submissions
+to be traced back to the anonymous profile. Clearing browser storage or changing
+browsers creates a new anonymous identity; account-based continuity is a later
+capability.
+
 ### 5.2 Dataset bundle import
 
 Experiment creation stages media, metadata, and gold answers together in the
@@ -170,17 +255,52 @@ against the task schema, and displays the assembled rows in an editable table.
 Duplicate filenames, orphan manifest entries, missing metadata rows, and invalid
 gold answers block deployment.
 
+The Task step displays the required gold structure beside the task controls and
+updates it as the annotation configuration changes. Supported answer payloads are:
+
+```json
+{"value": "Good"}
+{"values": ["Good", "Noisy"]}
+{"label": "Good", "regions": [{"start": 0.5, "end": 2.75}]}
+```
+
+These represent categorical single-select, categorical multi-select, and audio
+segment answers respectively. Each gold-manifest item wraps one of these answers
+as `{ "filename": "clip.wav", "answer": ... }`.
+
 After preview validation, the draft-first API flow uploads media, registers typed
 metadata, applies gold answers, and only then activates the experiment. Incomplete
 imports therefore remain inaccessible through the public share link.
 
-## 6. Build order (match to PRD milestones)
+## 6. Implemented v1 milestones
 
-1. **Schema + migrations** — all 6 tables above, running locally via Docker Postgres. No app logic yet.
-2. **Experiment CRUD** — create experiment, presigned upload → batch-create data_units (incl. gold), minimal designer React form. Acceptance: can create an experiment and see its items in the DB.
-3. **Single-modality annotation flow (audio)** — share link → session → `next` endpoint (allocator, gold interleaving) → wavesurfer.js UI → submit. No scoring yet. Acceptance: a real person can open the link and submit annotations that land in the `annotation` table correctly.
-4. **Scoring** — event handler + kappa/IoU implementations + `annotator_score`/`item_agreement` tables populated live. Acceptance: submitting a wrong answer on a gold item visibly changes that annotator's rolling accuracy within seconds; completing the Nth overlap annotation populates `item_agreement`.
-5. **Dashboard** — polling React view over `GET /experiments/{id}/dashboard`. Acceptance: designer can watch scores update live while annotators are working, and can pause an annotator.
-6. **Export** — `GET /experiments/{id}/export` → JSON/JSONL data pack.
+1. **Schema and migrations** — six core tables plus experiment metadata/routing
+   configuration and annotator qualification storage.
+2. **Experiment creation** — six-step designer flow, registry-backed task schema,
+   dataset bundle validation/preview, presigned uploads, and draft deployment.
+3. **Audio annotation** — anonymous resumable session, qualification onboarding,
+   allocation, categorical/segment controls, and submission validation.
+4. **Scoring** — synchronous rolling gold/agreement updates with exact, Jaccard,
+   and temporal-IoU scoring; derived-score rebuild command included.
+5. **Designer operations** — global navigation, polling dashboard, annotator
+   pause/resume, and per-sample annotation review.
+6. **Export** — JSON data pack containing experiment configuration, metadata,
+   qualifications, raw annotations, gold answers, scores, and provenance.
 
-Do not start step 3 before step 1–2 are solid — the schema is the contract every later step depends on, and reworking it after the annotation UI exists is expensive.
+## 7. Visual system
+
+The frontend uses a light Aqua Lab theme designed for long annotation sessions:
+
+- warm white canvas/surfaces with dark ocean text (`#102A32`);
+- cyan (`#30AFFF`, `#92EEFF`) for navigation, focus, progress, waveform, and
+  interactive selection;
+- mint (`#D8FFC5`, `#C4F7CA`) for completed steps, qualified/active states, and
+  valid dataset rows;
+- a deeper ocean blue (`#087796`) for buttons requiring white text so controls
+  retain accessible contrast;
+- amber reserved for gold-answer semantics and red reserved for errors or
+  destructive actions.
+
+Large saturated backgrounds are avoided. Cards remain white with subtle borders
+and shadows, tables use low-contrast row differentiation, and the annotator view
+keeps color subordinate to the media and answer controls.

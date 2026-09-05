@@ -60,6 +60,10 @@ def validate_qualification_answers(
                 raise ValueError(f"answer '{key}' is below the minimum")
             if question.get("maximum") is not None and value > question["maximum"]:
                 raise ValueError(f"answer '{key}' is above the maximum")
+        elif question_type == "text" and (
+            not isinstance(value, str) or not value.strip() or len(value) > 2000
+        ):
+            raise ValueError(f"answer '{key}' must be non-empty text up to 2000 characters")
     return answers
 
 

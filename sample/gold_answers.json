@@ -1,0 +1,62 @@
+[
+  {
+    "filename": "Mridangam's Silent Pulse_1.mp3",
+    "answer": {
+      "label": "Good",
+      "regions": [
+        {
+          "start": 0.5,
+          "end": 2.75
+        }
+      ]
+    }
+  },
+  {
+    "filename": "Mridangam's Silent Pulse_2.mp3",
+    "answer": {
+      "label": "Noisy",
+      "regions": [
+        {
+          "start": 0.5,
+          "end": 2.75
+        }
+      ]
+    }
+  },
+  {
+    "filename": "Temple Bell Echoes.mp3",
+    "answer": {
+      "label": "Good",
+      "regions": [
+        {
+          "start": 0.5,
+          "end": 2.75
+        }
+      ]
+    }
+  },
+  {
+    "filename": "कमल पे विराजे.mp3",
+    "answer": {
+      "label": "Good",
+      "regions": [
+        {
+          "start": 0.5,
+          "end": 2.75
+        }
+      ]
+    }
+  },
+  {
+    "filename": "महालक्ष्मी स्तुति.mp3",
+    "answer": {
+      "label": "Unusable",
+      "regions": [
+        {
+          "start": 0.5,
+          "end": 2.75
+        }
+      ]
+    }
+  }
+]

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, Plus, Settings, Trash2, UploadCloud } from "lucide-react";
 import AnnotationControl from "./annotator/AnnotationControl";
 import type { AnnotationAnswer, LabelSchema } from "./annotator/types";
+import { getAnnotationPlugin } from "../plugins/annotations/registry";
+import { getMediaPlugin, listMediaPlugins, supportsAnnotation } from "../plugins/media/registry";
 import {
   parseDatasetBundle,
   validateGold,
@@ -15,12 +17,13 @@ interface AnnotationTypeInfo {
   compatible_modalities: string[];
   supports_choices: boolean;
   supports_multi_select: boolean;
+  required_interaction: string;
 }
 
 interface QualificationQuestion {
   key: string;
   label: string;
-  type: "single_choice" | "multi_choice" | "boolean" | "number";
+  type: "single_choice" | "multi_choice" | "boolean" | "number" | "text";
   required: boolean;
   options: string[];
   minimum?: number;
@@ -34,6 +37,18 @@ interface RoutingRule {
 }
 
 const steps = ["Basics", "Task", "Dataset bundle", "Dataset preview", "Qualifications", "Review"];
+
+const routingOperatorFor = (
+  field: MetadataFieldDefinition | undefined,
+  question: QualificationQuestion | undefined,
+): RoutingRule["operator"] | null => {
+  if (!field || !question) return null;
+  if (field.type === "number" && question.type === "number") return "gte";
+  if (field.type === "boolean" && question.type === "boolean") return "equals";
+  if (["text", "choice"].includes(field.type) && question.type === "multi_choice") return "in";
+  if (["text", "choice"].includes(field.type) && question.type === "single_choice") return "equals";
+  return null;
+};
 
 export default function CreateExperiment() {
   const [step, setStep] = useState(0);
@@ -62,14 +77,30 @@ export default function CreateExperiment() {
       .catch(() => setError("Could not load annotation types"));
   }, []);
 
-  const availableTypes = annotationTypes.filter(type => type.compatible_modalities.includes(form.modality));
-  const currentType = annotationTypes.find(type => type.key === annotationType);
+  const mediaPlugin = getMediaPlugin(form.modality);
+  const availableTypes = annotationTypes.filter(type => {
+    const plugin = getAnnotationPlugin(type.key);
+    return Boolean(
+      plugin
+      && mediaPlugin
+      && type.required_interaction === plugin.requiredInteraction
+      && type.compatible_modalities.includes(form.modality)
+      && supportsAnnotation(mediaPlugin, plugin.requiredInteraction),
+    );
+  });
+  const currentType = availableTypes.find(type => type.key === annotationType);
+  const annotationPlugin = getAnnotationPlugin(annotationType);
+  useEffect(() => {
+    if (availableTypes.length && !availableTypes.some(type => type.key === annotationType)) {
+      setAnnotationType(availableTypes[0].key);
+    }
+  }, [annotationType, availableTypes]);
   useEffect(() => {
     if (currentType && !currentType.supports_multi_select) setMultiSelect(false);
   }, [currentType]);
 
   useEffect(() => {
-    setPreviewAnswer(annotationType === "segment" ? { regions: [] } : {});
+    setPreviewAnswer(getAnnotationPlugin(annotationType)?.createInitialAnswer() ?? {});
   }, [annotationType, multiSelect, labels]);
 
   useEffect(() => {
@@ -83,6 +114,11 @@ export default function CreateExperiment() {
     choices: labels,
     multi_select: multiSelect,
   };
+  const goldAnswerShape = annotationPlugin?.goldAnswerShape(previewSchema) ?? "Unknown answer format";
+  const goldFileExample = JSON.stringify([{
+    filename: mediaPlugin?.exampleFilename ?? "sample.bin",
+    answer: annotationPlugin?.createGoldExample(previewSchema) ?? {},
+  }], null, 2);
 
   const duplicateFiles = useMemo(() => {
     const names = files.map(file => file.name);
@@ -98,8 +134,36 @@ export default function CreateExperiment() {
   };
 
   const addQuestion = () => {
-    const index = questions.length + 1;
-    setQuestions(current => [...current, { key: `question_${index}`, label: `Qualification question ${index}`, type: "single_choice", required: true, options: ["Option 1"] }]);
+    let index = questions.length + 1;
+    while (questions.some(question => question.key === `question_${index}`)) index += 1;
+    const field = metadataFields[0];
+    const metadataValues = field
+      ? [...new Set(datasetRows.map(row => row.metadata[field.key]).filter(value => value !== undefined).map(String))]
+      : [];
+    const isLanguage = field?.key === "language";
+    const type: QualificationQuestion["type"] = field?.type === "number"
+      ? "number"
+      : field?.type === "boolean"
+        ? "boolean"
+        : "multi_choice";
+    const label = !field
+      ? "Which skills or languages do you have?"
+      : isLanguage
+        ? "Which languages can you understand?"
+        : field.type === "number"
+          ? `What is the highest ${field.label.toLowerCase()} you can handle?`
+          : field.type === "boolean"
+            ? `Can you work with samples where ${field.label.toLowerCase()} is required?`
+            : `Which ${field.label.toLowerCase()} options can you work with?`;
+    setQuestions(current => [...current, {
+      key: `question_${index}`,
+      label,
+      type,
+      required: true,
+      options: type.includes("choice") ? (field?.options.length ? field.options : metadataValues) : [],
+      minimum: type === "number" ? 0 : undefined,
+      maximum: type === "number" ? Math.max(5, ...metadataValues.map(Number).filter(Number.isFinite)) : undefined,
+    }]);
   };
 
   const updateQuestion = (index: number, patch: Partial<QualificationQuestion>) => {
@@ -108,19 +172,22 @@ export default function CreateExperiment() {
 
   const addRule = () => {
     if (!metadataFields.length || !questions.length) return;
-    const question = questions[0];
+    const pair = metadataFields.flatMap(field => questions.map(question => ({ field, question })))
+      .find(({ field, question }) => routingOperatorFor(field, question));
+    if (!pair) return;
     setRules(current => [...current, {
-      metadata_field: metadataFields[0].key,
-      operator: question.type === "multi_choice" ? "in" : "equals",
-      question_key: question.key,
+      metadata_field: pair.field.key,
+      operator: routingOperatorFor(pair.field, pair.question)!,
+      question_key: pair.question.key,
     }]);
   };
 
   const canContinue = (() => {
     if (step === 0) return Boolean(form.name.trim() && form.instructions.trim());
-    if (step === 1) return Boolean(annotationType && labels.length);
+    if (step === 1) return Boolean(annotationPlugin && currentType && (!currentType.supports_choices || labels.length));
     if (step === 2) return files.length > 0 && duplicateFiles.size === 0;
     if (step === 3) return datasetErrors.length === 0 && datasetRows.every(row => row.errors.length === 0);
+    if (step === 4) return questions.every(question => question.label.trim() && (!question.type.includes("choice") || question.options.length > 0));
     return true;
   })();
 
@@ -261,61 +328,62 @@ export default function CreateExperiment() {
           "Choose what annotators will submit.",
           "Add media, metadata, and gold answers together.",
           "Inspect every assembled sample before upload.",
-          "Ask qualification questions and route matching samples.",
+          "Decide which annotators are eligible for each type of sample.",
           "Confirm quality settings and deploy.",
         ][step]}</p></div></div>
 
         {step === 0 && <div className="flex-col">
           <div className="form-group"><label className="form-label">Experiment name</label><input className="form-input" value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="Hindi speech quality" /></div>
           <div className="form-group"><label className="form-label">Instructions for annotators</label><textarea className="form-textarea" value={form.instructions} onChange={event => setForm({ ...form, instructions: event.target.value })} placeholder="Explain what a good annotation looks like…" /></div>
-          <div className="form-group"><label className="form-label">Media type</label><select className="form-select" value={form.modality} onChange={event => setForm({ ...form, modality: event.target.value })}><option value="audio">Audio</option></select></div>
+          <div className="form-group"><label className="form-label">Media type</label><select className="form-select" value={form.modality} onChange={event => { setForm({ ...form, modality: event.target.value }); setFiles([]); setDatasetRows([]); }}>{listMediaPlugins().map(plugin => <option key={plugin.key} value={plugin.key}>{plugin.name}</option>)}</select></div>
         </div>}
 
-        {step === 1 && <div className="flex-col">
-          <div className="task-type-grid">{availableTypes.map(type => <button type="button" key={type.key} className={`task-type-card ${annotationType === type.key ? "selected" : ""}`} onClick={() => setAnnotationType(type.key)}><strong>{type.name}</strong><span>{type.key === "categorical" ? "Choose one or more labels for the whole sample" : "Mark labeled time regions in audio"}</span></button>)}</div>
-          <div className="form-group"><label className="form-label">Labels or choices</label><div className="chip-editor"><div className="label-chips">{labels.map(label => <span className="label-chip" key={label}>{label}<button type="button" onClick={() => setLabels(current => current.filter(value => value !== label))}>×</button></span>)}</div><div className="flex-row"><input className="form-input" value={labelInput} onChange={event => setLabelInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addLabel(); } }} placeholder="Add a label" /><button type="button" className="btn btn-secondary" onClick={addLabel}><Plus size={16} /> Add</button></div></div></div>
-          {currentType?.supports_multi_select && <label className="choice-option"><input type="checkbox" checked={multiSelect} onChange={event => setMultiSelect(event.target.checked)} />Allow annotators to select multiple choices</label>}
-          <div className="config-preview">
-            <span>Interactive annotator preview</span>
-            {annotationType === "segment" && (
-              <div className="segment-preview">
-                <div className="segment-preview-wave">
-                  {(previewAnswer.regions?.length ?? 0) > 0 && <div className="segment-preview-region">Example region</div>}
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => setPreviewAnswer(current => ({
-                    ...current,
-                    regions: current.regions?.length ? [] : [{ start: 1.25, end: 3.75 }],
-                  }))}
-                >
-                  {previewAnswer.regions?.length ? "Remove example region" : "Add example region"}
-                </button>
+        {step === 1 && <div className="task-config-layout">
+          <div className="flex-col">
+            <div className="task-type-grid">{availableTypes.map(type => { const plugin = getAnnotationPlugin(type.key); return <button type="button" key={type.key} className={`task-type-card ${annotationType === type.key ? "selected" : ""}`} onClick={() => setAnnotationType(type.key)}><strong>{type.name}</strong><span>{plugin?.description(mediaPlugin?.name ?? "media")}</span></button>; })}</div>
+            {currentType?.supports_choices && <div className="form-group"><label className="form-label">Labels or choices</label><div className="chip-editor"><div className="label-chips">{labels.map(label => <span className="label-chip" key={label}>{label}<button type="button" onClick={() => setLabels(current => current.filter(value => value !== label))}>×</button></span>)}</div><div className="flex-row"><input className="form-input" value={labelInput} onChange={event => setLabelInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addLabel(); } }} placeholder="Add a label" /><button type="button" className="btn btn-secondary" onClick={addLabel}><Plus size={16} /> Add</button></div></div></div>}
+            {currentType?.supports_multi_select && <label className="choice-option"><input type="checkbox" checked={multiSelect} onChange={event => setMultiSelect(event.target.checked)} />Allow annotators to select multiple choices</label>}
+            <div className="config-preview">
+              <span>Interactive annotator preview</span>
+              {annotationPlugin?.PreviewInteractionEditor && <annotationPlugin.PreviewInteractionEditor answer={previewAnswer} onChange={setPreviewAnswer} />}
+              <AnnotationControl
+                schema={previewSchema}
+                answer={previewAnswer}
+                onChange={setPreviewAnswer}
+              />
+              <div className="preview-payload">
+                <span>Answer payload</span>
+                <code>{JSON.stringify(previewAnswer)}</code>
               </div>
-            )}
-            <AnnotationControl
-              schema={previewSchema}
-              answer={previewAnswer}
-              onChange={setPreviewAnswer}
-            />
-            <div className="preview-payload">
-              <span>Answer payload</span>
-              <code>{JSON.stringify(previewAnswer)}</code>
             </div>
           </div>
+          <aside className="gold-format-panel" aria-label="Required gold dataset format">
+            <span className="gold-format-kicker">Gold data format</span>
+            <h3>JSON file required</h3>
+            <p>Upload one JSON array. Each gold sample needs its exact media filename and the known correct answer.</p>
+            <div className="gold-format-field"><span>Top level</span><code>Array&lt;GoldSample&gt;</code></div>
+            <div className="gold-format-field"><span>Each item</span><code>{`{ filename, answer }`}</code></div>
+            <div className="gold-format-field"><span>Answer</span><code>{goldAnswerShape}</code></div>
+            <pre className="gold-format-example"><code>{goldFileExample}</code></pre>
+            <ul>
+              <li><code>filename</code> must exactly match an uploaded media filename.</li>
+              <li>Labels must be one of: {labels.length ? labels.join(", ") : "add at least one label"}.</li>
+              {annotationPlugin?.goldGuidance && <li>{annotationPlugin.goldGuidance}</li>}
+              <li>Only include samples that should act as quality checks.</li>
+            </ul>
+          </aside>
         </div>}
 
         {step === 2 && <div className="flex-col">
           <div className="bundle-grid">
-            <label className="dropzone"><UploadCloud className="dropzone-icon" /><strong>1. Choose audio files</strong><span>MP3, WAV, or other browser-supported audio</span><input type="file" multiple accept="audio/*" hidden onChange={event => { setFiles(Array.from(event.target.files ?? [])); setDatasetRows([]); }} /></label>
+            <label className="dropzone"><UploadCloud className="dropzone-icon" /><strong>1. {mediaPlugin?.uploadTitle ?? "Choose media files"}</strong><span>{mediaPlugin?.uploadHelp ?? "Choose supported media files"}</span><input type="file" multiple accept={mediaPlugin?.accept} hidden onChange={event => { setFiles(Array.from(event.target.files ?? [])); setDatasetRows([]); }} /></label>
             <label className="dropzone compact"><UploadCloud className="dropzone-icon" /><strong>2. Upload metadata CSV (optional)</strong><span>{metadataCsv ? "CSV loaded — choose another to replace it" : 'Must contain a "filename" column'}</span><input type="file" accept=".csv,text/csv" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setMetadataCsv(await file.text()); setDatasetRows([]); } }} /></label>
             <label className="dropzone compact"><UploadCloud className="dropzone-icon" /><strong>3. Upload gold answers JSON (optional)</strong><span>{goldManifest ? "JSON loaded — choose another to replace it" : "Only include samples used as quality checks"}</span><input type="file" accept=".json,application/json" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setGoldManifest(await file.text()); setDatasetRows([]); } }} /></label>
           </div>
           {(metadataCsv || goldManifest) && <div className="bundle-actions">{metadataCsv && <button type="button" className="btn btn-secondary" onClick={() => { setMetadataCsv(""); setDatasetRows([]); }}>Remove metadata CSV</button>}{goldManifest && <button type="button" className="btn btn-secondary" onClick={() => { setGoldManifest(""); setDatasetRows([]); }}>Remove gold JSON</button>}</div>}
           {files.length > 0 && <div className="file-list">{files.map(file => <div key={`${file.name}-${file.size}`}><span>{file.name}</span><span>{uploadStatus[file.name] || `${(file.size / 1024).toFixed(0)} KB`}</span></div>)}</div>}
           {duplicateFiles.size > 0 && <p className="form-error">Duplicate filenames are not allowed: {[...duplicateFiles].join(", ")}</p>}
-          <details><summary>Input formats</summary><p className="help-text">Metadata CSV example: <code>filename,language,difficulty</code>. Gold JSON example: <code>{`[{"filename":"clip.wav","answer":{"value":"Good"}}]`}</code>. Filenames must match the selected media exactly.</p></details>
+          <details><summary>Input formats</summary><p className="help-text">Metadata CSV example: <code>filename,language,difficulty</code>. Gold JSON uses the format shown on the Task step; for this modality an example filename is <code>{mediaPlugin?.exampleFilename}</code>. Filenames must match the selected media exactly.</p></details>
           {error && <p className="form-error">{error}</p>}
         </div>}
 
@@ -330,7 +398,7 @@ export default function CreateExperiment() {
           <div className="dataset-table-wrap"><table className="dataset-table"><thead><tr><th>Sample</th><th>Preview</th>{metadataFields.map(field => <th key={field.key}>{field.label}</th>)}<th>Gold answer</th><th>Status</th></tr></thead><tbody>
             {datasetRows.map(row => <tr key={row.filename} className={row.errors.length ? "invalid" : ""}>
               <td><strong>{row.filename}</strong></td>
-              <td><audio controls preload="metadata" src={mediaUrls[row.filename]} /></td>
+              <td>{mediaPlugin ? <mediaPlugin.PreviewRenderer mediaUrl={mediaUrls[row.filename]} title={row.filename} /> : <span>Unsupported media</span>}</td>
               {metadataFields.map(field => <td key={field.key}>
                 {field.type === "choice" ? <select className="table-input" value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value || undefined)}><option value="">—</option>{field.options.map(option => <option key={option}>{option}</option>)}</select>
                   : field.type === "boolean" ? <select className="table-input" value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value ? event.target.value === "true" : undefined)}><option value="">—</option><option value="true">Yes</option><option value="false">No</option></select>
@@ -344,14 +412,43 @@ export default function CreateExperiment() {
         </div>}
 
         {step === 4 && <div className="flex-col">
-          <div className="section-heading"><div><h3>Qualification form</h3><p>Questions appear once before annotation begins.</p></div><button type="button" className="btn btn-secondary" onClick={addQuestion}><Plus size={16} /> Add question</button></div>
-          {questions.length === 0 && <div className="empty-builder">No qualification form. Every annotator can receive every sample.</div>}
-          {questions.map((question, index) => <div className="builder-card" key={index}>
-            <div className="builder-row"><input className="form-input" value={question.label} onChange={event => updateQuestion(index, { label: event.target.value })} /><select className="form-select" value={question.type} onChange={event => updateQuestion(index, { type: event.target.value as QualificationQuestion["type"] })}><option value="single_choice">Single choice</option><option value="multi_choice">Multiple choice</option><option value="boolean">Yes / No</option><option value="number">Number / proficiency</option></select><button type="button" className="icon-button" onClick={() => { setQuestions(current => current.filter((_, position) => position !== index)); setRules([]); }}><Trash2 size={17} /></button></div>
-            {question.type.includes("choice") && <input className="form-input" value={question.options.join(", ")} onChange={event => updateQuestion(index, { options: event.target.value.split(",").map(value => value.trim()).filter(Boolean) })} placeholder="Hindi, English, Marathi" />}
-            {question.type === "number" && <div className="flex-row"><input className="form-input" type="number" value={question.minimum ?? 1} onChange={event => updateQuestion(index, { minimum: event.target.valueAsNumber })} placeholder="Minimum" /><input className="form-input" type="number" value={question.maximum ?? 5} onChange={event => updateQuestion(index, { maximum: event.target.valueAsNumber })} placeholder="Maximum" /></div>}
+          <div className="qualification-guide">
+            <strong>Who is qualified to annotate each sample?</strong>
+            <p>First ask the annotator about a skill, language, or proficiency. Then connect their answer to a metadata column from your dataset.</p>
+            <span>Example: ask “Which languages can you understand?” → only serve a Hindi sample when Hindi is among their answers.</span>
+          </div>
+
+          <div className="section-heading"><div><h3>1. Questions for the annotator</h3><p>These are shown once, before the annotator receives any samples.</p></div><button type="button" className="btn btn-secondary" onClick={addQuestion}><Plus size={16} /> Add question</button></div>
+          {questions.length === 0 && <div className="empty-builder"><strong>No qualification questions yet.</strong><span>Add a question if some samples require a particular language or skill. Otherwise, you can continue and all annotators will be eligible.</span></div>}
+          {questions.map((question, index) => <div className="builder-card qualification-card" key={question.key}>
+            <div className="card-heading"><strong>Question {index + 1}</strong><button type="button" className="icon-button" aria-label={`Delete question ${index + 1}`} onClick={() => { setQuestions(current => current.filter((_, position) => position !== index)); setRules(current => current.filter(rule => rule.question_key !== question.key)); }}><Trash2 size={17} /></button></div>
+            <div className="qualification-question-grid">
+              <div className="form-group"><label className="form-label">Question shown to the annotator</label><input className="form-input" value={question.label} onChange={event => updateQuestion(index, { label: event.target.value })} placeholder="Which languages can you understand?" /></div>
+              <div className="form-group"><label className="form-label">How should they answer?</label><select className="form-select" value={question.type} onChange={event => { const type = event.target.value as QualificationQuestion["type"]; updateQuestion(index, { type, options: type.includes("choice") ? question.options : [] }); setRules(current => current.filter(rule => rule.question_key !== question.key)); }}><option value="single_choice">Choose one option</option><option value="multi_choice">Choose all that apply</option><option value="boolean">Yes or No</option><option value="number">Numeric proficiency level</option><option value="text">Free-text response (not for routing)</option></select></div>
+            </div>
+            {question.type.includes("choice") && <div className="form-group"><label className="form-label">Answer options <span>— separate with commas</span></label><input className="form-input" value={question.options.join(", ")} onChange={event => updateQuestion(index, { options: event.target.value.split(",").map(value => value.trim()).filter(Boolean) })} placeholder="Hindi, English, Marathi" /></div>}
+            {question.type === "number" && <div className="qualification-range"><div className="form-group"><label className="form-label">Lowest answer allowed</label><input className="form-input" type="number" value={question.minimum ?? 0} onChange={event => updateQuestion(index, { minimum: event.target.valueAsNumber })} /></div><div className="form-group"><label className="form-label">Highest answer allowed</label><input className="form-input" type="number" value={question.maximum ?? 5} onChange={event => updateQuestion(index, { maximum: event.target.valueAsNumber })} /></div></div>}
+            {question.type === "text" && <p className="non-routing-note">Free-text answers are collected with the annotator profile for review. They cannot be selected in matching rules.</p>}
+            {!question.label.trim() && <p className="form-error">Write the question that the annotator will see.</p>}
+            {question.type.includes("choice") && question.options.length === 0 && <p className="form-error">Add at least one answer option.</p>}
+            <label className="required-toggle"><input type="checkbox" checked={question.required} onChange={event => updateQuestion(index, { required: event.target.checked })} />Annotator must answer this question</label>
           </div>)}
-          {metadataFields.length > 0 && questions.length > 0 && <><div className="section-heading"><div><h3>Routing rules</h3><p>All rules must match before a sample is served.</p></div><button type="button" className="btn btn-secondary" onClick={addRule}><Plus size={16} /> Add rule</button></div>{rules.map((rule, index) => <div className="routing-row" key={index}><select className="form-select" value={rule.metadata_field} onChange={event => setRules(current => current.map((value, position) => position === index ? { ...value, metadata_field: event.target.value } : value))}>{metadataFields.map(field => <option key={field.key} value={field.key}>Sample: {field.label}</option>)}</select><select className="form-select" value={rule.operator} onChange={event => setRules(current => current.map((value, position) => position === index ? { ...value, operator: event.target.value as RoutingRule["operator"] } : value))}><option value="equals">equals answer</option><option value="in">is in selected answers</option><option value="gte">requires proficiency ≥</option></select><select className="form-select" value={rule.question_key} onChange={event => setRules(current => current.map((value, position) => position === index ? { ...value, question_key: event.target.value } : value))}>{questions.map(question => <option key={question.key} value={question.key}>Answer: {question.label}</option>)}</select><button type="button" className="icon-button" onClick={() => setRules(current => current.filter((_, position) => position !== index))}><Trash2 size={17} /></button></div>)}</>}
+
+          {metadataFields.length === 0 && questions.length > 0 && <div className="routing-note">Your dataset has no metadata columns, so answers cannot be used to route particular samples. The questions will only be recorded as annotator qualifications.</div>}
+          {metadataFields.length > 0 && questions.length > 0 && <>
+            <div className="section-heading"><div><h3>2. Match answers to samples</h3><p>A sample is served only when every rule below matches.</p></div><button type="button" className="btn btn-secondary" onClick={addRule} disabled={!metadataFields.some(field => questions.some(question => routingOperatorFor(field, question)))}><Plus size={16} /> Add matching rule</button></div>
+            {rules.length === 0 && <div className="empty-builder"><strong>No matching rules yet.</strong><span>The questions will be recorded, but they will not restrict which samples an annotator receives.</span></div>}
+            {rules.map((rule, index) => {
+              const selectedField = metadataFields.find(field => field.key === rule.metadata_field);
+              const selectedQuestion = questions.find(question => question.key === rule.question_key);
+              const operatorText = rule.operator === "in" ? "is included in" : rule.operator === "gte" ? "is at or below" : "exactly equals";
+              return <div className="routing-card" key={index}>
+                <div className="card-heading"><strong>Matching rule {index + 1}</strong><button type="button" className="icon-button" aria-label={`Delete matching rule ${index + 1}`} onClick={() => setRules(current => current.filter((_, position) => position !== index))}><Trash2 size={17} /></button></div>
+                <div className="routing-sentence"><span>Serve a sample when its</span><select className="form-select" aria-label="Sample metadata field" value={rule.metadata_field} onChange={event => { const field = metadataFields.find(item => item.key === event.target.value); const compatibleQuestion = questions.find(question => routingOperatorFor(field, question)) ?? selectedQuestion; const operator = routingOperatorFor(field, compatibleQuestion); if (compatibleQuestion && operator) setRules(current => current.map((value, position) => position === index ? { ...value, metadata_field: field!.key, question_key: compatibleQuestion.key, operator } : value)); }}>{metadataFields.map(field => <option key={field.key} value={field.key}>{field.label}</option>)}</select><strong>{operatorText}</strong><span>the annotator’s answer to</span><select className="form-select" aria-label="Qualification question" value={rule.question_key} onChange={event => { const question = questions.find(item => item.key === event.target.value); const compatibleField = metadataFields.find(field => routingOperatorFor(field, question)) ?? selectedField; const operator = routingOperatorFor(compatibleField, question); if (compatibleField && question && operator) setRules(current => current.map((value, position) => position === index ? { ...value, metadata_field: compatibleField.key, question_key: question.key, operator } : value)); }}>{questions.filter(question => routingOperatorFor(selectedField, question)).map(question => <option key={question.key} value={question.key}>{question.label}</option>)}</select></div>
+                <p className="routing-meaning">For example, a sample with <strong>{selectedField?.label ?? "metadata"}</strong> will be served only when it matches the answer to “{selectedQuestion?.label ?? "the selected question"}”.</p>
+              </div>;
+            })}
+          </>}
         </div>}
 
         {step === 5 && <div className="flex-col">

@@ -75,7 +75,7 @@ def greedy_match_iou(regions_a: List[Region], regions_b: List[Region]) -> float:
 class SegmentType:
     key = "segment"
     name = "Segment / Region"
-    compatible_modalities = ["audio", "video"]
+    required_interaction = "temporal-regions"
     supports_choices = True
     supports_multi_select = False
 

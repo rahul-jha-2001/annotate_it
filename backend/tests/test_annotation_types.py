@@ -3,7 +3,9 @@ import unittest
 from pydantic import ValidationError
 
 from annotation_types.categorical import CategoricalType
+from annotation_types import get_compatible_modalities, get_valid_types_for_modality
 from annotation_types.segment import Region, SegmentType, compute_iou, greedy_match_iou
+from modalities import get_modality
 from schema_compat import normalize_label_schema
 from services.qualifications import (
     sample_matches_qualifications,
@@ -74,6 +76,20 @@ class SegmentTypeTests(unittest.TestCase):
         self.assertEqual(score, 0.5)
 
 
+class ModalityCapabilityTests(unittest.TestCase):
+    def test_video_supports_categorical_and_temporal_segments(self):
+        self.assertIn("categorical", get_valid_types_for_modality("video"))
+        self.assertIn("segment", get_valid_types_for_modality("video"))
+        self.assertIn("temporal-regions", get_modality("video").supported_interactions)
+
+    def test_compatibility_is_derived_from_required_interaction(self):
+        self.assertEqual(
+            get_compatible_modalities(SegmentType()),
+            ["audio", "video"],
+        )
+        self.assertEqual(get_valid_types_for_modality("unknown"), [])
+
+
 class LegacySchemaTests(unittest.TestCase):
     def test_list_schema_is_normalized(self):
         self.assertEqual(
@@ -105,6 +121,7 @@ class QualificationTests(unittest.TestCase):
         self.form = [
             {"key": "languages", "label": "Languages", "type": "multi_choice", "required": True, "options": ["Hindi", "English"]},
             {"key": "proficiency", "label": "Proficiency", "type": "number", "required": True, "options": [], "minimum": 1, "maximum": 5},
+            {"key": "experience", "label": "Experience", "type": "text", "required": True, "options": []},
         ]
 
     def test_metadata_and_answers_are_validated(self):
@@ -115,14 +132,20 @@ class QualificationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_sample_metadata({"language": "French"}, self.metadata_schema)
         with self.assertRaises(ValueError):
-            validate_qualification_answers({"languages": ["Hindi"], "proficiency": 7}, self.form)
+            validate_qualification_answers({"languages": ["Hindi"], "proficiency": 7, "experience": "Audio review"}, self.form)
+
+    def test_free_text_qualification_is_validated(self):
+        answers = {"languages": ["Hindi"], "proficiency": 4, "experience": "Two years of transcription"}
+        self.assertEqual(validate_qualification_answers(answers, self.form), answers)
+        with self.assertRaises(ValueError):
+            validate_qualification_answers({**answers, "experience": "   "}, self.form)
 
     def test_all_routing_rules_must_match(self):
         rules = [
             {"metadata_field": "language", "operator": "in", "question_key": "languages"},
             {"metadata_field": "difficulty", "operator": "gte", "question_key": "proficiency"},
         ]
-        answers = {"languages": ["Hindi"], "proficiency": 4}
+        answers = {"languages": ["Hindi"], "proficiency": 4, "experience": "Audio review"}
         self.assertTrue(sample_matches_qualifications({"language": "Hindi", "difficulty": 3}, answers, rules))
         self.assertFalse(sample_matches_qualifications({"language": "English", "difficulty": 3}, answers, rules))
         self.assertFalse(sample_matches_qualifications({"language": "Hindi", "difficulty": 5}, answers, rules))
