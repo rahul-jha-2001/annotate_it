@@ -15,6 +15,17 @@ class ModalityResponse(BaseModel):
     name: str
     supported_interactions: List[str]
 
+class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    clerk_user_id: str
+    email: str
+    display_name: str
+    avatar_url: Optional[str] = None
+    is_platform_admin: bool
+    created_at: Any
+
 class MetadataFieldDefinition(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

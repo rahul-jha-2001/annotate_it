@@ -4,6 +4,7 @@ import AnnotationControl from "./annotator/AnnotationControl";
 import type { AnnotationAnswer, LabelSchema } from "./annotator/types";
 import { getAnnotationPlugin } from "../plugins/annotations/registry";
 import { getMediaPlugin, listMediaPlugins, supportsAnnotation } from "../plugins/media/registry";
+import { apiFetch } from "../api";
 import {
   parseDatasetBundle,
   validateGold,
@@ -73,7 +74,7 @@ export default function CreateExperiment() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/annotation-types").then(response => response.json()).then(setAnnotationTypes)
+    apiFetch("/api/annotation-types").then(response => response.json()).then(setAnnotationTypes)
       .catch(() => setError("Could not load annotation types"));
   }, []);
 
@@ -253,7 +254,7 @@ export default function CreateExperiment() {
       }
       const datasetByFilename = new Map(datasetRows.map(row => [row.filename, row]));
 
-      const experimentResponse = await fetch("/api/experiments", {
+      const experimentResponse = await apiFetch("/api/experiments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -268,7 +269,7 @@ export default function CreateExperiment() {
       const experimentBody = await experimentResponse.json();
       if (!experimentResponse.ok) throw new Error(typeof experimentBody.detail === "string" ? experimentBody.detail : "Invalid experiment configuration");
 
-      const presignResponse = await fetch("/api/uploads/presign", {
+      const presignResponse = await apiFetch("/api/uploads/presign", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filenames: files.map(file => file.name) }),
       });
@@ -284,7 +285,7 @@ export default function CreateExperiment() {
         return { raw_uri: target.s3_uri, metadata: datasetByFilename.get(file.name)?.metadata ?? {} };
       }));
 
-      const unitsResponse = await fetch(`/api/experiments/${experimentBody.id}/data-units`, {
+      const unitsResponse = await apiFetch(`/api/experiments/${experimentBody.id}/data-units`, {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items: dataUnits }),
       });
@@ -294,7 +295,7 @@ export default function CreateExperiment() {
         .filter(row => row.goldAnswer)
         .map(row => ({ filename: row.filename, answer: row.goldAnswer }));
       if (goldEntries.length) {
-        const goldResponse = await fetch(`/api/experiments/${experimentBody.id}/gold-manifest`, {
+        const goldResponse = await apiFetch(`/api/experiments/${experimentBody.id}/gold-manifest`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ manifest: goldEntries }),
         });
@@ -302,7 +303,7 @@ export default function CreateExperiment() {
         if (!goldResponse.ok || result.errors?.length) throw new Error(result.errors?.[0]?.error || "Could not apply gold answers");
       }
 
-      const deployResponse = await fetch(`/api/experiments/${experimentBody.id}/deploy`, { method: "POST" });
+      const deployResponse = await apiFetch(`/api/experiments/${experimentBody.id}/deploy`, { method: "POST" });
       if (!deployResponse.ok) throw new Error((await deployResponse.json()).detail || "Could not deploy experiment");
       window.location.assign(`/experiments/${experimentBody.id}`);
     } catch (caught) {

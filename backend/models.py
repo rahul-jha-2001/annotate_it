@@ -7,10 +7,27 @@ from sqlalchemy.sql import func
 
 Base = declarative_base()
 
+class User(Base):
+    __tablename__ = 'app_user'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    clerk_user_id = Column(String, unique=True, nullable=True, index=True)
+    email = Column(String, unique=True, nullable=False, index=True)
+    display_name = Column(String, nullable=False)
+    avatar_url = Column(String)
+    status = Column(String, nullable=False, default='active')
+    is_platform_admin = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    experiments = relationship("Experiment", back_populates="owner")
+    annotator_profiles = relationship("Annotator", back_populates="user")
+
 class Experiment(Base):
     __tablename__ = 'experiment'
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey('app_user.id', ondelete='RESTRICT'), nullable=True, index=True)
     name = Column(String, nullable=False)
     modality = Column(String, nullable=False) # 'audio' | 'image'
     instructions = Column(String)
@@ -26,6 +43,7 @@ class Experiment(Base):
 
     data_units = relationship("DataUnit", back_populates="experiment", cascade="all, delete-orphan")
     annotators = relationship("Annotator", back_populates="experiment", cascade="all, delete-orphan")
+    owner = relationship("User", back_populates="experiments")
 
 class DataUnit(Base):
     __tablename__ = 'data_unit'
@@ -46,6 +64,7 @@ class Annotator(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     experiment_id = Column(UUID(as_uuid=True), ForeignKey('experiment.id', ondelete='CASCADE'), nullable=False)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('app_user.id', ondelete='SET NULL'), nullable=True, index=True)
     session_token = Column(String, unique=True, nullable=False)
     status = Column(String, nullable=False, default='active')
     qualification_answers = Column(JSONB)
@@ -55,6 +74,7 @@ class Annotator(Base):
     experiment = relationship("Experiment", back_populates="annotators")
     annotations = relationship("Annotation", back_populates="annotator", cascade="all, delete-orphan")
     score = relationship("AnnotatorScore", back_populates="annotator", uselist=False, cascade="all, delete-orphan")
+    user = relationship("User", back_populates="annotator_profiles")
 
 class Annotation(Base):
     __tablename__ = 'annotation'

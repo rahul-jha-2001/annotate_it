@@ -9,17 +9,31 @@ Existing tools solve pieces of this (Label Studio: annotation UI; MTurk/Prolific
 Build a system where a single designer can:
 1. **Design** an annotation experiment: choose a registered modality, define a label schema, import media with metadata and gold answers, preview the assembled dataset, optionally qualify annotators and route samples by metadata, and configure overlap/quality-check frequency.
 2. **Deploy** the experiment as a single shareable link.
-3. **Share** that link with anyone — no login required, just enough session identity to prevent trivial double-submission and to attribute scores per person.
+3. **Share** that link with anyone — annotator login remains optional, with
+   enough experiment-scoped session identity to attribute work and scores.
 4. **Track** the experiment live: per-annotator accuracy against gold items, per-item agreement across overlapping annotators, and overall completion.
 
 
 ## 3. Users
-- **Designer**: the person creating and monitoring the experiment (could be a solo researcher, or an enterprise user — same flow either way in v1, since there's no auth differentiation yet).
+- **Designer**: a signed-in user who creates and owns experiments. Clerk manages
+  their configured sign-in methods and account security; designers can access
+  only their own projects.
+- **Platform administrator**: can inspect all experiments and administer legacy
+  unowned data. The first account created is the bootstrap administrator.
 - **Annotator**: anyone with the share link. They may remain anonymous, but are
   represented by a stable experiment-scoped session profile containing their
   questionnaire, activity, annotations, and derived quality metrics.
 
 ## 4. Core user flows
+
+### 4.0 Sign in and manage an account
+- A designer signs up or signs in through Clerk using the methods enabled for the
+  deployment, initially Google and Microsoft.
+- Clerk manages credentials, account verification, sessions, connected accounts,
+  and recovery. The frontend sends Clerk's short-lived session token to FastAPI,
+  which verifies it before performing local authorization.
+- The Clerk profile UI lets the designer update identity details, inspect
+  security settings, manage connected accounts, and terminate sessions.
 
 ### 4.1 Design an experiment
 - Designer creates an Experiment: name, modality (audio or video), instructions text.
@@ -49,7 +63,7 @@ Build a system where a single designer can:
 - Designer copies/shares this link by any channel (email, social, Slack — out of scope to build in-app sharing beyond generating the link).
 
 ### 4.3 Annotate (annotator flow)
-- Annotator opens the share link. No login. A session token is created and
+- Annotator opens the share link. No login is required. A session token is created and
   persisted in browser local storage on first visit.
 - If the experiment has qualification questions, the annotator completes them
   once before receiving work. Required answers are validated, and sample routing
@@ -60,6 +74,8 @@ Build a system where a single designer can:
 - Repeats until their queue is exhausted or they stop.
 - “Anonymous” means no account is required, not that activity is discarded. The
   same browser session continues under the same anonymous ID for that experiment.
+  If the visitor is signed in, that experiment-scoped annotator profile is also
+  linked to their account without changing the public annotation flow.
 
 ### 4.4 Track (designer dashboard)
 - Live-updating (poll-based) dashboard per experiment showing:
@@ -87,6 +103,8 @@ Build a system where a single designer can:
 - A designer can restrict language- or proficiency-specific samples without
   writing arbitrary code, while still collecting non-routable free-text context.
 - Gold-item accuracy and overlap agreement scores update within seconds of a relevant submission (not batch/overnight).
+- Designer APIs reject anonymous requests and prevent one designer from reading
+  or changing another designer's experiments.
 - At least one full experiment can be run end-to-end (design → deploy → share → 3+ real annotators → export) as the acceptance test for this version.
 
 ## 6. Key risks / open questions

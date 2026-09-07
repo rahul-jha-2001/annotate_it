@@ -5,6 +5,7 @@ import QualificationForm from "./annotator/QualificationForm";
 import type { AnnotationAnswer, AnnotationSession } from "./annotator/types";
 import { getAnnotationPlugin } from "../plugins/annotations/registry";
 import { getMediaPlugin, supportsAnnotation } from "../plugins/media/registry";
+import { apiFetch } from "../api";
 
 interface NextItem {
   data_unit_id: string;
@@ -36,7 +37,7 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
     try {
       const url = new URL(`/api/annotate/${shareToken}/next`, window.location.origin);
       url.searchParams.set("session_token", sessionToken);
-      const response = await fetch(url);
+      const response = await apiFetch(url);
       if (!response.ok) throw new Error(await responseError(response, "Could not load the next item"));
       const data = await response.json();
       if (data.message) {
@@ -61,7 +62,7 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
         const savedToken = localStorage.getItem(`annotate_session_${shareToken}`);
         const url = new URL(`/api/annotate/${shareToken}/session`, window.location.origin);
         if (savedToken) url.searchParams.set("session_token", savedToken);
-        const response = await fetch(url);
+        const response = await apiFetch(url);
         if (!response.ok) throw new Error(await responseError(response, "Could not initialize session"));
         const data: AnnotationSession = await response.json();
         localStorage.setItem(`annotate_session_${shareToken}`, data.session_token);
@@ -89,7 +90,7 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
         window.location.origin,
       );
       url.searchParams.set("session_token", session.session_token);
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ answer }),
@@ -114,7 +115,7 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
     try {
       const url = new URL(`/api/annotate/${shareToken}/qualifications`, window.location.origin);
       url.searchParams.set("session_token", session.session_token);
-      const response = await fetch(url, {
+      const response = await apiFetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ answers }),

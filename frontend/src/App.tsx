@@ -1,12 +1,30 @@
-import { Route, Switch, Link } from "wouter";
-import { Activity, LayoutDashboard, Plus } from "lucide-react";
+import type { ReactNode } from "react";
+import { RedirectToSignIn, useAuth, useClerk, useUser } from "@clerk/react";
+import { Route, Switch, Link, useLocation } from "wouter";
+import { Activity, LayoutDashboard, LogIn, LogOut, Plus, UserRound } from "lucide-react";
 import Dashboard from "./components/Dashboard";
 import CreateExperiment from "./components/CreateExperiment";
 import Annotator from "./components/Annotator";
 import ExperimentDashboard from "./components/ExperimentDashboard";
 import ReviewAnnotations from "./components/ReviewAnnotations";
+import Login from "./components/Login";
+import Profile from "./components/Profile";
+import { setAuthTokenGetter } from "./api";
+
+function Protected({ children }: { children: ReactNode }) {
+  const { isLoaded, isSignedIn } = useAuth();
+  if (!isLoaded) return <div className="container text-center">Loading account…</div>;
+  if (!isSignedIn) return <RedirectToSignIn />;
+  return <>{children}</>;
+}
 
 function App() {
+  const { isSignedIn, getToken } = useAuth();
+  const { user } = useUser();
+  const { signOut } = useClerk();
+  const [, navigate] = useLocation();
+  setAuthTokenGetter(() => getToken());
+  const displayName = user?.fullName || user?.username || user?.primaryEmailAddress?.emailAddress || "Account";
   return (
     <>
       <header className="app-header">
@@ -15,20 +33,23 @@ function App() {
           Annotate It
         </Link>
         <nav className="app-nav" aria-label="Main navigation">
-          <Link href="/" className="nav-link">
-            <LayoutDashboard size={17} /> Dashboard
-          </Link>
-          <Link href="/experiments/new" className="nav-link nav-link-primary">
-            <Plus size={17} /> New Experiment
-          </Link>
+          {isSignedIn ? <>
+            <Link href="/" className="nav-link"><LayoutDashboard size={17} /> Dashboard</Link>
+            <Link href="/experiments/new" className="nav-link nav-link-primary"><Plus size={17} /> New Experiment</Link>
+            <Link href="/profile" className="nav-link"><UserRound size={17} /> {displayName}</Link>
+            <button className="nav-link nav-button" onClick={async () => { await signOut(); navigate("/login"); }}><LogOut size={17} /> Sign out</button>
+          </> : <Link href="/login" className="nav-link nav-link-primary"><LogIn size={17} /> Sign in</Link>}
         </nav>
       </header>
 
       <main>
         <Switch>
-          <Route path="/" component={Dashboard} />
+          <Route path="/login"><Login /></Route>
+          <Route path="/signup"><Login signup /></Route>
+          <Route path="/profile"><Protected><Profile /></Protected></Route>
+          <Route path="/"><Protected><Dashboard /></Protected></Route>
           <Route path="/experiments/new">
-            <div className="container animate-fade-in">
+            <Protected><div className="container animate-fade-in">
               <div className="flex-col" style={{ alignItems: "center", textAlign: "center", marginBottom: "40px" }}>
                 <h1>Annotation Experiment Platform</h1>
                 <p style={{ maxWidth: "600px", fontSize: "1.1rem" }}>
@@ -36,13 +57,13 @@ function App() {
                 </p>
               </div>
               <CreateExperiment />
-            </div>
+            </div></Protected>
           </Route>
           <Route path="/experiments/:id/review">
-            {(params) => <ReviewAnnotations experimentId={params.id!} />}
+            {(params) => <Protected><ReviewAnnotations experimentId={params.id!} /></Protected>}
           </Route>
           <Route path="/experiments/:id">
-            {(params) => <ExperimentDashboard experimentId={params.id!} />}
+            {(params) => <Protected><ExperimentDashboard experimentId={params.id!} /></Protected>}
           </Route>
           <Route path="/annotate/:shareToken">
             {(params) => <Annotator shareToken={params.shareToken!} />}

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Download, Eye, Pause, Play, RefreshCw } from "lucide-react";
 import { Link } from "wouter";
+import { apiFetch } from "../api";
 
 interface DashboardData {
   experiment: {
@@ -47,7 +48,7 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
 
   const refresh = useCallback(async () => {
     try {
-      const response = await fetch(`/api/experiments/${experimentId}/dashboard`);
+      const response = await apiFetch(`/api/experiments/${experimentId}/dashboard`);
       if (!response.ok) throw new Error("Could not load experiment statistics");
       setData(await response.json());
       setError(null);
@@ -65,7 +66,7 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
   }, [refresh]);
 
   const toggleAnnotator = async (id: string, status: "active" | "paused") => {
-    const response = await fetch(`/api/annotators/${id}`, {
+    const response = await apiFetch(`/api/annotators/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: status === "active" ? "paused" : "active" }),
@@ -75,7 +76,7 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
   };
 
   const downloadExport = async () => {
-    const response = await fetch(`/api/experiments/${experimentId}/export`);
+    const response = await apiFetch(`/api/experiments/${experimentId}/export`);
     if (!response.ok) {
       setError("Could not export experiment");
       return;

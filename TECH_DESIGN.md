@@ -11,6 +11,8 @@ For implementation checklists and extension examples, see
 - **Migrations**: Alembic
 - **Object storage**: S3-compatible (S3, or R2/B2) and local for testing for raw media files; DB stores URIs only, never bytes
 - **Frontend**: React + Vite (no Next.js — no SSR requirement for v1)
+- **Authentication and user management**: Clerk React SDK in the browser and
+  Clerk's Python SDK for FastAPI session-token verification
 - **Audio annotation UI**: wavesurfer.js (waveform render + region/point selection)
 - **Video annotation UI**: native browser video playback with plugin-owned temporal region controls
 - **Image annotation UI** (stretch, not v1 blocking): Konva.js / react-konva for bbox/polygon
@@ -62,6 +64,7 @@ use `React.lazy`, keeping modality-specific dependencies out of the coordinator.
 -- Experiment: the unit of design/deploy/track
 CREATE TABLE experiment (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    owner_id UUID REFERENCES app_user(id) ON DELETE RESTRICT,
     name TEXT NOT NULL,
     modality TEXT NOT NULL,                 -- registered media-plugin key, e.g. 'audio' or 'video'
     instructions TEXT,
@@ -86,15 +89,29 @@ CREATE TABLE data_unit (
     metadata JSONB NOT NULL DEFAULT '{}'
 );
 
--- Annotator: anonymous, session-token identified
+-- Annotator: experiment-scoped profile; account linkage remains optional
 CREATE TABLE annotator (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     experiment_id UUID NOT NULL REFERENCES experiment(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES app_user(id) ON DELETE SET NULL,
     session_token TEXT UNIQUE NOT NULL,      -- persisted in browser local storage
     status TEXT NOT NULL DEFAULT 'active',   -- 'active' | 'paused' (manual designer action)
     qualification_answers JSONB,
     qualified_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Designer account, external identity mapping, and revocable app session
+CREATE TABLE app_user (
+    id UUID PRIMARY KEY,
+    clerk_user_id TEXT UNIQUE,
+    email TEXT UNIQUE NOT NULL,
+    display_name TEXT NOT NULL,
+    avatar_url TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    is_platform_admin BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Annotation: a single submitted answer for a single item by a single annotator
@@ -135,7 +152,9 @@ Notes for implementing agents:
 
 ## 3. API surface (v1)
 
-### Designer-facing (no auth in v1 — add an API key or session later, not blocking)
+### Designer-facing (authenticated and owner-scoped)
+- `GET /auth/me` — resolve the verified Clerk identity to the local application
+  user and return domain-profile information.
 - `GET /annotation-types` — list registered task types and modality capabilities.
 - `GET /modalities` — list registered modalities and their interaction capabilities.
 - `GET /experiments` — list experiments for the designer landing page.
@@ -152,6 +171,14 @@ Notes for implementing agents:
   gold answers, agreement, and all annotations for designer inspection.
 - `GET /experiments/{id}/export` — returns the data pack (JSON/JSONL: data_unit + all annotations + agreement/gold scores + provenance)
 - `POST /uploads/presign` — returns a presigned S3 URL so raw files go directly from browser to object storage, not through the FastAPI app
+
+All experiment reads and mutations require a designer session. Non-admin users
+can access only experiments whose `owner_id` matches their user ID. Platform
+administrators may inspect all experiments. Legacy rows with a null owner are
+visible only to platform administrators; every new experiment receives its
+creator as owner. The frontend attaches a short-lived Clerk session token as a
+Bearer token. FastAPI verifies its signature, lifetime, type, and `azp` against
+`CLERK_AUTHORIZED_PARTIES` before evaluating local authorization.
 
 ### Annotator-facing (share_token based, session-token identified)
 - `GET /annotate/{share_token}/session` — creates or resumes an annotator session (sets/reads session token), returns experiment instructions + label_schema
@@ -242,8 +269,9 @@ The designer dashboard exposes the stable anonymous ID, questionnaire answers,
 completion count, gold/agreement metrics, status, and last activity. The review
 and export endpoints use the same annotator UUID, allowing individual submissions
 to be traced back to the anonymous profile. Clearing browser storage or changing
-browsers creates a new anonymous identity; account-based continuity is a later
-capability.
+browsers creates a new anonymous identity. When a signed-in user follows an
+annotation link, the same experiment-scoped profile is also linked through
+`annotator.user_id`, while public contributors can continue without an account.
 
 ### 5.2 Dataset bundle import
 
@@ -286,6 +314,9 @@ imports therefore remain inaccessible through the public share link.
    pause/resume, and per-sample annotation review.
 6. **Export** — JSON data pack containing experiment configuration, metadata,
    qualifications, raw annotations, gold answers, scores, and provenance.
+7. **Accounts and authorization** — Clerk-hosted authentication, security, and
+   profile management; verified session tokens; app-owned user records,
+   experiment ownership, protected designer routes, and optional annotator links.
 
 ## 7. Visual system
 

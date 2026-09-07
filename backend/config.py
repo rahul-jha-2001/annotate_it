@@ -1,4 +1,12 @@
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+
+# Load local development settings before any module-level os.getenv calls.
+# Existing shell/deployment variables keep precedence over this file.
+load_dotenv(Path(__file__).with_name(".env.local"), override=False)
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -14,3 +22,15 @@ CORS_ORIGINS = [
     if origin.strip()
 ]
 SCORE_WINDOW_SIZE = int(os.getenv("SCORE_WINDOW_SIZE", "20"))
+CLERK_SECRET_KEY = os.getenv("CLERK_SECRET_KEY")
+CLERK_JWT_KEY = os.getenv("CLERK_JWT_KEY")
+CLERK_AUTHORIZED_PARTIES = [
+    origin.strip()
+    for origin in os.getenv("CLERK_AUTHORIZED_PARTIES", ",".join(CORS_ORIGINS)).split(",")
+    if origin.strip()
+]
+PLATFORM_ADMIN_CLERK_USER_IDS = {
+    user_id.strip()
+    for user_id in os.getenv("PLATFORM_ADMIN_CLERK_USER_IDS", "").split(",")
+    if user_id.strip()
+}

@@ -9,22 +9,51 @@ from fastapi.testclient import TestClient
 class ApiIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        from fastapi import HTTPException
         from main import app
+        from auth import get_current_user, get_optional_user
+        from database import SessionLocal
+        from models import User
 
         cls.client_context = TestClient(app)
         cls.client = cls.client_context.__enter__()
         cls.experiment_ids = []
+        with SessionLocal() as db:
+            cls.owner = User(
+                clerk_user_id=f"user_integration_{uuid.uuid4().hex}",
+                email=f"integration-{uuid.uuid4()}@example.test",
+                display_name="Integration Owner",
+                is_platform_admin=False,
+            )
+            db.add(cls.owner)
+            db.commit()
+            db.refresh(cls.owner)
+            cls.owner_id = cls.owner.id
+            cls.owner_email = cls.owner.email
+            cls.owner_clerk_id = cls.owner.clerk_user_id
+        cls.auth_user = cls.owner
+
+        def current_test_user():
+            if cls.auth_user is None:
+                raise HTTPException(status_code=401, detail="Authentication required")
+            return cls.auth_user
+
+        app.dependency_overrides[get_current_user] = current_test_user
+        app.dependency_overrides[get_optional_user] = lambda: None
+        cls.app = app
 
     @classmethod
     def tearDownClass(cls):
         from database import SessionLocal
-        from models import Experiment
+        from models import Experiment, User
 
         with SessionLocal() as db:
             db.query(Experiment).filter(Experiment.id.in_(cls.experiment_ids)).delete(
                 synchronize_session=False
             )
+            db.query(User).filter_by(id=cls.owner_id).delete()
             db.commit()
+        cls.app.dependency_overrides.clear()
         cls.client_context.__exit__(None, None, None)
 
     def create_experiment(self, name, gold_ratio=0):
@@ -52,6 +81,58 @@ class ApiIntegrationTests(unittest.TestCase):
         response = self.client.get(f"/annotate/{experiment['share_token']}/session")
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["session_token"]
+
+    def test_designer_routes_require_authentication_and_ownership(self):
+        from database import SessionLocal
+        from models import User
+
+        experiment = self.create_experiment("Private integration test")
+        self.__class__.auth_user = None
+        unauthenticated = self.client.get("/experiments")
+        self.assertEqual(unauthenticated.status_code, 401)
+
+        with SessionLocal() as db:
+            outsider = User(
+                clerk_user_id=f"user_outsider_{uuid.uuid4().hex}",
+                email=f"outsider-{uuid.uuid4()}@example.test",
+                display_name="Outsider",
+            )
+            db.add(outsider)
+            db.commit()
+            db.refresh(outsider)
+            outsider_id = outsider.id
+
+        self.__class__.auth_user = outsider
+        denied = self.client.get(f"/experiments/{experiment['id']}/dashboard")
+        self.assertEqual(denied.status_code, 404)
+
+        self.__class__.auth_user = self.owner
+        with SessionLocal() as db:
+            db.query(User).filter_by(id=outsider_id).delete()
+            db.commit()
+
+    def test_local_profile_is_resolved_from_authenticated_user(self):
+        me = self.client.get("/auth/me")
+        self.assertEqual(me.status_code, 200, me.text)
+        self.assertTrue(me.headers.get("X-Request-ID"))
+        self.assertEqual(me.json()["email"], self.owner_email)
+        self.assertEqual(me.json()["clerk_user_id"], self.owner_clerk_id)
+
+    def test_signed_in_annotator_profile_links_to_local_user(self):
+        from auth import get_optional_user
+        from database import SessionLocal
+        from models import Annotator
+
+        experiment = self.create_experiment("Signed-in annotator linkage")
+        self.app.dependency_overrides[get_optional_user] = lambda: self.owner
+        try:
+            session_token = self.create_session(experiment)
+        finally:
+            self.app.dependency_overrides[get_optional_user] = lambda: None
+
+        with SessionLocal() as db:
+            annotator = db.query(Annotator).filter_by(session_token=session_token).one()
+            self.assertEqual(annotator.user_id, self.owner_id)
 
     def test_end_to_end_overlap_dashboard_export_and_ownership(self):
         experiment = self.create_experiment("Integration test")

@@ -4,6 +4,7 @@ import { Link } from "wouter";
 import { getAnnotationPlugin } from "../plugins/annotations/registry";
 import { getMediaPlugin } from "../plugins/media/registry";
 import type { AnnotationAnswer } from "./annotator/types";
+import { apiFetch } from "../api";
 
 interface AnnotationRecord {
   id: string;
@@ -45,7 +46,7 @@ export default function ReviewAnnotations({ experimentId }: { experimentId: stri
   const loadReview = useCallback(async () => {
     setError(null);
     try {
-      const response = await fetch(`/api/experiments/${experimentId}/review`);
+      const response = await apiFetch(`/api/experiments/${experimentId}/review`);
       if (!response.ok) throw new Error("Could not load annotations");
       setData(await response.json());
     } catch (caught) {

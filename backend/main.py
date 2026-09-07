@@ -1,5 +1,6 @@
 import logging
 import secrets
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -7,18 +8,27 @@ from typing import List
 
 import boto3
 from botocore.client import Config
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import ValidationError
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from annotation_types import REGISTRY, get_compatible_modalities, get_type, get_valid_types_for_modality
-from config import CORS_ORIGINS, MINIO_ACCESS_KEY, MINIO_BUCKET, MINIO_SECRET_KEY, MINIO_URL
+from auth import get_current_user, get_optional_user, router as auth_router
+from config import (
+    CORS_ORIGINS, MINIO_ACCESS_KEY, MINIO_BUCKET, MINIO_SECRET_KEY, MINIO_URL,
+)
 from database import get_db
 from modalities import REGISTRY as MODALITY_REGISTRY
-from models import Annotation, Annotator, DataUnit, Experiment, ItemAgreement
+from models import Annotation, Annotator, DataUnit, Experiment, ItemAgreement, User
 from schemas import (
     AnnotationCreate, AnnotationTypeResponse, AnnotatorStatusUpdate,
     DataUnitBatchCreate, ExperimentCreate, ExperimentListResponse,
@@ -32,6 +42,7 @@ from services.qualifications import validate_qualification_answers, validate_sam
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.getLogger("uvicorn.access").disabled = True
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -46,6 +57,87 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Annotate It API", lifespan=lifespan)
+
+
+def request_context(request: Request) -> str:
+    client = (
+        f"{request.client.host}:{request.client.port}"
+        if request.client else "unknown"
+    )
+    query_keys = sorted(set(request.query_params.keys()))
+    return (
+        f"request_id={request.state.request_id} method={request.method} "
+        f"path={request.url.path} query_keys={query_keys} client={client} "
+        f"origin={request.headers.get('origin', '-')} "
+        f"content_type={request.headers.get('content-type', '-')} "
+        f"content_length={request.headers.get('content-length', '-')}"
+    )
+
+
+@app.middleware("http")
+async def log_request_lifecycle(request: Request, call_next):
+    supplied_request_id = request.headers.get("X-Request-ID", "")
+    request.state.request_id = (
+        supplied_request_id
+        if 1 <= len(supplied_request_id) <= 64
+        and all(character.isalnum() or character in "-_" for character in supplied_request_id)
+        else uuid.uuid4().hex
+    )
+    started_at = time.perf_counter()
+    logger.info("request.started %s", request_context(request))
+    try:
+        response = await call_next(request)
+    except Exception:
+        duration_ms = (time.perf_counter() - started_at) * 1000
+        logger.exception(
+            "request.crashed %s duration_ms=%.2f",
+            request_context(request),
+            duration_ms,
+        )
+        raise
+
+    duration_ms = (time.perf_counter() - started_at) * 1000
+    log_level = logging.WARNING if response.status_code >= 400 else logging.INFO
+    logger.log(
+        log_level,
+        "request.completed %s status=%s duration_ms=%.2f",
+        request_context(request),
+        response.status_code,
+        duration_ms,
+    )
+    response.headers["X-Request-ID"] = request.state.request_id
+    return response
+
+
+@app.exception_handler(StarletteHTTPException)
+async def log_http_error(request: Request, exc: StarletteHTTPException):
+    logger.warning(
+        "request.rejected %s status=%s detail=%r",
+        request_context(request),
+        exc.status_code,
+        exc.detail,
+    )
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(RequestValidationError)
+async def log_validation_error(request: Request, exc: RequestValidationError):
+    safe_errors = [
+        {
+            "location": error.get("loc"),
+            "type": error.get("type"),
+            "message": error.get("msg"),
+        }
+        for error in exc.errors()
+    ]
+    logger.warning(
+        "request.validation_failed %s errors=%s",
+        request_context(request),
+        safe_errors,
+    )
+    return await request_validation_exception_handler(request, exc)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -53,6 +145,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(auth_router)
 
 BUCKET_NAME = MINIO_BUCKET
 s3_client = boto3.client(
@@ -64,6 +157,30 @@ s3_client = boto3.client(
 
 def generate_share_token() -> str:
     return secrets.token_urlsafe(8)
+
+
+def get_owned_experiment(
+    experiment_id: uuid.UUID,
+    db: Session,
+    user: User,
+) -> Experiment:
+    experiment = db.query(Experiment).filter_by(id=experiment_id).first()
+    if experiment is None:
+        logger.info(
+            "authorization.resource_missing local_user_id=%s experiment_id=%s",
+            user.id,
+            experiment_id,
+        )
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    if not user.is_platform_admin and experiment.owner_id != user.id:
+        logger.warning(
+            "authorization.experiment_denied local_user_id=%s experiment_id=%s owner_id=%s",
+            user.id,
+            experiment_id,
+            experiment.owner_id,
+        )
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    return experiment
 
 
 def generate_media_url(raw_uri: str) -> str:
@@ -105,14 +222,24 @@ def get_modalities():
 
 
 @app.get("/experiments", response_model=ExperimentListResponse)
-def list_experiments(db: Session = Depends(get_db)):
+def list_experiments(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    query = db.query(Experiment)
+    if not user.is_platform_admin:
+        query = query.filter_by(owner_id=user.id)
     return ExperimentListResponse(
-        experiments=db.query(Experiment).order_by(Experiment.created_at.desc()).all()
+        experiments=query.order_by(Experiment.created_at.desc()).all()
     )
 
 
 @app.post("/experiments", response_model=ExperimentResponse)
-def create_experiment(experiment_in: ExperimentCreate, db: Session = Depends(get_db)):
+def create_experiment(
+    experiment_in: ExperimentCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     annotation_type = experiment_in.label_schema.get("annotation_type")
     if not annotation_type:
         raise HTTPException(status_code=400, detail="label_schema must contain annotation_type")
@@ -127,7 +254,7 @@ def create_experiment(experiment_in: ExperimentCreate, db: Session = Depends(get
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     experiment = Experiment(
-        name=experiment_in.name, modality=experiment_in.modality,
+        owner_id=user.id, name=experiment_in.name, modality=experiment_in.modality,
         instructions=experiment_in.instructions, label_schema=normalized_schema,
         overlap_n=experiment_in.overlap_n, gold_ratio=experiment_in.gold_ratio,
         share_token=generate_share_token(),
@@ -143,7 +270,10 @@ def create_experiment(experiment_in: ExperimentCreate, db: Session = Depends(get
 
 
 @app.post("/uploads/presign", response_model=PresignResponse)
-def presign_urls(request: PresignRequest):
+def presign_urls(
+    request: PresignRequest,
+    _user: User = Depends(get_current_user),
+):
     urls = []
     for filename in request.filenames:
         object_key = f"uploads/{uuid.uuid4()}/{filename}"
@@ -162,10 +292,12 @@ def presign_urls(request: PresignRequest):
 
 
 @app.post("/experiments/{experiment_id}/deploy")
-def deploy_experiment(experiment_id: uuid.UUID, db: Session = Depends(get_db)):
-    experiment = db.query(Experiment).filter_by(id=experiment_id).first()
-    if experiment is None:
-        raise HTTPException(status_code=404, detail="Experiment not found")
+def deploy_experiment(
+    experiment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
     if not db.query(DataUnit).filter_by(experiment_id=experiment.id).first():
         raise HTTPException(status_code=409, detail="Upload at least one sample before deployment")
     experiment.status = "active"
@@ -177,10 +309,9 @@ def deploy_experiment(experiment_id: uuid.UUID, db: Session = Depends(get_db)):
 def create_data_units(
     experiment_id: uuid.UUID, payload: DataUnitBatchCreate,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    experiment = db.query(Experiment).filter_by(id=experiment_id).first()
-    if experiment is None:
-        raise HTTPException(status_code=404, detail="Experiment not found")
+    experiment = get_owned_experiment(experiment_id, db, user)
     ensure_current_schema(experiment)
     spec = get_type(experiment.label_schema["annotation_type"])
     created_units = []
@@ -211,10 +342,9 @@ def create_data_units(
 def process_gold_manifest(
     experiment_id: uuid.UUID, request: GoldManifestRequest,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    experiment = db.query(Experiment).filter_by(id=experiment_id).first()
-    if experiment is None:
-        raise HTTPException(status_code=404, detail="Experiment not found")
+    experiment = get_owned_experiment(experiment_id, db, user)
     ensure_current_schema(experiment)
     units = db.query(DataUnit).filter_by(experiment_id=experiment.id).all()
     by_filename = {}
@@ -251,6 +381,7 @@ def process_gold_manifest(
 def get_session(
     share_token: str, session_token: str | None = None,
     db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
 ):
     experiment = db.query(Experiment).filter_by(share_token=share_token).first()
     if experiment is None:
@@ -267,9 +398,13 @@ def get_session(
     else:
         session_token = str(uuid.uuid4())
         annotator = Annotator(
-            experiment_id=experiment.id, session_token=session_token, status="active"
+            experiment_id=experiment.id, user_id=user.id if user else None,
+            session_token=session_token, status="active"
         )
         db.add(annotator)
+        db.commit()
+    if user and annotator.user_id is None:
+        annotator.user_id = user.id
         db.commit()
     return SessionResponse(
         session_token=session_token, experiment_id=experiment.id,
@@ -384,10 +519,12 @@ def submit_annotation(
 
 
 @app.get("/experiments/{experiment_id}/dashboard")
-def experiment_dashboard(experiment_id: uuid.UUID, db: Session = Depends(get_db)):
-    experiment = db.query(Experiment).filter_by(id=experiment_id).first()
-    if experiment is None:
-        raise HTTPException(status_code=404, detail="Experiment not found")
+def experiment_dashboard(
+    experiment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
     ensure_current_schema(experiment)
     units = db.query(DataUnit).filter_by(experiment_id=experiment.id).all()
     regular_units = [unit for unit in units if not unit.is_gold]
@@ -458,8 +595,12 @@ def experiment_dashboard(experiment_id: uuid.UUID, db: Session = Depends(get_db)
 def update_annotator(
     annotator_id: uuid.UUID, payload: AnnotatorStatusUpdate,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    annotator = db.query(Annotator).filter_by(id=annotator_id).first()
+    query = db.query(Annotator).join(Experiment).filter(Annotator.id == annotator_id)
+    if not user.is_platform_admin:
+        query = query.filter(Experiment.owner_id == user.id)
+    annotator = query.first()
     if annotator is None:
         raise HTTPException(status_code=404, detail="Annotator not found")
     annotator.status = payload.status
@@ -469,11 +610,11 @@ def update_annotator(
 
 @app.get("/experiments/{experiment_id}/review")
 def review_experiment_annotations(
-    experiment_id: uuid.UUID, db: Session = Depends(get_db)
+    experiment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
-    experiment = db.query(Experiment).filter_by(id=experiment_id).first()
-    if experiment is None:
-        raise HTTPException(status_code=404, detail="Experiment not found")
+    experiment = get_owned_experiment(experiment_id, db, user)
     ensure_current_schema(experiment)
     units = (
         db.query(DataUnit)
@@ -523,10 +664,12 @@ def review_experiment_annotations(
 
 
 @app.get("/experiments/{experiment_id}/export")
-def export_experiment(experiment_id: uuid.UUID, db: Session = Depends(get_db)):
-    experiment = db.query(Experiment).filter_by(id=experiment_id).first()
-    if experiment is None:
-        raise HTTPException(status_code=404, detail="Experiment not found")
+def export_experiment(
+    experiment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
     ensure_current_schema(experiment)
     units = db.query(DataUnit).filter_by(experiment_id=experiment.id).all()
     return {

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import { Plus, Activity, ExternalLink, Eye, Share2 } from "lucide-react";
+import { apiFetch } from "../api";
 
 export default function Dashboard() {
   const [experiments, setExperiments] = useState<any[]>([]);
@@ -9,7 +10,7 @@ export default function Dashboard() {
   useEffect(() => {
     const fetchExperiments = async () => {
       try {
-        const res = await fetch("/api/experiments");
+        const res = await apiFetch("/api/experiments");
         const data = await res.json();
         setExperiments(data.experiments || []);
       } catch (err) {

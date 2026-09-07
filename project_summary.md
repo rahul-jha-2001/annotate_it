@@ -8,6 +8,21 @@ quality during collection through gold answers and inter-annotator agreement.
 
 ## Implemented
 
+### Accounts and access control
+
+- Clerk authentication and user management with configurable Google, Microsoft,
+  passwordless, or other Clerk-supported sign-in methods.
+- Short-lived Clerk session tokens verified by the FastAPI backend, including an
+  authorized-party check; authentication secrets stay out of frontend code.
+- Protected dashboard, creation, review, export, upload, deploy, and annotator
+  management APIs. Experiments are owned by their creator; regular designers see
+  only their projects, while platform administrators can inspect all projects.
+- Clerk-powered profile page for identity, security, connected-account, and
+  session management.
+- Anonymous annotation links remain public and experiment-scoped. Signed-in
+  annotators are optionally linked to their user account without making login a
+  requirement.
+
 ### Experiment design and storage
 
 - FastAPI, PostgreSQL, SQLAlchemy, Alembic, and MinIO foundation.
@@ -119,7 +134,8 @@ quality during collection through gold answers and inter-annotator agreement.
 
 ## Remaining Product Work
 
-- Add designer authentication and ownership checks before non-local deployment.
+- Add Clerk Organizations when multi-user workspaces, invitations, and project
+  roles become part of the product.
 - Add durable assignment reservations if items must remain reserved while an
   annotator has loaded them but not yet submitted.
 - Decide whether categorical agreement should remain pairwise agreement or use
