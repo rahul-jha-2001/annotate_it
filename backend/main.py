@@ -202,6 +202,40 @@ def ensure_current_schema(experiment: Experiment) -> None:
         ) from exc
 
 
+def serialize_annotator_summary(
+    annotator: Annotator,
+    last_activity_at,
+    annotation_count: int | None = None,
+) -> dict:
+    completed = (
+        annotation_count
+        if annotation_count is not None
+        else annotator.score.items_completed if annotator.score else 0
+    )
+    return {
+        "id": annotator.id,
+        "display_name": (
+            annotator.user.display_name
+            if annotator.user else f"Anonymous {str(annotator.id)[:8]}"
+        ),
+        "email": annotator.user.email if annotator.user else None,
+        "identity_type": "signed_in" if annotator.user else "anonymous",
+        "status": annotator.status,
+        "items_completed": completed,
+        "gold_items_seen": annotator.score.gold_items_seen if annotator.score else 0,
+        "rolling_gold_accuracy": (
+            annotator.score.rolling_gold_accuracy if annotator.score else None
+        ),
+        "rolling_agreement_score": (
+            annotator.score.rolling_agreement_score if annotator.score else None
+        ),
+        "qualification_answers": annotator.qualification_answers or {},
+        "qualified_at": annotator.qualified_at,
+        "created_at": annotator.created_at,
+        "last_activity_at": last_activity_at,
+    }
+
+
 @app.get("/annotation-types", response_model=List[AnnotationTypeResponse])
 def get_annotation_types():
     return [
@@ -606,6 +640,132 @@ def update_annotator(
     annotator.status = payload.status
     db.commit()
     return {"id": annotator.id, "status": annotator.status}
+
+
+@app.get("/experiments/{experiment_id}/annotators")
+def list_experiment_annotators(
+    experiment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    ensure_current_schema(experiment)
+    annotators = (
+        db.query(Annotator)
+        .options(selectinload(Annotator.user), selectinload(Annotator.score))
+        .filter(
+            Annotator.experiment_id == experiment.id,
+            Annotator.annotations.any(),
+        )
+        .order_by(Annotator.created_at)
+        .all()
+    )
+    activity_rows = (
+        db.query(
+            Annotation.annotator_id,
+            func.count(Annotation.id),
+            func.max(Annotation.submitted_at),
+        )
+        .join(DataUnit, DataUnit.id == Annotation.data_unit_id)
+        .filter(DataUnit.experiment_id == experiment.id)
+        .group_by(Annotation.annotator_id)
+        .all()
+    )
+    activity = {
+        annotator_id: {"count": count, "last_submission": last_submission}
+        for annotator_id, count, last_submission in activity_rows
+    }
+    return {
+        "experiment": {
+            "id": experiment.id,
+            "name": experiment.name,
+            "qualification_form": experiment.qualification_form or [],
+        },
+        "annotators": [
+            serialize_annotator_summary(
+                annotator,
+                activity[annotator.id]["last_submission"],
+                activity[annotator.id]["count"],
+            )
+            for annotator in annotators
+        ],
+    }
+
+
+@app.get("/experiments/{experiment_id}/annotators/{annotator_id}")
+def get_experiment_annotator(
+    experiment_id: uuid.UUID,
+    annotator_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    ensure_current_schema(experiment)
+    annotator = (
+        db.query(Annotator)
+        .options(selectinload(Annotator.user), selectinload(Annotator.score))
+        .filter_by(id=annotator_id, experiment_id=experiment.id)
+        .first()
+    )
+    if annotator is None:
+        raise HTTPException(status_code=404, detail="Annotator not found")
+
+    annotations = (
+        db.query(Annotation)
+        .options(
+            selectinload(Annotation.data_unit).selectinload(DataUnit.agreement),
+        )
+        .join(DataUnit, DataUnit.id == Annotation.data_unit_id)
+        .filter(
+            Annotation.annotator_id == annotator.id,
+            DataUnit.experiment_id == experiment.id,
+        )
+        .order_by(Annotation.submitted_at.desc())
+        .all()
+    )
+    annotation_type = get_type(experiment.label_schema["annotation_type"])
+    last_activity_at = annotations[0].submitted_at if annotations else annotator.created_at
+    return {
+        "experiment": {
+            "id": experiment.id,
+            "name": experiment.name,
+            "modality": experiment.modality,
+            "label_schema": experiment.label_schema,
+            "qualification_form": experiment.qualification_form or [],
+        },
+        "annotator": serialize_annotator_summary(
+            annotator, last_activity_at, len(annotations)
+        ),
+        "annotations": [
+            {
+                "id": annotation.id,
+                "data_unit_id": annotation.data_unit.id,
+                "filename": annotation.data_unit.raw_uri.rsplit("/", 1)[-1],
+                "raw_uri": annotation.data_unit.raw_uri,
+                "media_url": generate_media_url(annotation.data_unit.raw_uri),
+                "metadata": annotation.data_unit.metadata_json or {},
+                "answer": annotation.answer,
+                "submitted_at": annotation.submitted_at,
+                "is_gold": annotation.data_unit.is_gold,
+                "gold_answer": annotation.data_unit.gold_answer,
+                "gold_score": (
+                    annotation_type.gold_match(
+                        annotation.answer,
+                        annotation.data_unit.gold_answer,
+                        experiment.label_schema,
+                    )
+                    if annotation.data_unit.is_gold
+                    and annotation.data_unit.gold_answer is not None
+                    else None
+                ),
+                "agreement_score": (
+                    annotation.data_unit.agreement.agreement_score
+                    if annotation.data_unit.agreement else None
+                ),
+            }
+            for annotation in annotations
+        ],
+    }
 
 
 @app.get("/experiments/{experiment_id}/review")

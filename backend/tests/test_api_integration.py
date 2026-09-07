@@ -187,6 +187,29 @@ class ApiIntegrationTests(unittest.TestCase):
         self.assertEqual(len(review_sample["annotations"]), 2)
         self.assertIn("media_url", review_sample)
 
+        participants = self.client.get(
+            f"/experiments/{experiment['id']}/annotators"
+        )
+        self.assertEqual(participants.status_code, 200, participants.text)
+        participant_rows = participants.json()["annotators"]
+        self.assertEqual(len(participant_rows), 2)
+        self.assertTrue(all(row["items_completed"] == 1 for row in participant_rows))
+        self.assertTrue(
+            all(row["rolling_agreement_score"] == 1 for row in participant_rows),
+            participant_rows,
+        )
+
+        participant_detail = self.client.get(
+            f"/experiments/{experiment['id']}/annotators/{participant_rows[0]['id']}"
+        )
+        self.assertEqual(participant_detail.status_code, 200, participant_detail.text)
+        detail_body = participant_detail.json()
+        self.assertEqual(len(detail_body["annotations"]), 1)
+        self.assertEqual(detail_body["annotations"][0]["filename"], "audio.wav")
+        self.assertEqual(detail_body["annotations"][0]["answer"], {"value": "Good"})
+        self.assertEqual(detail_body["annotations"][0]["agreement_score"], 1)
+        self.assertIsNone(detail_body["annotations"][0]["gold_score"])
+
         other = self.create_experiment("Other integration test")
         response = self.client.post(
             f"/experiments/{other['id']}/data-units",
@@ -246,6 +269,18 @@ class ApiIntegrationTests(unittest.TestCase):
         dashboard = self.client.get(f"/experiments/{experiment['id']}/dashboard").json()
         self.assertEqual(dashboard["annotators"][0]["rolling_gold_accuracy"], 0)
         self.assertEqual(dashboard["annotators"][0]["gold_items_seen"], 1)
+        participants = self.client.get(
+            f"/experiments/{experiment['id']}/annotators"
+        ).json()["annotators"]
+        self.assertEqual(len(participants), 1)
+        detail = self.client.get(
+            f"/experiments/{experiment['id']}/annotators/{participants[0]['id']}"
+        )
+        self.assertEqual(detail.status_code, 200, detail.text)
+        self.assertEqual(detail.json()["annotations"][0]["gold_score"], 0)
+        self.assertEqual(
+            detail.json()["annotations"][0]["gold_answer"], {"value": "Good"}
+        )
 
     def test_legacy_schema_session_is_normalized(self):
         from database import SessionLocal

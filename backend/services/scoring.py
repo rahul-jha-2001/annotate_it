@@ -81,6 +81,9 @@ def recompute_after_annotation(
             experiment.label_schema["annotation_type"]
         ).agreement([annotation.answer for annotation in annotations], experiment.label_schema)
 
+        # Make the newly computed item score visible to the annotator score queries below.
+        db.flush()
+
     involved_ids = {annotation.annotator_id for annotation in annotations}
     for annotator in db.query(Annotator).filter(Annotator.id.in_(involved_ids)).all():
         recompute_annotator_score(db, annotator)

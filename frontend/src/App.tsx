@@ -9,6 +9,7 @@ import ExperimentDashboard from "./components/ExperimentDashboard";
 import ReviewAnnotations from "./components/ReviewAnnotations";
 import Login from "./components/Login";
 import Profile from "./components/Profile";
+import ExperimentAnnotators, { AnnotatorDetail } from "./components/ExperimentAnnotators";
 import { setAuthTokenGetter } from "./api";
 
 function Protected({ children }: { children: ReactNode }) {
@@ -61,6 +62,12 @@ function App() {
           </Route>
           <Route path="/experiments/:id/review">
             {(params) => <Protected><ReviewAnnotations experimentId={params.id!} /></Protected>}
+          </Route>
+          <Route path="/experiments/:id/annotators/:annotatorId">
+            {(params) => <Protected><AnnotatorDetail experimentId={params.id!} annotatorId={params.annotatorId!} /></Protected>}
+          </Route>
+          <Route path="/experiments/:id/annotators">
+            {(params) => <Protected><ExperimentAnnotators experimentId={params.id!} /></Protected>}
           </Route>
           <Route path="/experiments/:id">
             {(params) => <Protected><ExperimentDashboard experimentId={params.id!} /></Protected>}

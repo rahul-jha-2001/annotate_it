@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Download, Eye, Pause, Play, RefreshCw } from "lucide-react";
+import { Download, Eye, Pause, Play, RefreshCw, Users } from "lucide-react";
 import { Link } from "wouter";
 import { apiFetch } from "../api";
 
@@ -101,6 +101,7 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
           <p style={{ margin: 0 }}>Live quality and completion statistics</p>
         </div>
         <div className="flex-row">
+          <Link href={`/experiments/${experimentId}/annotators`} className="btn btn-secondary"><Users size={16} /> Annotators</Link>
           <Link href={`/experiments/${experimentId}/review`} className="btn btn-secondary"><Eye size={16} /> Review annotations</Link>
           <button className="btn btn-secondary" onClick={refresh}><RefreshCw size={16} /> Refresh</button>
           <button className="btn btn-primary" onClick={downloadExport}><Download size={16} /> Export</button>
@@ -114,13 +115,16 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
         <div className="glass-panel"><p>Active annotators</p><h2>{data.active_annotators}</h2></div>
       </div>
       <div className="glass-panel" style={{ marginBottom: "24px", overflowX: "auto" }}>
-        <h2>Annotators</h2>
+        <div className="section-heading-inline">
+          <div><h2>Annotator activity</h2><p>Quick quality overview</p></div>
+          <Link href={`/experiments/${experimentId}/annotators`} className="btn btn-secondary">View all annotators</Link>
+        </div>
         <table className="data-table">
           <thead><tr><th>Anonymous ID</th><th>Status</th><th>Questionnaire</th><th>Items</th><th>Gold accuracy</th><th>Agreement</th><th>Last activity</th><th /></tr></thead>
           <tbody>
             {data.annotators.map(annotator => (
               <tr key={annotator.id}>
-                <td><span className="anonymous-id">Anonymous {annotator.id.slice(0, 8)}</span></td><td>{annotator.status}</td>
+                <td><Link href={`/experiments/${experimentId}/annotators/${annotator.id}`} className="anonymous-id">Anonymous {annotator.id.slice(0, 8)}</Link></td><td>{annotator.status}</td>
                 <td>{annotator.qualified_at ? <details className="annotator-profile"><summary>View answers</summary><dl>{data.experiment.qualification_form.map(question => <div key={question.key}><dt>{question.label}</dt><dd>{formatAnswer(annotator.qualification_answers[question.key])}</dd></div>)}</dl></details> : data.experiment.qualification_form.length ? "Not completed" : "Not required"}</td>
                 <td>{annotator.items_completed}</td>
                 <td>{formatScore(annotator.rolling_gold_accuracy)} (n={annotator.gold_items_seen})</td>
