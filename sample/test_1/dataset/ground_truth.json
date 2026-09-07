@@ -1,0 +1,152 @@
+[
+  {
+    "filename": "Mridangam's Silent Pulse_1.wav",
+    "quality_label": "Good",
+    "region": {
+      "start": 1.254,
+      "end": 3.151
+    },
+    "metadata": {
+      "filename": "Mridangam's Silent Pulse_1.mp3",
+      "language": "None",
+      "content_type": "Instrumental",
+      "content_group": "Percussion",
+      "difficulty": 1
+    }
+  },
+  {
+    "filename": "Mridangam's Silent Pulse_2.wav",
+    "quality_label": "Unusable",
+    "region": {
+      "start": 1.203,
+      "end": 3.063
+    },
+    "metadata": {
+      "filename": "Mridangam's Silent Pulse_2.mp3",
+      "language": "None",
+      "content_type": "Instrumental",
+      "content_group": "Percussion",
+      "difficulty": 2
+    }
+  },
+  {
+    "filename": "Temple Bell Echoes.wav",
+    "quality_label": "Good",
+    "region": {
+      "start": 2.518,
+      "end": 3.809
+    },
+    "metadata": {
+      "filename": "Temple Bell Echoes.mp3",
+      "language": "None",
+      "content_type": "Instrumental",
+      "content_group": "Bells",
+      "difficulty": 1
+    }
+  },
+  {
+    "filename": "कमल पे विराजे.wav",
+    "quality_label": "Unusable",
+    "region": {
+      "start": 2.486,
+      "end": 4.761
+    },
+    "metadata": {
+      "filename": "कमल पे विराजे.mp3",
+      "language": "Hindi",
+      "content_type": "Vocal",
+      "content_group": "Devotional",
+      "difficulty": 2
+    }
+  },
+  {
+    "filename": "महालक्ष्मी स्तुति.wav",
+    "quality_label": "Good",
+    "region": {
+      "start": 3.207,
+      "end": 5.165
+    },
+    "metadata": {
+      "filename": "महालक्ष्मी स्तुति.mp3",
+      "language": "Sanskrit",
+      "content_type": "Vocal",
+      "content_group": "Devotional",
+      "difficulty": 3
+    }
+  },
+  {
+    "filename": "Flute Meditation Loop.wav",
+    "quality_label": "Unusable",
+    "region": {
+      "start": 3.049,
+      "end": 4.313
+    },
+    "metadata": {
+      "filename": "Flute Meditation Loop.mp3",
+      "language": "None",
+      "content_type": "Instrumental",
+      "content_group": "Wind",
+      "difficulty": 1
+    }
+  },
+  {
+    "filename": "Evening Aarti Chant.wav",
+    "quality_label": "Good",
+    "region": {
+      "start": 2.948,
+      "end": 4.321
+    },
+    "metadata": {
+      "filename": "Evening Aarti Chant.mp3",
+      "language": "Hindi",
+      "content_type": "Vocal",
+      "content_group": "Devotional",
+      "difficulty": 2
+    }
+  },
+  {
+    "filename": "Tabla Practice Session.wav",
+    "quality_label": "Good",
+    "region": {
+      "start": 2.892,
+      "end": 4.834
+    },
+    "metadata": {
+      "filename": "Tabla Practice Session.mp3",
+      "language": "None",
+      "content_type": "Instrumental",
+      "content_group": "Percussion",
+      "difficulty": 2
+    }
+  },
+  {
+    "filename": "संस्कृत श्लोक पाठ.wav",
+    "quality_label": "Good",
+    "region": {
+      "start": 3.036,
+      "end": 5.067
+    },
+    "metadata": {
+      "filename": "संस्कृत श्लोक पाठ.mp3",
+      "language": "Sanskrit",
+      "content_type": "Vocal",
+      "content_group": "Devotional",
+      "difficulty": 3
+    }
+  },
+  {
+    "filename": "Sitar Improvisation.wav",
+    "quality_label": "Good",
+    "region": {
+      "start": 2.917,
+      "end": 4.199
+    },
+    "metadata": {
+      "filename": "Sitar Improvisation.mp3",
+      "language": "None",
+      "content_type": "Instrumental",
+      "content_group": "String",
+      "difficulty": 2
+    }
+  }
+]

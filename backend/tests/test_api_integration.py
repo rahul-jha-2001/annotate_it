@@ -56,7 +56,7 @@ class ApiIntegrationTests(unittest.TestCase):
         cls.app.dependency_overrides.clear()
         cls.client_context.__exit__(None, None, None)
 
-    def create_experiment(self, name, gold_ratio=0):
+    def create_experiment(self, name, gold_ratio=0, access_mode="anonymous"):
         response = self.client.post(
             "/experiments",
             json={
@@ -70,6 +70,7 @@ class ApiIntegrationTests(unittest.TestCase):
                 },
                 "overlap_n": 2,
                 "gold_ratio": gold_ratio,
+                "access_mode": access_mode,
             },
         )
         self.assertEqual(response.status_code, 200, response.text)
@@ -77,8 +78,16 @@ class ApiIntegrationTests(unittest.TestCase):
         self.experiment_ids.append(experiment["id"])
         return experiment
 
-    def create_session(self, experiment):
-        response = self.client.get(f"/annotate/{experiment['share_token']}/session")
+    def create_session(self, experiment, display_name=None):
+        if display_name:
+            response = self.client.post(
+                f"/annotate/{experiment['share_token']}/session",
+                json={"display_name": display_name},
+            )
+        else:
+            response = self.client.get(
+                f"/annotate/{experiment['share_token']}/session"
+            )
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["session_token"]
 
@@ -123,7 +132,11 @@ class ApiIntegrationTests(unittest.TestCase):
         from database import SessionLocal
         from models import Annotator
 
-        experiment = self.create_experiment("Signed-in annotator linkage")
+        experiment = self.create_experiment(
+            "Signed-in annotator linkage", access_mode="sign_in_required"
+        )
+        denied = self.client.get(f"/annotate/{experiment['share_token']}/session")
+        self.assertEqual(denied.status_code, 401)
         self.app.dependency_overrides[get_optional_user] = lambda: self.owner
         try:
             session_token = self.create_session(experiment)
@@ -133,6 +146,111 @@ class ApiIntegrationTests(unittest.TestCase):
         with SessionLocal() as db:
             annotator = db.query(Annotator).filter_by(session_token=session_token).one()
             self.assertEqual(annotator.user_id, self.owner_id)
+
+    def test_guest_names_and_editable_experiment_settings(self):
+        from database import SessionLocal
+        from models import Annotation, DataUnit, Experiment
+
+        experiment = self.create_experiment(
+            "Guest access experiment", access_mode="guest_name"
+        )
+        configuration = self.client.get(
+            f"/annotate/{experiment['share_token']}/configuration"
+        )
+        self.assertEqual(configuration.status_code, 200, configuration.text)
+        self.assertEqual(configuration.json()["access_mode"], "guest_name")
+        missing_name = self.client.get(
+            f"/annotate/{experiment['share_token']}/session"
+        )
+        self.assertEqual(missing_name.status_code, 422)
+
+        updated = self.client.patch(
+            f"/experiments/{experiment['id']}/settings",
+            json={
+                "name": "Updated guest experiment",
+                "instructions": "Updated instructions",
+                "overlap_n": 1,
+            },
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertFalse(updated.json()["configuration_locked"])
+
+        response = self.client.post(
+            f"/experiments/{experiment['id']}/data-units",
+            json={"items": [{"raw_uri": "s3://annotate-it-data/test/guest.wav"}]},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        session = self.create_session(experiment, display_name="Guest Annotator")
+        item_id = self.client.get(
+            f"/annotate/{experiment['share_token']}/next",
+            params={"session_token": session},
+        ).json()["data_unit_id"]
+        submitted = self.client.post(
+            f"/annotate/{experiment['share_token']}/items/{item_id}/annotations",
+            params={"session_token": session},
+            json={"answer": {"value": "Good"}},
+        )
+        self.assertEqual(submitted.status_code, 200, submitted.text)
+
+        participant = self.client.get(
+            f"/experiments/{experiment['id']}/annotators"
+        ).json()["annotators"][0]
+        self.assertEqual(participant["display_name"], "Guest Annotator")
+        self.assertEqual(participant["identity_type"], "guest")
+
+        rename = self.client.patch(
+            f"/experiments/{experiment['id']}/settings",
+            json={"name": "Renamed after collection"},
+        )
+        self.assertEqual(rename.status_code, 200, rename.text)
+        self.assertTrue(rename.json()["configuration_locked"])
+        locked = self.client.patch(
+            f"/experiments/{experiment['id']}/settings",
+            json={"access_mode": "anonymous"},
+        )
+        self.assertEqual(locked.status_code, 409)
+
+        wrong_confirmation = self.client.request(
+            "DELETE",
+            f"/experiments/{experiment['id']}",
+            json={"experiment_name": "Wrong experiment name"},
+        )
+        self.assertEqual(wrong_confirmation.status_code, 409)
+        deleted = self.client.request(
+            "DELETE",
+            f"/experiments/{experiment['id']}",
+            json={"experiment_name": "Renamed after collection"},
+        )
+        self.assertEqual(deleted.status_code, 200, deleted.text)
+        self.assertEqual(deleted.json()["status"], "deleted")
+        self.assertEqual(deleted.json()["retained_annotations"], 1)
+        self.assertNotIn(
+            experiment["id"],
+            [item["id"] for item in self.client.get("/experiments").json()["experiments"]],
+        )
+        self.assertEqual(
+            self.client.get(f"/experiments/{experiment['id']}/dashboard").status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.get(
+                f"/annotate/{experiment['share_token']}/configuration"
+            ).status_code,
+            404,
+        )
+        with SessionLocal() as db:
+            retained_experiment = db.query(Experiment).filter_by(
+                id=uuid.UUID(experiment["id"])
+            ).one()
+            self.assertEqual(retained_experiment.status, "deleted")
+            self.assertIsNotNone(retained_experiment.deleted_at)
+            retained_annotations = (
+                db.query(Annotation)
+                .join(DataUnit, DataUnit.id == Annotation.data_unit_id)
+                .filter(DataUnit.experiment_id == retained_experiment.id)
+                .count()
+            )
+            self.assertEqual(retained_annotations, 1)
 
     def test_end_to_end_overlap_dashboard_export_and_ownership(self):
         experiment = self.create_experiment("Integration test")
@@ -229,7 +347,8 @@ class ApiIntegrationTests(unittest.TestCase):
 
     def test_gold_allocation_and_scoring(self):
         from database import SessionLocal
-        from models import DataUnit
+        from models import DataUnit, Experiment, ItemAgreement
+        from services.scoring import rebuild_experiment_scores
 
         experiment = self.create_experiment("Gold integration test", gold_ratio=1)
         response = self.client.post(
@@ -281,6 +400,46 @@ class ApiIntegrationTests(unittest.TestCase):
         self.assertEqual(
             detail.json()["annotations"][0]["gold_answer"], {"value": "Good"}
         )
+
+        second_session = self.create_session(experiment)
+        second_next_item = self.client.get(
+            f"/annotate/{experiment['share_token']}/next",
+            params={"session_token": second_session},
+        ).json()
+        self.assertEqual(second_next_item["data_unit_id"], expected_gold_id)
+        response = self.client.post(
+            f"/annotate/{experiment['share_token']}/items/{expected_gold_id}/annotations",
+            params={"session_token": second_session},
+            json={"answer": {"value": "Good"}},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+
+        dashboard = self.client.get(f"/experiments/{experiment['id']}/dashboard").json()
+        self.assertEqual(len(dashboard["items"]), 1)
+        self.assertEqual(dashboard["items"][0]["data_unit_id"], expected_gold_id)
+        self.assertEqual(dashboard["items"][0]["n_annotations"], 2)
+        self.assertEqual(dashboard["items"][0]["agreement_score"], 0)
+        self.assertTrue(
+            all(row["rolling_agreement_score"] == 0 for row in dashboard["annotators"]),
+            dashboard["annotators"],
+        )
+
+        review = self.client.get(f"/experiments/{experiment['id']}/review").json()
+        gold_sample = next(sample for sample in review["samples"] if sample["is_gold"])
+        self.assertEqual(gold_sample["agreement_score"], 0)
+        self.assertEqual(gold_sample["n_annotations"], 2)
+
+        with SessionLocal() as db:
+            stored_experiment = db.query(Experiment).filter_by(
+                id=uuid.UUID(experiment["id"])
+            ).one()
+            rebuild_experiment_scores(db, stored_experiment)
+            db.commit()
+            rebuilt = db.query(ItemAgreement).filter_by(
+                data_unit_id=uuid.UUID(expected_gold_id)
+            ).one()
+            self.assertEqual(rebuilt.agreement_score, 0)
+            self.assertEqual(rebuilt.n_annotations, 2)
 
     def test_legacy_schema_session_is_normalized(self):
         from database import SessionLocal

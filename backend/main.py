@@ -30,10 +30,14 @@ from database import get_db
 from modalities import REGISTRY as MODALITY_REGISTRY
 from models import Annotation, Annotator, DataUnit, Experiment, ItemAgreement, User
 from schemas import (
-    AnnotationCreate, AnnotationTypeResponse, AnnotatorStatusUpdate,
-    DataUnitBatchCreate, ExperimentCreate, ExperimentListResponse,
-    ExperimentResponse, GoldManifestRequest, ModalityResponse, NextItemResponse, PresignRequest,
+    AnnotationCreate, AnnotationTypeResponse, AnnotatorConfigurationResponse,
+    AnnotatorStatusUpdate,
+    DataUnitBatchCreate, ExperimentCreate, ExperimentDeleteRequest,
+    ExperimentListResponse, ExperimentResponse, ExperimentUpdate,
+    GoldManifestRequest, ModalityResponse,
+    NextItemResponse, PresignRequest,
     PresignResponse, PresignResponseItem, QualificationSubmission, SessionResponse,
+    SessionStartRequest,
 )
 from schema_compat import normalize_label_schema
 from services.allocation import allocate_next_item, has_pending_unseen_items
@@ -164,7 +168,10 @@ def get_owned_experiment(
     db: Session,
     user: User,
 ) -> Experiment:
-    experiment = db.query(Experiment).filter_by(id=experiment_id).first()
+    experiment = db.query(Experiment).filter(
+        Experiment.id == experiment_id,
+        Experiment.status != "deleted",
+    ).first()
     if experiment is None:
         logger.info(
             "authorization.resource_missing local_user_id=%s experiment_id=%s",
@@ -216,10 +223,15 @@ def serialize_annotator_summary(
         "id": annotator.id,
         "display_name": (
             annotator.user.display_name
-            if annotator.user else f"Anonymous {str(annotator.id)[:8]}"
+            if annotator.user else annotator.display_name
+            or f"Anonymous {str(annotator.id)[:8]}"
         ),
         "email": annotator.user.email if annotator.user else None,
-        "identity_type": "signed_in" if annotator.user else "anonymous",
+        "identity_type": (
+            "signed_in" if annotator.user
+            else "guest" if annotator.display_name
+            else "anonymous"
+        ),
         "status": annotator.status,
         "items_completed": completed,
         "gold_items_seen": annotator.score.gold_items_seen if annotator.score else 0,
@@ -260,7 +272,7 @@ def list_experiments(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    query = db.query(Experiment)
+    query = db.query(Experiment).filter(Experiment.status != "deleted")
     if not user.is_platform_admin:
         query = query.filter_by(owner_id=user.id)
     return ExperimentListResponse(
@@ -291,6 +303,7 @@ def create_experiment(
         owner_id=user.id, name=experiment_in.name, modality=experiment_in.modality,
         instructions=experiment_in.instructions, label_schema=normalized_schema,
         overlap_n=experiment_in.overlap_n, gold_ratio=experiment_in.gold_ratio,
+        access_mode=experiment_in.access_mode,
         share_token=generate_share_token(),
         status=experiment_in.status,
         metadata_schema=[field.model_dump() for field in experiment_in.metadata_schema],
@@ -301,6 +314,137 @@ def create_experiment(
     db.commit()
     db.refresh(experiment)
     return experiment
+
+
+def experiment_settings_response(experiment: Experiment, configuration_locked: bool) -> dict:
+    return {
+        "id": experiment.id,
+        "name": experiment.name,
+        "instructions": experiment.instructions or "",
+        "modality": experiment.modality,
+        "annotation_type": experiment.label_schema.get("annotation_type"),
+        "access_mode": experiment.access_mode,
+        "overlap_n": experiment.overlap_n,
+        "gold_ratio": experiment.gold_ratio,
+        "configuration_locked": configuration_locked,
+    }
+
+
+@app.get("/experiments/{experiment_id}/settings")
+def get_experiment_settings(
+    experiment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    has_annotations = (
+        db.query(Annotation.id)
+        .join(DataUnit, DataUnit.id == Annotation.data_unit_id)
+        .filter(DataUnit.experiment_id == experiment.id)
+        .first()
+        is not None
+    )
+    return experiment_settings_response(experiment, has_annotations)
+
+
+@app.patch("/experiments/{experiment_id}/settings")
+def update_experiment_settings(
+    experiment_id: uuid.UUID,
+    payload: ExperimentUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    changes = payload.model_dump(exclude_unset=True)
+    if "name" in changes:
+        changes["name"] = (changes["name"] or "").strip()
+        if not changes["name"]:
+            raise HTTPException(status_code=422, detail="Experiment name cannot be blank")
+    if "instructions" in changes:
+        changes["instructions"] = (changes["instructions"] or "").strip()
+
+    has_annotations = (
+        db.query(Annotation.id)
+        .join(DataUnit, DataUnit.id == Annotation.data_unit_id)
+        .filter(DataUnit.experiment_id == experiment.id)
+        .first()
+        is not None
+    )
+    protected_fields = {"access_mode", "overlap_n", "gold_ratio"}
+    protected_changes = {
+        key for key in protected_fields
+        if key in changes and changes[key] != getattr(experiment, key)
+    }
+    if has_annotations and protected_changes:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Access and quality settings cannot be changed after annotation begins. "
+                "The experiment name and instructions can still be edited."
+            ),
+        )
+    if (
+        "gold_ratio" in protected_changes
+        and changes["gold_ratio"] > 0
+    ):
+        has_gold = db.query(DataUnit.id).filter_by(
+            experiment_id=experiment.id, is_gold=True
+        ).first()
+        if not has_gold:
+            raise HTTPException(
+                status_code=409,
+                detail="Add a gold sample before enabling quality checks",
+            )
+
+    if "access_mode" in protected_changes:
+        # No annotations exist, so restart any pre-created/qualified sessions under
+        # the new identity policy instead of carrying incompatible identity state.
+        db.query(Annotator).filter_by(experiment_id=experiment.id).delete(
+            synchronize_session=False
+        )
+
+    for field, value in changes.items():
+        setattr(experiment, field, value)
+    db.commit()
+    db.refresh(experiment)
+    return experiment_settings_response(experiment, has_annotations)
+
+
+@app.delete("/experiments/{experiment_id}")
+def delete_experiment(
+    experiment_id: uuid.UUID,
+    payload: ExperimentDeleteRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    if payload.experiment_name != experiment.name:
+        raise HTTPException(
+            status_code=409,
+            detail="Experiment name does not match",
+        )
+    annotation_count = (
+        db.query(func.count(Annotation.id))
+        .join(DataUnit, DataUnit.id == Annotation.data_unit_id)
+        .filter(DataUnit.experiment_id == experiment.id)
+        .scalar()
+        or 0
+    )
+    experiment.status = "deleted"
+    experiment.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    logger.info(
+        "experiment.soft_deleted experiment_id=%s owner_id=%s retained_annotations=%s",
+        experiment.id,
+        experiment.owner_id,
+        annotation_count,
+    )
+    return {
+        "id": experiment.id,
+        "status": experiment.status,
+        "deleted_at": experiment.deleted_at,
+        "retained_annotations": annotation_count,
+    }
 
 
 @app.post("/uploads/presign", response_model=PresignResponse)
@@ -411,43 +555,129 @@ def process_gold_manifest(
     return results
 
 
+@app.get(
+    "/annotate/{share_token}/configuration",
+    response_model=AnnotatorConfigurationResponse,
+)
+def get_annotator_configuration(
+    share_token: str,
+    db: Session = Depends(get_db),
+):
+    experiment = db.query(Experiment).filter(
+        Experiment.share_token == share_token,
+        Experiment.status != "deleted",
+    ).first()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    if experiment.status != "active":
+        raise HTTPException(status_code=403, detail="This experiment is not active")
+    return AnnotatorConfigurationResponse(
+        experiment_name=experiment.name,
+        access_mode=experiment.access_mode,
+    )
+
+
 @app.get("/annotate/{share_token}/session", response_model=SessionResponse)
 def get_session(
-    share_token: str, session_token: str | None = None,
+    share_token: str,
+    session_token: str | None = None,
+    display_name: str | None = None,
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
-    experiment = db.query(Experiment).filter_by(share_token=share_token).first()
+    experiment = db.query(Experiment).filter(
+        Experiment.share_token == share_token,
+        Experiment.status != "deleted",
+    ).first()
     if experiment is None:
         raise HTTPException(status_code=404, detail="Experiment not found")
     ensure_current_schema(experiment)
     if experiment.status != "active":
         raise HTTPException(status_code=403, detail="This experiment is not active")
+    if experiment.access_mode == "sign_in_required" and user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Sign in is required to participate in this experiment",
+        )
+
+    guest_name = (display_name or "").strip()
+    if len(guest_name) > 120:
+        raise HTTPException(status_code=422, detail="Display name is too long")
     if session_token:
         annotator = db.query(Annotator).filter_by(
             session_token=session_token, experiment_id=experiment.id
         ).first()
         if annotator is None:
             raise HTTPException(status_code=401, detail="Invalid session token for this experiment")
+        if experiment.access_mode == "sign_in_required":
+            if annotator.user_id not in {None, user.id}:
+                raise HTTPException(
+                    status_code=401,
+                    detail="This annotation session belongs to another account",
+                )
+            if annotator.user_id is None:
+                annotator.user_id = user.id
+                db.commit()
+        elif experiment.access_mode == "guest_name" and not annotator.display_name:
+            if not guest_name:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Enter your name before starting this experiment",
+                )
+            annotator.display_name = guest_name
+            db.commit()
     else:
+        if experiment.access_mode == "guest_name" and not guest_name:
+            raise HTTPException(
+                status_code=422,
+                detail="Enter your name before starting this experiment",
+            )
         session_token = str(uuid.uuid4())
         annotator = Annotator(
-            experiment_id=experiment.id, user_id=user.id if user else None,
-            session_token=session_token, status="active"
+            experiment_id=experiment.id,
+            user_id=(
+                user.id
+                if user and experiment.access_mode != "anonymous"
+                else None
+            ),
+            display_name=(guest_name if experiment.access_mode == "guest_name" else None),
+            session_token=session_token,
+            status="active",
         )
         db.add(annotator)
         db.commit()
-    if user and annotator.user_id is None:
+    if user and annotator.user_id is None and experiment.access_mode != "anonymous":
         annotator.user_id = user.id
         db.commit()
     return SessionResponse(
         session_token=session_token, experiment_id=experiment.id,
         modality=experiment.modality, instructions=experiment.instructions,
         label_schema=experiment.label_schema,
+        access_mode=experiment.access_mode,
+        annotator_display_name=(
+            annotator.user.display_name if annotator.user else annotator.display_name
+        ),
         requires_qualification=bool(
             experiment.qualification_form and annotator.qualified_at is None
         ),
         qualification_form=experiment.qualification_form or [],
+    )
+
+
+@app.post("/annotate/{share_token}/session", response_model=SessionResponse)
+def start_named_session(
+    share_token: str,
+    payload: SessionStartRequest,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+):
+    """Create/resume a session without placing guest identity in the URL."""
+    return get_session(
+        share_token=share_token,
+        session_token=payload.session_token,
+        display_name=payload.display_name,
+        db=db,
+        user=user,
     )
 
 
@@ -486,7 +716,10 @@ def submit_qualifications(
 def get_next_item(
     share_token: str, session_token: str, db: Session = Depends(get_db)
 ):
-    experiment = db.query(Experiment).filter_by(share_token=share_token).first()
+    experiment = db.query(Experiment).filter(
+        Experiment.share_token == share_token,
+        Experiment.status != "deleted",
+    ).first()
     if experiment is None:
         raise HTTPException(status_code=404, detail="Experiment not found")
     ensure_current_schema(experiment)
@@ -513,7 +746,10 @@ def submit_annotation(
     share_token: str, data_unit_id: uuid.UUID, payload: AnnotationCreate,
     session_token: str, db: Session = Depends(get_db),
 ):
-    experiment = db.query(Experiment).filter_by(share_token=share_token).first()
+    experiment = db.query(Experiment).filter(
+        Experiment.share_token == share_token,
+        Experiment.status != "deleted",
+    ).first()
     if experiment is None:
         raise HTTPException(status_code=404, detail="Experiment not found")
     ensure_current_schema(experiment)
@@ -590,6 +826,7 @@ def experiment_dashboard(
             "id": experiment.id,
             "name": experiment.name,
             "share_token": experiment.share_token,
+            "access_mode": experiment.access_mode,
             "qualification_form": experiment.qualification_form or [],
         },
         "completion": {
@@ -599,21 +836,12 @@ def experiment_dashboard(
         },
         "active_annotators": sum(annotator.status == "active" for annotator in annotators),
         "annotators": [
-            {
-                "id": annotator.id, "status": annotator.status,
-                "created_at": annotator.created_at,
-                "items_completed": annotator.score.items_completed if annotator.score else 0,
-                "gold_items_seen": annotator.score.gold_items_seen if annotator.score else 0,
-                "rolling_gold_accuracy": annotator.score.rolling_gold_accuracy if annotator.score else None,
-                "rolling_agreement_score": annotator.score.rolling_agreement_score if annotator.score else None,
-                "qualification_answers": annotator.qualification_answers or {},
-                "qualified_at": annotator.qualified_at,
-                "last_activity_at": (
-                    last_submissions.get(annotator.id)
-                    or annotator.qualified_at
-                    or annotator.created_at
-                ),
-            }
+            serialize_annotator_summary(
+                annotator,
+                last_submissions.get(annotator.id)
+                or annotator.qualified_at
+                or annotator.created_at,
+            )
             for annotator in annotators
         ],
         "items": [
@@ -631,7 +859,10 @@ def update_annotator(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    query = db.query(Annotator).join(Experiment).filter(Annotator.id == annotator_id)
+    query = db.query(Annotator).join(Experiment).filter(
+        Annotator.id == annotator_id,
+        Experiment.status != "deleted",
+    )
     if not user.is_platform_admin:
         query = query.filter(Experiment.owner_id == user.id)
     annotator = query.first()
@@ -837,7 +1068,8 @@ def export_experiment(
             "id": experiment.id, "name": experiment.name,
             "modality": experiment.modality, "instructions": experiment.instructions,
             "label_schema": experiment.label_schema, "overlap_n": experiment.overlap_n,
-            "gold_ratio": experiment.gold_ratio, "created_at": experiment.created_at,
+            "gold_ratio": experiment.gold_ratio, "access_mode": experiment.access_mode,
+            "created_at": experiment.created_at,
             "metadata_schema": experiment.metadata_schema or [],
             "qualification_form": experiment.qualification_form or [],
             "routing_rules": experiment.routing_rules or [],

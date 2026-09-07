@@ -1,5 +1,6 @@
-import { Suspense, useCallback, useEffect, useState } from "react";
-import { Send } from "lucide-react";
+import { type FormEvent, Suspense, useCallback, useEffect, useState } from "react";
+import { SignInButton, useAuth } from "@clerk/react";
+import { LogIn, Send, UserRound } from "lucide-react";
 import AnnotationControl, { isAnswerComplete } from "./annotator/AnnotationControl";
 import QualificationForm from "./annotator/QualificationForm";
 import type { AnnotationAnswer, AnnotationSession } from "./annotator/types";
@@ -12,6 +13,11 @@ interface NextItem {
   media_url: string;
 }
 
+interface AnnotatorConfiguration {
+  experiment_name: string;
+  access_mode: "sign_in_required" | "guest_name" | "anonymous";
+}
+
 async function responseError(response: Response, fallback: string): Promise<string> {
   try {
     const body = await response.json();
@@ -22,6 +28,8 @@ async function responseError(response: Response, fallback: string): Promise<stri
 }
 
 export default function Annotator({ shareToken }: { shareToken: string }) {
+  const { isLoaded: authLoaded, isSignedIn } = useAuth();
+  const [configuration, setConfiguration] = useState<AnnotatorConfiguration | null>(null);
   const [session, setSession] = useState<AnnotationSession | null>(null);
   const [nextItem, setNextItem] = useState<NextItem | null>(null);
   const [answer, setAnswer] = useState<AnnotationAnswer>({});
@@ -30,6 +38,7 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
   const [queueExhausted, setQueueExhausted] = useState(false);
   const [completionMessage, setCompletionMessage] = useState("There are no more items left for you to annotate. Thank you!");
   const [error, setError] = useState<string | null>(null);
+  const [guestName, setGuestName] = useState("");
 
   const fetchNextItem = useCallback(async (sessionToken: string) => {
     setLoading(true);
@@ -56,29 +65,83 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
     }
   }, [shareToken]);
 
-  useEffect(() => {
-    const initialize = async () => {
-      try {
-        const savedToken = localStorage.getItem(`annotate_session_${shareToken}`);
-        const url = new URL(`/api/annotate/${shareToken}/session`, window.location.origin);
-        if (savedToken) url.searchParams.set("session_token", savedToken);
-        const response = await apiFetch(url);
-        if (!response.ok) throw new Error(await responseError(response, "Could not initialize session"));
-        const data: AnnotationSession = await response.json();
-        localStorage.setItem(`annotate_session_${shareToken}`, data.session_token);
-        setSession(data);
-        if (!data.requires_qualification) {
-          await fetchNextItem(data.session_token);
-        } else {
+  const startSession = useCallback(async (
+    accessMode: AnnotatorConfiguration["access_mode"],
+    displayName?: string,
+  ) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const savedToken = localStorage.getItem(`annotate_session_${shareToken}`);
+      const url = new URL(`/api/annotate/${shareToken}/session`, window.location.origin);
+      if (savedToken && !displayName?.trim()) url.searchParams.set("session_token", savedToken);
+      let response = displayName?.trim()
+        ? await apiFetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              session_token: savedToken,
+              display_name: displayName.trim(),
+            }),
+          })
+        : await apiFetch(url);
+      if (response.status === 401 && savedToken && accessMode === "sign_in_required") {
+        localStorage.removeItem(`annotate_session_${shareToken}`);
+        url.searchParams.delete("session_token");
+        response = await apiFetch(url);
+      }
+      if (!response.ok) {
+        if (accessMode === "guest_name" && response.status === 422) {
+          localStorage.removeItem(`annotate_session_${shareToken}`);
           setLoading(false);
+          return;
         }
+        throw new Error(await responseError(response, "Could not initialize session"));
+      }
+      const data: AnnotationSession = await response.json();
+      localStorage.setItem(`annotate_session_${shareToken}`, data.session_token);
+      setSession(data);
+      if (!data.requires_qualification) await fetchNextItem(data.session_token);
+      else setLoading(false);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not initialize session");
+      setLoading(false);
+    }
+  }, [fetchNextItem, shareToken]);
+
+  useEffect(() => {
+    if (!authLoaded) return;
+    const initialize = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await apiFetch(`/api/annotate/${shareToken}/configuration`);
+        if (!response.ok) throw new Error(await responseError(response, "Could not load experiment"));
+        const config: AnnotatorConfiguration = await response.json();
+        setConfiguration(config);
+        const savedToken = localStorage.getItem(`annotate_session_${shareToken}`);
+        if (config.access_mode === "sign_in_required" && !isSignedIn) {
+          setLoading(false);
+          return;
+        }
+        if (config.access_mode === "guest_name" && !savedToken) {
+          setLoading(false);
+          return;
+        }
+        await startSession(config.access_mode);
       } catch (caught) {
-        setError(caught instanceof Error ? caught.message : "Could not initialize session");
+        setError(caught instanceof Error ? caught.message : "Could not load experiment");
         setLoading(false);
       }
     };
     initialize();
-  }, [fetchNextItem, shareToken]);
+  }, [authLoaded, isSignedIn, shareToken, startSession]);
+
+  const submitGuestName = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!configuration || !guestName.trim()) return;
+    await startSession(configuration.access_mode, guestName);
+  };
 
   const submitAnnotation = async () => {
     if (!session || !nextItem || !isAnswerComplete(session.label_schema, answer)) return;
@@ -130,7 +193,13 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
     }
   };
 
-  if (loading) return <div className="container text-center">Loading…</div>;
+  if (!authLoaded || loading) return <div className="container text-center">Loading…</div>;
+  if (configuration?.access_mode === "sign_in_required" && !isSignedIn) {
+    return <div className="container animate-fade-in" style={{ maxWidth: "560px" }}><div className="glass-panel join-experiment-card"><LogIn size={34} className="app-logo-icon" /><h1>Sign in to annotate</h1><p><strong>{configuration.experiment_name}</strong> requires a verified account so your work can be attributed to you.</p><SignInButton mode="modal"><button className="btn btn-primary">Sign in and continue</button></SignInButton></div></div>;
+  }
+  if (configuration?.access_mode === "guest_name" && !session) {
+    return <div className="container animate-fade-in" style={{ maxWidth: "560px" }}><form className="glass-panel join-experiment-card" onSubmit={submitGuestName}><UserRound size={34} className="app-logo-icon" /><h1>Enter your name</h1><p>Your name will be shown to the creator of <strong>{configuration.experiment_name}</strong>. No account is required.</p><div className="form-group"><label className="form-label" htmlFor="guest-name">Display name</label><input id="guest-name" className="form-input" autoFocus maxLength={120} value={guestName} onChange={event => setGuestName(event.target.value)} placeholder="Your name" /></div>{error && <p className="form-error">{error}</p>}<button className="btn btn-primary" type="submit" disabled={!guestName.trim() || submitting}>Continue</button></form></div>;
+  }
   if (session?.requires_qualification) {
     return (
       <QualificationForm

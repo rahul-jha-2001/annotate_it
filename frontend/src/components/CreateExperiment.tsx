@@ -53,7 +53,14 @@ const routingOperatorFor = (
 
 export default function CreateExperiment() {
   const [step, setStep] = useState(0);
-  const [form, setForm] = useState({ name: "", modality: "audio", instructions: "", overlap_n: 2, gold_ratio: 0.1 });
+  const [form, setForm] = useState({
+    name: "",
+    modality: "audio",
+    instructions: "",
+    overlap_n: 2,
+    gold_ratio: 0.1,
+    access_mode: "guest_name",
+  });
   const [annotationTypes, setAnnotationTypes] = useState<AnnotationTypeInfo[]>([]);
   const [annotationType, setAnnotationType] = useState("categorical");
   const [labels, setLabels] = useState(["Good", "Noisy", "Unusable"]);
@@ -325,7 +332,7 @@ export default function CreateExperiment() {
 
       <div className="glass-panel wizard-panel">
         <div className="wizard-title"><Settings size={24} className="app-logo-icon" /><div><h2>{steps[step]}</h2><p>{[
-          "Name the experiment and explain the work.",
+          "Name the experiment, explain the work, and choose how annotators join.",
           "Choose what annotators will submit.",
           "Add media, metadata, and gold answers together.",
           "Inspect every assembled sample before upload.",
@@ -336,6 +343,25 @@ export default function CreateExperiment() {
         {step === 0 && <div className="flex-col">
           <div className="form-group"><label className="form-label">Experiment name</label><input className="form-input" value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="Hindi speech quality" /></div>
           <div className="form-group"><label className="form-label">Instructions for annotators</label><textarea className="form-textarea" value={form.instructions} onChange={event => setForm({ ...form, instructions: event.target.value })} placeholder="Explain what a good annotation looks like…" /></div>
+          <div className="form-group">
+            <label className="form-label">How should annotators join?</label>
+            <div className="access-mode-grid">
+              {[
+                { value: "sign_in_required", title: "Sign-in required", description: "Verified Clerk account. Best for controlled teams and reliable identity." },
+                { value: "guest_name", title: "Name required", description: "No account needed. The annotator enters a name and is tracked by session." },
+                { value: "anonymous", title: "Fully anonymous", description: "No account or name. Only a private session identifier is recorded." },
+              ].map(option => (
+                <button
+                  type="button"
+                  key={option.value}
+                  className={`access-mode-card ${form.access_mode === option.value ? "selected" : ""}`}
+                  onClick={() => setForm({ ...form, access_mode: option.value })}
+                >
+                  <strong>{option.title}</strong><span>{option.description}</span>
+                </button>
+              ))}
+            </div>
+          </div>
           <div className="form-group"><label className="form-label">Media type</label><select className="form-select" value={form.modality} onChange={event => { setForm({ ...form, modality: event.target.value }); setFiles([]); setDatasetRows([]); }}>{listMediaPlugins().map(plugin => <option key={plugin.key} value={plugin.key}>{plugin.name}</option>)}</select></div>
         </div>}
 
@@ -455,7 +481,7 @@ export default function CreateExperiment() {
         {step === 5 && <div className="flex-col">
           <div className="quality-grid"><div className="form-group"><label className="form-label">People per regular sample</label><input className="form-input" type="number" min="1" max="100" value={form.overlap_n} onChange={event => setForm({ ...form, overlap_n: event.target.valueAsNumber })} /></div><div className="form-group"><label className="form-label">Quality-check frequency</label><select className="form-select" value={form.gold_ratio} onChange={event => setForm({ ...form, gold_ratio: Number(event.target.value) })}><option value="0">None</option><option value="0.05">Light — 5%</option><option value="0.1">Recommended — 10%</option><option value="0.2">Strict — 20%</option></select></div></div>
           <div className="workload-card"><strong>Estimated regular assignments</strong><span>{regularCount} regular samples × {form.overlap_n} people</span><h2>{regularCount * form.overlap_n}</h2></div>
-          <div className="review-grid"><div><span>Name</span><strong>{form.name}</strong></div><div><span>Task</span><strong>{currentType?.name}</strong></div><div><span>Samples</span><strong>{datasetRows.length} ({goldCount} gold)</strong></div><div><span>Metadata fields</span><strong>{metadataFields.length}</strong></div><div><span>Qualification questions</span><strong>{questions.length}</strong></div><div><span>Routing rules</span><strong>{rules.length}</strong></div></div>
+          <div className="review-grid"><div><span>Name</span><strong>{form.name}</strong></div><div><span>Task</span><strong>{currentType?.name}</strong></div><div><span>Annotator access</span><strong>{form.access_mode === "sign_in_required" ? "Sign-in required" : form.access_mode === "guest_name" ? "Name required" : "Fully anonymous"}</strong></div><div><span>Samples</span><strong>{datasetRows.length} ({goldCount} gold)</strong></div><div><span>Metadata fields</span><strong>{metadataFields.length}</strong></div><div><span>Qualification questions</span><strong>{questions.length}</strong></div><div><span>Routing rules</span><strong>{rules.length}</strong></div></div>
           {form.gold_ratio > 0 && goldCount === 0 && <p className="form-error">Add at least one gold answer or set quality-check frequency to “None”.</p>}
           {error && <p className="form-error">{error}</p>}
         </div>}

@@ -88,12 +88,16 @@ New experiments always receive the authenticated local user's `owner_id`.
 Inaccessible experiment IDs return `404` to avoid revealing that a resource
 exists.
 
-## Anonymous annotators
+## Experiment annotator access
 
-Public share links still create an experiment-scoped `Annotator` row and retain
-its questionnaire, annotations, progress, and quality scores. When a Clerk token
-is present, the row also receives the resolved local `user_id`; otherwise it
-remains anonymous. Clerk login is never required to annotate a public experiment.
+Each experiment selects `sign_in_required`, `guest_name`, or `anonymous` access.
+Sign-in-required sessions must resolve a Clerk identity and store its local
+`user_id`. Guest-name sessions store an explicitly unverified display name on the
+experiment-scoped `Annotator`. Anonymous sessions deliberately avoid account
+linkage even if the browser currently has a Clerk session. Every mode still
+retains questionnaire answers, annotations, progress, and quality scores under a
+stable session identifier. The access mode can change only before the first
+annotation is submitted.
 
 ## Production checklist
 

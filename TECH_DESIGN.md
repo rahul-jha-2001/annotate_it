@@ -71,12 +71,14 @@ CREATE TABLE experiment (
     label_schema JSONB NOT NULL,            -- label set, annotation type (point|segment|bbox|polygon), cardinality rules
     overlap_n INT NOT NULL DEFAULT 1,        -- how many distinct annotators must see each non-gold item
     gold_ratio FLOAT NOT NULL DEFAULT 0.1,   -- fraction of each annotator's queue that is gold, interleaved
+    access_mode TEXT NOT NULL DEFAULT 'anonymous', -- sign_in_required | guest_name | anonymous
     share_token TEXT UNIQUE NOT NULL,        -- public link identifier, e.g. nanoid
-    status TEXT NOT NULL DEFAULT 'active',   -- 'draft' | 'active'
+    status TEXT NOT NULL DEFAULT 'active',   -- 'draft' | 'active' | 'deleted'
     metadata_schema JSONB NOT NULL DEFAULT '[]',
     qualification_form JSONB NOT NULL DEFAULT '[]',
     routing_rules JSONB NOT NULL DEFAULT '[]',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at TIMESTAMPTZ                    -- set only for soft-deleted experiments
 );
 
 -- DataUnit: one item to be annotated
@@ -94,6 +96,7 @@ CREATE TABLE annotator (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     experiment_id UUID NOT NULL REFERENCES experiment(id) ON DELETE CASCADE,
     user_id UUID REFERENCES app_user(id) ON DELETE SET NULL,
+    display_name TEXT,                       -- unverified, experiment-scoped guest name
     session_token TEXT UNIQUE NOT NULL,      -- persisted in browser local storage
     status TEXT NOT NULL DEFAULT 'active',   -- 'active' | 'paused' (manual designer action)
     qualification_answers JSONB,
@@ -165,6 +168,11 @@ Notes for implementing agents:
 - `POST /experiments/{id}/gold-manifest` — apply validated gold answers to
   registered samples by exact filename, returning per-entry errors.
 - `POST /experiments/{id}/deploy` — activate a populated draft experiment.
+- `GET/PATCH /experiments/{id}/settings` — read or edit general, access, and
+  quality settings. Access/quality fields lock after the first annotation.
+- `DELETE /experiments/{id}` — require an exact experiment-name confirmation,
+  set `status='deleted'` and `deleted_at`, and preserve all related rows. Deleted
+  experiments are excluded from normal owner and share-link APIs.
 - `GET /experiments/{id}/dashboard` — returns completion %, annotator list with scores, item agreement summary (this is what the dashboard polls)
 - `PATCH /annotators/{id}` — set status to `paused` (manual removal from pool)
 - `GET /experiments/{id}/review` — return samples with media URLs, metadata,
@@ -181,7 +189,12 @@ Bearer token. FastAPI verifies its signature, lifetime, type, and `azp` against
 `CLERK_AUTHORIZED_PARTIES` before evaluating local authorization.
 
 ### Annotator-facing (share_token based, session-token identified)
-- `GET /annotate/{share_token}/session` — creates or resumes an annotator session (sets/reads session token), returns experiment instructions + label_schema
+- `GET /annotate/{share_token}/configuration` — publicly returns the active
+  experiment name and access mode before a session is created.
+- `GET /annotate/{share_token}/session` — creates or resumes anonymous/signed-in
+  sessions; `POST` accepts guest identity in a JSON body so names are not placed
+  in URLs or access logs. Both enforce the configured identity policy and return
+  experiment instructions + label schema.
 - `POST /annotate/{share_token}/qualifications` — validate and persist the
   annotator's qualification answers before allocation.
 - `GET /annotate/{share_token}/next` — returns the next item for this annotator's queue (gold-interleaved per `gold_ratio`, respecting `overlap_n` so the allocator doesn't over/under-assign)
@@ -200,7 +213,7 @@ on_annotation_submitted(annotation):
         update_rolling_gold_accuracy(annotation.annotator_id, is_correct)  # rolling window, not lifetime average
 
     all_annotations_for_item = get_annotations(data_unit.id)
-    if len(all_annotations_for_item) >= experiment.overlap_n and not data_unit.is_gold:
+    if len(all_annotations_for_item) >= experiment.overlap_n:
         agreement = compute_agreement(all_annotations_for_item, label_schema)
         upsert_item_agreement(data_unit.id, agreement, n=len(all_annotations_for_item))
         for a in all_annotations_for_item:
@@ -214,7 +227,13 @@ on_annotation_submitted(annotation):
 - **Rolling window**: annotator gold accuracy and agreement are recomputed from a
   configurable fixed-size recent window (default 20). Derived values can be
   rebuilt from source annotations with `rebuild_scores.py`.
-- **Low-N caveat**: when `n_annotations < overlap_n` is impossible by construction (agreement only computes at exactly `overlap_n`), but do surface `n_annotations` alongside every agreement score in the API/dashboard response so the UI can (and should) visually de-emphasize scores based on very few gold items too (e.g. "accuracy: 80% (n=4)" reads very differently from "n=40").
+- **Gold agreement**: gold samples use the same inter-annotator agreement logic
+  after `overlap_n` submissions while also retaining their independent expected-
+  answer score. Because gold items are not capped by overlap, agreement is
+  recomputed across all answers whenever another annotator submits one.
+- **Low-N caveat**: agreement is unavailable while `n_annotations < overlap_n`.
+  Surface `n_annotations` alongside every agreement score so the UI can visually
+  de-emphasize scores based on few annotations.
 
 ## 5. Task allocation (assigning items to annotators)
 

@@ -1,0 +1,50 @@
+[
+  {
+    "filename": "Temple Bell Echoes.wav",
+    "answer": {
+      "label": "Good",
+      "regions": [
+        {
+          "start": 2.518,
+          "end": 3.809
+        }
+      ]
+    }
+  },
+  {
+    "filename": "Flute Meditation Loop.wav",
+    "answer": {
+      "label": "Unusable",
+      "regions": [
+        {
+          "start": 3.049,
+          "end": 4.313
+        }
+      ]
+    }
+  },
+  {
+    "filename": "Evening Aarti Chant.wav",
+    "answer": {
+      "label": "Good",
+      "regions": [
+        {
+          "start": 2.948,
+          "end": 4.321
+        }
+      ]
+    }
+  },
+  {
+    "filename": "Sitar Improvisation.wav",
+    "answer": {
+      "label": "Good",
+      "regions": [
+        {
+          "start": 2.917,
+          "end": 4.199
+        }
+      ]
+    }
+  }
+]

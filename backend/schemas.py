@@ -89,6 +89,7 @@ class ExperimentCreate(BaseModel):
     label_schema: Dict[str, Any]
     overlap_n: int = Field(default=1, ge=1, le=100)
     gold_ratio: float = Field(default=0.1, ge=0, le=1)
+    access_mode: Literal["sign_in_required", "guest_name", "anonymous"] = "anonymous"
     status: Literal["draft", "active"] = "active"
     metadata_schema: List[MetadataFieldDefinition] = Field(default_factory=list)
     qualification_form: List[QualificationQuestionDefinition] = Field(default_factory=list)
@@ -140,7 +141,28 @@ class ExperimentResponse(BaseModel):
     name: str
     share_token: str
     status: str
+    access_mode: Literal["sign_in_required", "guest_name", "anonymous"]
     created_at: Any = None
+
+class ExperimentUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    instructions: Optional[str] = Field(default=None, max_length=10000)
+    access_mode: Optional[Literal["sign_in_required", "guest_name", "anonymous"]] = None
+    overlap_n: Optional[int] = Field(default=None, ge=1, le=100)
+    gold_ratio: Optional[float] = Field(default=None, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def require_a_change(self):
+        if not self.model_fields_set:
+            raise ValueError("provide at least one setting to update")
+        if any(getattr(self, field) is None for field in self.model_fields_set):
+            raise ValueError("experiment settings cannot be null")
+        return self
+
+class ExperimentDeleteRequest(BaseModel):
+    experiment_name: str = Field(min_length=1, max_length=200)
     
 class ExperimentListResponse(BaseModel):
     experiments: List[ExperimentResponse]
@@ -171,8 +193,14 @@ class SessionResponse(BaseModel):
     modality: str
     instructions: Optional[str] = None
     label_schema: Dict[str, Any]
+    access_mode: Literal["sign_in_required", "guest_name", "anonymous"]
+    annotator_display_name: Optional[str] = None
     requires_qualification: bool = False
     qualification_form: List[QualificationQuestionDefinition] = Field(default_factory=list)
+
+class SessionStartRequest(BaseModel):
+    session_token: Optional[str] = None
+    display_name: Optional[str] = Field(default=None, max_length=120)
 
 class NextItemResponse(BaseModel):
     data_unit_id: UUID
@@ -193,3 +221,7 @@ class AnnotatorStatusUpdate(BaseModel):
 
 class QualificationSubmission(BaseModel):
     answers: Dict[str, Any]
+
+class AnnotatorConfigurationResponse(BaseModel):
+    experiment_name: str
+    access_mode: Literal["sign_in_required", "guest_name", "anonymous"]

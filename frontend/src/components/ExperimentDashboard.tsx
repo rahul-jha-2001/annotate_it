@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Download, Eye, Pause, Play, RefreshCw, Users } from "lucide-react";
+import { Download, Eye, Pause, Play, RefreshCw, Settings, Users } from "lucide-react";
 import { Link } from "wouter";
 import { apiFetch } from "../api";
 
@@ -8,6 +8,7 @@ interface DashboardData {
     id: string;
     name: string;
     share_token: string;
+    access_mode: "sign_in_required" | "guest_name" | "anonymous";
     qualification_form: Array<{ key: string; label: string; type: string }>;
   };
   completion: {
@@ -19,6 +20,9 @@ interface DashboardData {
   active_annotators: number;
   annotators: Array<{
     id: string;
+    display_name: string;
+    email: string | null;
+    identity_type: "signed_in" | "guest" | "anonymous";
     status: "active" | "paused";
     items_completed: number;
     gold_items_seen: number;
@@ -98,9 +102,10 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
       <div className="flex-row" style={{ justifyContent: "space-between", marginBottom: "28px" }}>
         <div>
           <h1 style={{ fontSize: "2rem" }}>{data.experiment.name}</h1>
-          <p style={{ margin: 0 }}>Live quality and completion statistics</p>
+          <p style={{ margin: 0 }}>Live quality and completion statistics · {data.experiment.access_mode === "sign_in_required" ? "Sign-in required" : data.experiment.access_mode === "guest_name" ? "Guest names required" : "Anonymous access"}</p>
         </div>
         <div className="flex-row">
+          <Link href={`/experiments/${experimentId}/settings`} className="btn btn-secondary"><Settings size={16} /> Settings</Link>
           <Link href={`/experiments/${experimentId}/annotators`} className="btn btn-secondary"><Users size={16} /> Annotators</Link>
           <Link href={`/experiments/${experimentId}/review`} className="btn btn-secondary"><Eye size={16} /> Review annotations</Link>
           <button className="btn btn-secondary" onClick={refresh}><RefreshCw size={16} /> Refresh</button>
@@ -120,11 +125,11 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
           <Link href={`/experiments/${experimentId}/annotators`} className="btn btn-secondary">View all annotators</Link>
         </div>
         <table className="data-table">
-          <thead><tr><th>Anonymous ID</th><th>Status</th><th>Questionnaire</th><th>Items</th><th>Gold accuracy</th><th>Agreement</th><th>Last activity</th><th /></tr></thead>
+          <thead><tr><th>Annotator</th><th>Status</th><th>Questionnaire</th><th>Items</th><th>Gold accuracy</th><th>Agreement</th><th>Last activity</th><th /></tr></thead>
           <tbody>
             {data.annotators.map(annotator => (
               <tr key={annotator.id}>
-                <td><Link href={`/experiments/${experimentId}/annotators/${annotator.id}`} className="anonymous-id">Anonymous {annotator.id.slice(0, 8)}</Link></td><td>{annotator.status}</td>
+                <td><Link href={`/experiments/${experimentId}/annotators/${annotator.id}`} className="anonymous-id">{annotator.display_name}</Link></td><td>{annotator.status}</td>
                 <td>{annotator.qualified_at ? <details className="annotator-profile"><summary>View answers</summary><dl>{data.experiment.qualification_form.map(question => <div key={question.key}><dt>{question.label}</dt><dd>{formatAnswer(annotator.qualification_answers[question.key])}</dd></div>)}</dl></details> : data.experiment.qualification_form.length ? "Not completed" : "Not required"}</td>
                 <td>{annotator.items_completed}</td>
                 <td>{formatScore(annotator.rolling_gold_accuracy)} (n={annotator.gold_items_seen})</td>

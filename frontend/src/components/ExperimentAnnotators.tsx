@@ -24,7 +24,7 @@ interface AnnotatorSummary {
   id: string;
   display_name: string;
   email: string | null;
-  identity_type: "signed_in" | "anonymous";
+  identity_type: "signed_in" | "guest" | "anonymous";
   status: "active" | "paused";
   items_completed: number;
   gold_items_seen: number;
@@ -160,7 +160,7 @@ export default function ExperimentAnnotators({ experimentId }: { experimentId: s
                       >
                         {annotator.display_name}
                       </Link>
-                      <span>{annotator.email || "Anonymous session"}</span>
+                      <span>{annotator.email || (annotator.identity_type === "guest" ? "Guest session" : "Anonymous session")}</span>
                     </div>
                   </td>
                   <td><span className={`status-chip status-${annotator.status}`}>{annotator.status}</span></td>

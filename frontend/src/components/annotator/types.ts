@@ -10,6 +10,8 @@ export interface AnnotationSession {
   modality: string;
   instructions?: string;
   label_schema: LabelSchema;
+  access_mode: "sign_in_required" | "guest_name" | "anonymous";
+  annotator_display_name?: string | null;
   requires_qualification: boolean;
   qualification_form: QualificationQuestion[];
 }

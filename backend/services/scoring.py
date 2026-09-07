@@ -51,7 +51,6 @@ def recompute_annotator_score(db: Session, annotator: Annotator) -> None:
             .join(Annotation, Annotation.data_unit_id == DataUnit.id)
             .filter(
                 Annotation.annotator_id == annotator.id,
-                DataUnit.is_gold.is_(False),
                 ItemAgreement.agreement_score.isnot(None),
             )
             .order_by(ItemAgreement.computed_at.desc())
@@ -71,7 +70,7 @@ def recompute_after_annotation(
         db.query(Annotation).filter(Annotation.data_unit_id == data_unit.id).all()
     )
 
-    if not data_unit.is_gold and len(annotations) >= experiment.overlap_n:
+    if len(annotations) >= experiment.overlap_n:
         item_score = db.query(ItemAgreement).filter_by(data_unit_id=data_unit.id).first()
         if item_score is None:
             item_score = ItemAgreement(data_unit_id=data_unit.id, n_annotations=0)
@@ -101,11 +100,9 @@ def rebuild_experiment_scores(db: Session, experiment: Experiment) -> None:
         )
     db.flush()
 
-    regular_units = db.query(DataUnit).filter_by(
-        experiment_id=experiment.id, is_gold=False
-    ).all()
+    units = db.query(DataUnit).filter_by(experiment_id=experiment.id).all()
     spec = get_type(experiment.label_schema["annotation_type"])
-    for unit in regular_units:
+    for unit in units:
         annotations = db.query(Annotation).filter_by(data_unit_id=unit.id).all()
         if len(annotations) >= experiment.overlap_n:
             db.add(ItemAgreement(

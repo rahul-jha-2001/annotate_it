@@ -7,11 +7,13 @@ Existing tools solve pieces of this (Label Studio: annotation UI; MTurk/Prolific
 
 ## 2. Goal (v1 scope — explicitly cut)
 Build a system where a single designer can:
-1. **Design** an annotation experiment: choose a registered modality, define a label schema, import media with metadata and gold answers, preview the assembled dataset, optionally qualify annotators and route samples by metadata, and configure overlap/quality-check frequency.
+1. **Design** an annotation experiment: choose a registered modality, define a label schema, select an annotator access mode, import media with metadata and gold answers, preview the assembled dataset, optionally qualify annotators and route samples by metadata, and configure overlap/quality-check frequency.
 2. **Deploy** the experiment as a single shareable link.
-3. **Share** that link with anyone — annotator login remains optional, with
-   enough experiment-scoped session identity to attribute work and scores.
-4. **Track** the experiment live: per-annotator accuracy against gold items, per-item agreement across overlapping annotators, and overall completion.
+3. **Share** that link using one of three experiment-level access modes: verified
+   sign-in, unverified guest name, or a fully anonymous session.
+4. **Track** the experiment live: per-annotator accuracy against gold items,
+   per-item agreement across overlapping annotators for both regular and gold
+   samples, and overall completion.
 
 
 ## 3. Users
@@ -20,9 +22,10 @@ Build a system where a single designer can:
   only their own projects.
 - **Platform administrator**: can inspect all experiments and administer legacy
   unowned data. The first account created is the bootstrap administrator.
-- **Annotator**: anyone with the share link. They may remain anonymous, but are
-  represented by a stable experiment-scoped session profile containing their
-  questionnaire, activity, annotations, and derived quality metrics.
+- **Annotator**: anyone permitted by the share link's access mode. They may use a
+  verified account, provide a guest display name, or remain anonymous, and are
+  represented by a stable experiment-scoped profile containing their questionnaire,
+  activity, annotations, and derived quality metrics.
 
 ## 4. Core user flows
 
@@ -37,6 +40,8 @@ Build a system where a single designer can:
 
 ### 4.1 Design an experiment
 - Designer creates an Experiment: name, modality (audio or video), instructions text.
+- Designer chooses whether annotators must sign in, provide a guest name, or may
+  participate fully anonymously.
 - Designer defines one annotation type and its labels: categorical single-select,
   categorical multi-select, or temporal segment/region.
 - The task step provides an interactive annotator preview and shows the exact
@@ -57,14 +62,21 @@ Build a system where a single designer can:
 - Designer sets `overlap_n` (how many distinct annotators must annotate each non-gold item) and `gold_ratio` (fraction of items in each annotator's queue that are gold, interleaved rather than front-loaded).
 - Creation is draft-first: media, metadata, and gold configuration must register
   successfully before the experiment becomes active and its share link works.
+- The designer can later edit the name and instructions. Access mode, overlap,
+  and gold cadence remain editable only until the first annotation is submitted;
+  task schema and dataset changes are intentionally outside this settings flow.
+- Deleting an experiment requires its exact name and clearly warns that all
+  collected work will disappear from the application. v1 performs a recoverable
+  soft delete and retains the underlying rows for audit/recovery.
 
 ### 4.2 Deploy & share
 - Designer clicks "Deploy" → system generates a unique share link (`/annotate/{share_token}`).
 - Designer copies/shares this link by any channel (email, social, Slack — out of scope to build in-app sharing beyond generating the link).
 
 ### 4.3 Annotate (annotator flow)
-- Annotator opens the share link. No login is required. A session token is created and
-  persisted in browser local storage on first visit.
+- Annotator opens the share link. Depending on the experiment, they sign in with
+  Clerk, enter an unverified display name, or continue anonymously. A stable
+  experiment-scoped session token is persisted in browser local storage.
 - If the experiment has qualification questions, the annotator completes them
   once before receiving work. Required answers are validated, and sample routing
   uses only supported structured answers.
@@ -72,10 +84,10 @@ Build a system where a single designer can:
 - Annotator uses plugin-driven media and answer controls: categorical choices or
   labeled time regions over audio/video, then submits.
 - Repeats until their queue is exhausted or they stop.
-- “Anonymous” means no account is required, not that activity is discarded. The
+- “Anonymous” means no account or name is required, not that activity is discarded. The
   same browser session continues under the same anonymous ID for that experiment.
-  If the visitor is signed in, that experiment-scoped annotator profile is also
-  linked to their account without changing the public annotation flow.
+  Guest names are explicitly marked as unverified. Sign-in-required experiments
+  link the annotator profile to the verified local Clerk-backed user.
 
 ### 4.4 Track (designer dashboard)
 - Live-updating (poll-based) dashboard per experiment showing:
