@@ -16,9 +16,7 @@ export interface ParsedDatasetRow {
 }
 
 interface BundleOptions {
-  annotationType: string;
-  labels: string[];
-  multiSelect: boolean;
+  schema: LabelSchema;
 }
 
 export interface ParsedDatasetBundle {
@@ -96,14 +94,9 @@ function coerce(value: string, field: MetadataFieldDefinition): string | number 
 }
 
 export function validateGold(answer: unknown, options: BundleOptions): string[] {
-  const plugin = getAnnotationPlugin(options.annotationType);
-  if (!plugin) return [`Unsupported annotation type: ${options.annotationType}`];
-  const schema: LabelSchema = {
-    annotation_type: options.annotationType,
-    choices: options.labels,
-    multi_select: options.multiSelect,
-  };
-  return plugin.validateGold(answer, schema);
+  const plugin = getAnnotationPlugin(options.schema.annotation_type);
+  if (!plugin) return [`Unsupported annotation type: ${options.schema.annotation_type}`];
+  return plugin.validateGold(answer, options.schema);
 }
 
 export function parseDatasetBundle(

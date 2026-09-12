@@ -7,11 +7,12 @@ export interface TemporalRegion {
 }
 
 export type MediaInteraction =
-  | { kind: "none" }
+  | { kind: "none"; readonly?: boolean }
   | {
       kind: "temporal-regions";
       regions: TemporalRegion[];
       onChange: (regions: TemporalRegion[]) => void;
+      readonly?: boolean;
     };
 
 export type MediaInteractionKind = MediaInteraction["kind"];
@@ -36,6 +37,29 @@ export interface MediaPlugin {
   supportedInteractions: MediaInteractionKind[];
   AnnotationRenderer: LazyExoticComponent<ComponentType<MediaRendererProps>>;
   PreviewRenderer: ComponentType<MediaPreviewProps>;
+}
+
+export interface BaseAnnotationSchema {
+  annotation_type: string;
+  schema_version: number;
+}
+
+export interface AnnotationModuleContext {
+  interactionDefaults: Record<string, unknown>;
+}
+
+export interface ConfigurationEditorProps<SchemaT extends BaseAnnotationSchema> {
+  schema: SchemaT;
+  onChange: (schema: SchemaT) => void;
+}
+
+export interface TypedAnnotationControlProps<
+  SchemaT extends BaseAnnotationSchema,
+  AnswerT extends object,
+> {
+  schema: SchemaT;
+  answer: AnswerT;
+  onChange: (answer: AnswerT) => void;
 }
 
 export interface AnnotationControlProps {

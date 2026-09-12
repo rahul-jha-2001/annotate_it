@@ -4,6 +4,7 @@ import type { LabelSchema } from "./types";
 
 const categorical: LabelSchema = {
   annotation_type: "categorical",
+  schema_version: 1,
   choices: ["Good", "Bad"],
   multi_select: false,
 };
@@ -21,7 +22,12 @@ describe("isAnswerComplete", () => {
   });
 
   it("allows a labeled segment answer with no regions", () => {
-    const schema = { ...categorical, annotation_type: "segment" };
+    const schema: LabelSchema = {
+      annotation_type: "segment",
+      schema_version: 1,
+      choices: ["Good", "Bad"],
+      multi_select: false,
+    };
     expect(isAnswerComplete(schema, { regions: [] })).toBe(false);
     expect(isAnswerComplete(schema, { label: "Good", regions: [] })).toBe(true);
   });

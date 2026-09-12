@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import { parseCsv, parseDatasetBundle } from "./datasetBundle";
 
 const task = {
-  annotationType: "categorical",
-  labels: ["Good", "Bad"],
-  multiSelect: false,
+  schema: {
+    annotation_type: "categorical" as const,
+    schema_version: 1 as const,
+    choices: ["Good", "Bad"],
+    multi_select: false,
+  },
 };
 
 describe("dataset bundle parsing", () => {

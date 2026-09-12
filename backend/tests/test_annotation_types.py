@@ -4,8 +4,10 @@ from pydantic import ValidationError
 
 from annotation_types.categorical import CategoricalType
 from annotation_types import get_compatible_modalities, get_valid_types_for_modality
+from annotation_types.base_type import BaseAnnotationType
 from annotation_types.segment import Region, SegmentType, compute_iou, greedy_match_iou
-from modalities import get_modality
+from modalities import get_modalities_for_interaction, get_modality
+from schemas import AnnotationTypeResponse
 from schema_compat import normalize_label_schema
 from services.qualifications import (
     sample_matches_qualifications,
@@ -45,6 +47,13 @@ class CategoricalTypeTests(unittest.TestCase):
         )
         self.assertEqual(score, 0.5)
 
+    def test_type_inherits_lifecycle_and_accepts_schema_version(self):
+        self.assertIsInstance(self.spec, BaseAnnotationType)
+        self.assertEqual(
+            self.spec.validate_config({**self.single_config, "schema_version": 1}),
+            {**self.single_config, "schema_version": 1},
+        )
+
 
 class SegmentTypeTests(unittest.TestCase):
     def setUp(self):
@@ -75,6 +84,13 @@ class SegmentTypeTests(unittest.TestCase):
         )
         self.assertEqual(score, 0.5)
 
+    def test_type_inherits_lifecycle_and_accepts_schema_version(self):
+        self.assertIsInstance(self.spec, BaseAnnotationType)
+        self.assertEqual(
+            self.spec.validate_config({**self.config, "schema_version": 1}),
+            {**self.config, "schema_version": 1},
+        )
+
 
 class ModalityCapabilityTests(unittest.TestCase):
     def test_video_supports_categorical_and_temporal_segments(self):
@@ -89,6 +105,18 @@ class ModalityCapabilityTests(unittest.TestCase):
         )
         self.assertEqual(get_valid_types_for_modality("unknown"), [])
 
+    def test_unimplemented_modalities_are_not_advertised_as_compatible(self):
+        self.assertFalse(get_modality("text").available)
+        self.assertEqual(get_modalities_for_interaction("text-ranges"), [])
+
+    def test_catalog_response_accepts_base_owned_metadata(self):
+        entry = CategoricalType().catalog_entry()
+        entry["compatible_modalities"] = get_compatible_modalities(CategoricalType())
+        response = AnnotationTypeResponse.model_validate(entry)
+
+        self.assertEqual(response.schema_version, 1)
+        self.assertEqual(response.configuration_kind, "choices")
+
 
 class LegacySchemaTests(unittest.TestCase):
     def test_list_schema_is_normalized(self):
@@ -99,6 +127,7 @@ class LegacySchemaTests(unittest.TestCase):
             ]),
             {
                 "annotation_type": "categorical",
+                "schema_version": 1,
                 "choices": ["Category 1", "Category 2"],
                 "multi_select": False,
             },

@@ -469,6 +469,7 @@ class ApiIntegrationTests(unittest.TestCase):
             response.json()["label_schema"],
             {
                 "annotation_type": "categorical",
+                "schema_version": 1,
                 "choices": ["Category 1", "Category 2"],
                 "multi_select": False,
             },

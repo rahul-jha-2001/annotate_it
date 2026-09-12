@@ -21,7 +21,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from annotation_types import REGISTRY, get_compatible_modalities, get_type, get_valid_types_for_modality
+from annotation_types import REGISTRY, get_compatible_modalities, get_type, get_valid_types_for_modality, list_types
 from auth import get_current_user, get_optional_user, router as auth_router
 from config import (
     CORS_ORIGINS, MINIO_ACCESS_KEY, MINIO_BUCKET, MINIO_SECRET_KEY, MINIO_URL,
@@ -252,13 +252,10 @@ def serialize_annotator_summary(
 def get_annotation_types():
     return [
         AnnotationTypeResponse(
-            key=spec.key, name=spec.name,
+            **spec.catalog_entry(),
             compatible_modalities=get_compatible_modalities(spec),
-            supports_choices=spec.supports_choices,
-            supports_multi_select=spec.supports_multi_select,
-            required_interaction=spec.required_interaction,
         )
-        for spec in REGISTRY.values()
+        for spec in list_types()
     ]
 
 

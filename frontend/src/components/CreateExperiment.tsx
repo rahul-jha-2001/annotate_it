@@ -62,10 +62,10 @@ export default function CreateExperiment() {
     access_mode: "guest_name",
   });
   const [annotationTypes, setAnnotationTypes] = useState<AnnotationTypeInfo[]>([]);
-  const [annotationType, setAnnotationType] = useState("categorical");
-  const [labels, setLabels] = useState(["Good", "Noisy", "Unusable"]);
-  const [labelInput, setLabelInput] = useState("");
-  const [multiSelect, setMultiSelect] = useState(false);
+  const [annotationSchema, setAnnotationSchema] = useState<LabelSchema>(() =>
+    getAnnotationPlugin("categorical")!.defaultSchema({ interactionDefaults: {} }),
+  );
+  const annotationType = annotationSchema.annotation_type;
   const [previewAnswer, setPreviewAnswer] = useState<AnnotationAnswer>({});
   const [files, setFiles] = useState<File[]>([]);
   const [metadataFields, setMetadataFields] = useState<MetadataFieldDefinition[]>([]);
@@ -100,16 +100,13 @@ export default function CreateExperiment() {
   const annotationPlugin = getAnnotationPlugin(annotationType);
   useEffect(() => {
     if (availableTypes.length && !availableTypes.some(type => type.key === annotationType)) {
-      setAnnotationType(availableTypes[0].key);
+      const next = getAnnotationPlugin(availableTypes[0].key);
+      if (next) setAnnotationSchema(next.defaultSchema({ interactionDefaults: {} }));
     }
   }, [annotationType, availableTypes]);
   useEffect(() => {
-    if (currentType && !currentType.supports_multi_select) setMultiSelect(false);
-  }, [currentType]);
-
-  useEffect(() => {
-    setPreviewAnswer(getAnnotationPlugin(annotationType)?.createInitialAnswer() ?? {});
-  }, [annotationType, multiSelect, labels]);
+    setPreviewAnswer(annotationPlugin?.createInitialAnswer(annotationSchema) ?? {});
+  }, [annotationPlugin, annotationSchema]);
 
   useEffect(() => {
     const urls = Object.fromEntries(files.map(file => [file.name, URL.createObjectURL(file)]));
@@ -117,15 +114,10 @@ export default function CreateExperiment() {
     return () => Object.values(urls).forEach(url => URL.revokeObjectURL(url));
   }, [files]);
 
-  const previewSchema: LabelSchema = {
-    annotation_type: annotationType,
-    choices: labels,
-    multi_select: multiSelect,
-  };
-  const goldAnswerShape = annotationPlugin?.goldAnswerShape(previewSchema) ?? "Unknown answer format";
+  const goldAnswerShape = annotationPlugin?.goldAnswerShape(annotationSchema) ?? "Unknown answer format";
   const goldFileExample = JSON.stringify([{
     filename: mediaPlugin?.exampleFilename ?? "sample.bin",
-    answer: annotationPlugin?.createGoldExample(previewSchema) ?? {},
+    answer: annotationPlugin?.createGoldExample(annotationSchema) ?? {},
   }], null, 2);
 
   const duplicateFiles = useMemo(() => {
@@ -134,12 +126,6 @@ export default function CreateExperiment() {
   }, [files]);
   const goldCount = datasetRows.filter(row => row.goldAnswer).length;
   const regularCount = datasetRows.length - goldCount;
-
-  const addLabel = () => {
-    const value = labelInput.trim();
-    if (value && !labels.includes(value)) setLabels(current => [...current, value]);
-    setLabelInput("");
-  };
 
   const addQuestion = () => {
     let index = questions.length + 1;
@@ -192,7 +178,7 @@ export default function CreateExperiment() {
 
   const canContinue = (() => {
     if (step === 0) return Boolean(form.name.trim() && form.instructions.trim());
-    if (step === 1) return Boolean(annotationPlugin && currentType && (!currentType.supports_choices || labels.length));
+    if (step === 1) return Boolean(annotationPlugin && currentType && annotationPlugin.validateSchema(annotationSchema).length === 0);
     if (step === 2) return files.length > 0 && duplicateFiles.size === 0;
     if (step === 3) return datasetErrors.length === 0 && datasetRows.every(row => row.errors.length === 0);
     if (step === 4) return questions.every(question => question.label.trim() && (!question.type.includes("choice") || question.options.length > 0));
@@ -202,11 +188,7 @@ export default function CreateExperiment() {
   const assembleDataset = () => {
     setError(null);
     try {
-      const parsed = parseDatasetBundle(files.map(file => file.name), metadataCsv, goldManifest, {
-        annotationType,
-        labels,
-        multiSelect,
-      });
+      const parsed = parseDatasetBundle(files.map(file => file.name), metadataCsv, goldManifest, { schema: annotationSchema });
       setMetadataFields(parsed.metadataFields);
       setDatasetRows(parsed.rows);
       setDatasetErrors(parsed.errors);
@@ -241,7 +223,7 @@ export default function CreateExperiment() {
         return {
           ...row,
           goldAnswer: answer,
-          errors: [...metadataErrors, ...validateGold(answer, { annotationType, labels, multiSelect })],
+          errors: [...metadataErrors, ...validateGold(answer, { schema: annotationSchema })],
         };
       } catch {
         return { ...row, errors: [...metadataErrors, "Gold answer is not valid JSON"] };
@@ -267,7 +249,7 @@ export default function CreateExperiment() {
         body: JSON.stringify({
           ...form,
           status: "draft",
-          label_schema: { annotation_type: annotationType, choices: labels, multi_select: multiSelect },
+          label_schema: annotationSchema,
           metadata_schema: metadataFields,
           qualification_form: questions,
           routing_rules: rules,
@@ -367,14 +349,13 @@ export default function CreateExperiment() {
 
         {step === 1 && <div className="task-config-layout">
           <div className="flex-col">
-            <div className="task-type-grid">{availableTypes.map(type => { const plugin = getAnnotationPlugin(type.key); return <button type="button" key={type.key} className={`task-type-card ${annotationType === type.key ? "selected" : ""}`} onClick={() => setAnnotationType(type.key)}><strong>{type.name}</strong><span>{plugin?.description(mediaPlugin?.name ?? "media")}</span></button>; })}</div>
-            {currentType?.supports_choices && <div className="form-group"><label className="form-label">Labels or choices</label><div className="chip-editor"><div className="label-chips">{labels.map(label => <span className="label-chip" key={label}>{label}<button type="button" onClick={() => setLabels(current => current.filter(value => value !== label))}>×</button></span>)}</div><div className="flex-row"><input className="form-input" value={labelInput} onChange={event => setLabelInput(event.target.value)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); addLabel(); } }} placeholder="Add a label" /><button type="button" className="btn btn-secondary" onClick={addLabel}><Plus size={16} /> Add</button></div></div></div>}
-            {currentType?.supports_multi_select && <label className="choice-option"><input type="checkbox" checked={multiSelect} onChange={event => setMultiSelect(event.target.checked)} />Allow annotators to select multiple choices</label>}
+            <div className="task-type-grid">{availableTypes.map(type => { const plugin = getAnnotationPlugin(type.key); return <button type="button" key={type.key} className={`task-type-card ${annotationType === type.key ? "selected" : ""}`} onClick={() => { if (plugin) setAnnotationSchema(plugin.defaultSchema({ interactionDefaults: {} })); }}><strong>{type.name}</strong><span>{plugin?.description(mediaPlugin?.name ?? "media")}</span></button>; })}</div>
+            {annotationPlugin && <annotationPlugin.ConfigurationEditor schema={annotationSchema} onChange={setAnnotationSchema} />}
             <div className="config-preview">
               <span>Interactive annotator preview</span>
-              {annotationPlugin?.PreviewInteractionEditor && <annotationPlugin.PreviewInteractionEditor answer={previewAnswer} onChange={setPreviewAnswer} />}
+              {annotationPlugin?.PreviewInteractionEditor && <annotationPlugin.PreviewInteractionEditor schema={annotationSchema} answer={previewAnswer} onChange={setPreviewAnswer} />}
               <AnnotationControl
-                schema={previewSchema}
+                schema={annotationSchema}
                 answer={previewAnswer}
                 onChange={setPreviewAnswer}
               />
@@ -394,8 +375,7 @@ export default function CreateExperiment() {
             <pre className="gold-format-example"><code>{goldFileExample}</code></pre>
             <ul>
               <li><code>filename</code> must exactly match an uploaded media filename.</li>
-              <li>Labels must be one of: {labels.length ? labels.join(", ") : "add at least one label"}.</li>
-              {annotationPlugin?.goldGuidance && <li>{annotationPlugin.goldGuidance}</li>}
+              {annotationPlugin?.goldInstructions(annotationSchema).map(instruction => <li key={instruction}>{instruction}</li>)}
               <li>Only include samples that should act as quality checks.</li>
             </ul>
           </aside>

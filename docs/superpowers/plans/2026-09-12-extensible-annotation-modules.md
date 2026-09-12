@@ -17,6 +17,9 @@
 - Shared API routes and page coordinators must not branch on concrete annotation keys.
 - Annotation modules never branch on media modality; media modules never branch on annotation type.
 - All stored schemas include `schema_version`; a missing version on legacy data means version 1.
+- Frontend schema and answer types use module-augmented open type maps, not a central closed union.
+- Gold scoring and agreement aggregation have separate protected strategy hooks.
+- Modalities are advertised as compatible only when their implementation is available.
 - Normal and gold answers use the same strict answer model.
 - Every score must be finite and inside `[0, 1]`.
 - Normalized image coordinates remain inside `[0, 1]`; video time is non-negative seconds.
@@ -56,6 +59,8 @@ child.
 - Create: `backend/tests/test_annotation_base.py`
 - Modify: `backend/annotation_types/base.py`
 - Modify: `backend/annotation_types/__init__.py`
+- Modify: `backend/main.py`
+- Modify: `backend/schemas.py`
 
 **Interfaces:**
 - Produces: `BaseAnnotationType[ConfigT, AnswerT]`
@@ -96,8 +101,9 @@ Expected: import failure for `BaseAnnotationType`.
 - [ ] **Step 3: Implement the minimal generic base**
 
 Implement concrete `validate_config`, `validate_answer`, `validate_gold_answer`,
-`gold_match`, `agreement`, `catalog_entry`, and `_checked_score`. Make `score_pair`
-abstract and `_validate_semantics` a no-op protected hook. Reject subclasses that
+`gold_match`, `agreement`, `catalog_entry`, and `_checked_score`. Make `_score_pair`
+abstract; provide separate `_score_gold` and `_aggregate_agreement` defaults plus
+stepwise `_upgrade_config`; make `_validate_semantics` a no-op protected hook. Reject subclasses that
 define public lifecycle names in their own `__dict__`.
 
 - [ ] **Step 4: Add registry failure tests**
@@ -126,6 +132,7 @@ git commit -m "refactor: add inherited backend annotation lifecycle"
 - Modify: `backend/annotation_types/__init__.py`
 - Modify: `backend/tests/test_annotation_types.py`
 - Modify: `backend/tests/test_api_integration.py`
+- Modify: `backend/schema_compat.py`
 
 **Interfaces:**
 - Consumes: `BaseAnnotationType`
@@ -174,7 +181,7 @@ git commit -m "refactor: migrate existing annotations to backend base"
 
 **Interfaces:**
 - Produces: `BaseAnnotationModule<SchemaT, AnswerT>` and `AnnotationModuleContext`
-- Produces: `AnnotationSchema` and `AnnotationAnswer` discriminated unions
+- Produces: module-augmented `AnnotationSchemaMap` and `AnnotationAnswerMap`
 - Produces: checked `registerAnnotationModule` and `getAnnotationModule`
 - Produces: `ConfigurationEditorProps`, `ReadonlyMediaInteraction`
 
@@ -193,7 +200,9 @@ Expected: import failure for `BaseAnnotationModule`.
 - [ ] **Step 3: Define discriminated types**
 
 Add `annotation_type` and `schema_version` discriminants to each schema. Define
-separate answers rather than one object with unrelated optional fields. Extend
+open interfaces that child modules augment locally and derive the schema/answer
+unions from their values. Define separate answers rather than one object with
+unrelated optional fields. Extend
 `MediaInteraction` with readonly-safe callback omission, but do not add spatial
 behavior in this task. `AnnotationModuleContext` carries media interaction defaults
 without exposing a modality key to annotation modules.
