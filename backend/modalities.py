@@ -8,13 +8,14 @@ class ModalitySpec:
     name: str
     supported_interactions: List[str]
     available: bool = True
+    capabilities: frozenset[str] = frozenset()
 
 
 REGISTRY: Dict[str, ModalitySpec] = {
-    "audio": ModalitySpec("audio", "Audio", ["none", "temporal-regions"]),
-    "video": ModalitySpec("video", "Video", ["none", "temporal-regions", "spatial-shapes"]),
-    "image": ModalitySpec("image", "Image", ["none", "spatial-shapes"], False),
-    "text": ModalitySpec("text", "Text", ["none", "text-ranges"], False),
+    "audio": ModalitySpec("audio", "Audio", ["none", "temporal-regions", "labeled-temporal-regions"], True, frozenset({"audio-content"})),
+    "video": ModalitySpec("video", "Video", ["none", "temporal-regions", "labeled-temporal-regions", "spatial-shapes"], True, frozenset({"audio-content", "visual-content"})),
+    "image": ModalitySpec("image", "Image", ["none", "spatial-shapes"], False, frozenset({"visual-content"})),
+    "text": ModalitySpec("text", "Text", ["none", "text-ranges"], False, frozenset({"text-content"})),
 }
 
 

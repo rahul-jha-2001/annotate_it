@@ -1,17 +1,15 @@
-import type { BaseAnnotationSchema } from "../contracts";
 import { BaseAnnotationModule } from "./BaseAnnotationModule";
 import { categoricalPlugin } from "./categorical";
 import { segmentPlugin } from "./segment";
 import { transcriptionPlugin } from "./transcription";
+import { temporalTaskModules } from "./temporalTasks";
 
 type AnyAnnotationModule = BaseAnnotationModule<any, any>;
 
 export class AnnotationModuleRegistry {
   private readonly modules = new Map<string, AnyAnnotationModule>();
 
-  register<SchemaT extends BaseAnnotationSchema, AnswerT extends object>(
-    module: BaseAnnotationModule<SchemaT, AnswerT>,
-  ): BaseAnnotationModule<SchemaT, AnswerT> {
+  register<ModuleT extends AnyAnnotationModule>(module: ModuleT): ModuleT {
     module.assertContract();
     if (this.modules.has(module.key)) {
       throw new Error(`annotation module already registered: ${module.key}`);
@@ -34,6 +32,7 @@ const registry = new AnnotationModuleRegistry();
 registry.register(categoricalPlugin);
 registry.register(segmentPlugin);
 registry.register(transcriptionPlugin);
+temporalTaskModules.forEach(module => registry.register(module));
 
 export const annotationPlugins: Record<string, AnyAnnotationModule> = Object.fromEntries(
   registry.values().map(module => [module.key, module]),

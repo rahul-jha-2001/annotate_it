@@ -16,7 +16,7 @@ export const audioPlugin: MediaPlugin = {
   uploadTitle: "Choose audio files",
   uploadHelp: "MP3, WAV, or other browser-supported audio",
   exampleFilename: "clip.wav",
-  supportedInteractions: ["none", "temporal-regions"],
+  supportedInteractions: ["none", "temporal-regions", "labeled-temporal-regions"],
   AnnotationRenderer: lazy(() => import("../../components/annotator/AudioMediaRenderer")),
   PreviewRenderer: AudioPreview,
 };

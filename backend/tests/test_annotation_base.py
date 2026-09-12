@@ -35,8 +35,6 @@ class DummyType(BaseAnnotationType[DummyConfig, DummyAnswer]):
 
 
 class DifferentScoringType(DummyType):
-    key = "different-scoring"
-
     def _score_gold(self, answer, gold, config):
         return 0.25
 
@@ -67,6 +65,23 @@ class VersionedType(BaseAnnotationType[VersionTwoConfig, DummyAnswer]):
         upgraded = dict(raw)
         upgraded["renamed"] = upgraded.pop("old_name")
         return upgraded
+
+    def _score_pair(self, left, right, config):
+        return 1.0
+
+
+class LooseConfig(BaseModel):
+    annotation_type: str
+    schema_version: int = 1
+
+
+class LooseType(BaseAnnotationType[LooseConfig, DummyAnswer]):
+    key = "loose"
+    name = "Loose"
+    schema_version = 1
+    required_interaction = "none"
+    config_model = LooseConfig
+    answer_model = DummyAnswer
 
     def _score_pair(self, left, right, config):
         return 1.0
@@ -118,10 +133,12 @@ class AnnotationBaseTests(unittest.TestCase):
             {"annotation_type": "versioned", "schema_version": 2, "renamed": "kept"},
         )
 
+    def test_base_rejects_a_schema_for_a_different_registered_key(self):
+        with self.assertRaisesRegex(ValueError, "annotation_type"):
+            LooseType().validate_config({"annotation_type": "someone-else"})
+
     def test_scores_must_be_finite_and_bounded(self):
         class InvalidScoreType(DummyType):
-            key = "invalid-score"
-
             def _score_pair(self, left, right, config):
                 return math.nan
 

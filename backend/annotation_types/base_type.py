@@ -18,6 +18,7 @@ class BaseAnnotationType(ABC, Generic[ConfigT, AnswerT]):
     name: ClassVar[str]
     schema_version: ClassVar[int]
     required_interaction: ClassVar[str]
+    required_media_capabilities: ClassVar[frozenset[str]] = frozenset()
     configuration_kind: ClassVar[str] = "custom"
     supports_choices: ClassVar[bool] = False
     supports_multi_select: ClassVar[bool] = False
@@ -51,6 +52,10 @@ class BaseAnnotationType(ABC, Generic[ConfigT, AnswerT]):
 
     def _normalize_config_version(self, config: Dict[str, Any]) -> Dict[str, Any]:
         raw = dict(config)
+        if raw.get("annotation_type") != self.key:
+            raise ValueError(
+                f"annotation_type must match registered module key {self.key!r}"
+            )
         version = raw.get("schema_version", 1)
         if not isinstance(version, int) or isinstance(version, bool) or version < 1:
             raise ValueError("schema_version must be a positive integer")

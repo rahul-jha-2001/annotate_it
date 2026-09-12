@@ -6,12 +6,23 @@ export interface TemporalRegion {
   end: number;
 }
 
+export interface LabeledTemporalRegion extends TemporalRegion {
+  label: string;
+}
+
 export type MediaInteraction =
   | { kind: "none"; readonly?: boolean }
   | {
       kind: "temporal-regions";
       regions: TemporalRegion[];
       onChange: (regions: TemporalRegion[]) => void;
+      readonly?: boolean;
+    }
+  | {
+      kind: "labeled-temporal-regions";
+      regions: LabeledTemporalRegion[];
+      newRegionLabel: string;
+      onChange: (regions: LabeledTemporalRegion[]) => void;
       readonly?: boolean;
     };
 

@@ -16,7 +16,7 @@ export const videoPlugin: MediaPlugin = {
   uploadTitle: "Choose video files",
   uploadHelp: "MP4, WebM, or other browser-supported video",
   exampleFilename: "clip.mp4",
-  supportedInteractions: ["none", "temporal-regions"],
+  supportedInteractions: ["none", "temporal-regions", "labeled-temporal-regions"],
   AnnotationRenderer: lazy(() => import("../../components/annotator/VideoMediaRenderer")),
   PreviewRenderer: VideoPreview,
 };

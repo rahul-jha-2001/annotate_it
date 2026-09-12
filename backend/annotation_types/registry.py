@@ -27,6 +27,15 @@ class AnnotationTypeRegistry:
             raise ValueError(
                 f"unknown media interaction: {module.required_interaction}"
             )
+        compatible = [
+            modality
+            for modality in MODALITY_REGISTRY.values()
+            if modality.available
+            and module.required_interaction in modality.supported_interactions
+            and module.required_media_capabilities.issubset(modality.capabilities)
+        ]
+        if not compatible:
+            raise ValueError(f"no available media plugin can render {module.key}")
         module.catalog_entry()
         self._modules[module.key] = module
         return module

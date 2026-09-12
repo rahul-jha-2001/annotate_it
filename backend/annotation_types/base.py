@@ -6,6 +6,7 @@ class AnnotationTypeSpec(Protocol):
     key: str
     name: str
     required_interaction: str
+    required_media_capabilities: frozenset[str]
     schema_version: int
     configuration_kind: str
     supports_choices: bool
