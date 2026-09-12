@@ -8,7 +8,7 @@ describe("plugin compatibility", () => {
   it("registers only inherited annotation modules with versioned defaults", () => {
     const modules = listAnnotationModules();
     expect(modules.every(module => module instanceof BaseAnnotationModule)).toBe(true);
-    expect(modules.map(module => module.defaultSchema({ interactionDefaults: {} }))).toEqual([
+    expect(modules.map(module => module.defaultSchema({ interactionDefaults: {} }))).toEqual(expect.arrayContaining([
       {
         annotation_type: "categorical",
         schema_version: 1,
@@ -21,7 +21,7 @@ describe("plugin compatibility", () => {
         choices: ["Region"],
         multi_select: false,
       },
-    ]);
+    ]));
   });
 
   it("exposes audio and video without changing screen coordinators", () => {

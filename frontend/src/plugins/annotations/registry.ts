@@ -2,6 +2,7 @@ import type { BaseAnnotationSchema } from "../contracts";
 import { BaseAnnotationModule } from "./BaseAnnotationModule";
 import { categoricalPlugin } from "./categorical";
 import { segmentPlugin } from "./segment";
+import { transcriptionPlugin } from "./transcription";
 
 type AnyAnnotationModule = BaseAnnotationModule<any, any>;
 
@@ -32,6 +33,7 @@ export class AnnotationModuleRegistry {
 const registry = new AnnotationModuleRegistry();
 registry.register(categoricalPlugin);
 registry.register(segmentPlugin);
+registry.register(transcriptionPlugin);
 
 export const annotationPlugins: Record<string, AnyAnnotationModule> = Object.fromEntries(
   registry.values().map(module => [module.key, module]),

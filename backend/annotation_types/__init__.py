@@ -4,11 +4,13 @@ from .base_type import BaseAnnotationType
 from .registry import AnnotationTypeRegistry
 from .segment import SegmentType
 from .categorical import CategoricalType
+from .transcription import TranscriptionType
 from modalities import get_modalities_for_interaction, get_modality
 
 _registry = AnnotationTypeRegistry()
 _registry.register(SegmentType())
 _registry.register(CategoricalType())
+_registry.register(TranscriptionType())
 REGISTRY: Dict[str, BaseAnnotationType] = _registry.as_dict()
 
 def get_type(key: str) -> AnnotationTypeSpec:
