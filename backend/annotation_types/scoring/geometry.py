@@ -92,7 +92,7 @@ def box_iou(left: Any, right: Any) -> float:
     )
     intersection = intersection_width * intersection_height
     union = left_width * left_height + right_width * right_height - intersection
-    return 0.0 if union <= EPSILON else intersection / union
+    return 0.0 if union <= EPSILON else max(0.0, min(1.0, intersection / union))
 
 
 def polygon_iou(left: Any, right: Any) -> float:

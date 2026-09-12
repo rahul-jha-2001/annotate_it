@@ -6,6 +6,7 @@ from .segment import SegmentType
 from .categorical import CategoricalType
 from .transcription import TranscriptionType
 from .temporal_tasks import TEMPORAL_TASK_TYPES
+from .spatial_tasks import SPATIAL_TASK_TYPES
 from modalities import get_modalities_for_interaction, get_modality
 
 _registry = AnnotationTypeRegistry()
@@ -14,6 +15,8 @@ _registry.register(CategoricalType())
 _registry.register(TranscriptionType())
 for temporal_type in TEMPORAL_TASK_TYPES:
     _registry.register(temporal_type())
+for spatial_type in SPATIAL_TASK_TYPES:
+    _registry.register(spatial_type())
 REGISTRY: Dict[str, BaseAnnotationType] = _registry.as_dict()
 
 def get_type(key: str) -> AnnotationTypeSpec:

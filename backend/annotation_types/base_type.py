@@ -92,7 +92,9 @@ class BaseAnnotationType(ABC, Generic[ConfigT, AnswerT]):
         parsed_config = self.config_model.model_validate(
             self._normalize_config_version(config)
         )
-        return self._parse_answer(answer, parsed_config).model_dump(mode="json")
+        return self._parse_answer(answer, parsed_config).model_dump(
+            mode="json", exclude_none=True
+        )
 
     @final
     def validate_gold_answer(
