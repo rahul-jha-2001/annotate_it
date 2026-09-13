@@ -1,347 +1,287 @@
 # Annotation and Modality Extension Guide
 
-This guide explains how annotation types and media modalities are connected in
-Annotate It. Use it when changing an existing task or adding a new modality,
-annotation type, or interaction.
+This guide describes the extension contract used by Annotate It. The design has
+three independent layers:
 
-## 1. Mental model
+1. an annotation module owns schema, answer validation, scoring, controls, and
+   answer-to-interaction mapping;
+2. a media plugin owns upload rules and rendering for a modality;
+3. a typed interaction is the small protocol between them.
 
-The system separates three concepts:
+Shared API routes and screens resolve these pieces from registries. They must not
+switch on concrete annotation keys or media keys.
 
-1. A **modality** describes the media being shown, such as audio or video.
-2. An **annotation type** describes the answer being collected, such as a
-   category or labeled time regions.
-3. An **interaction capability** connects the two without either knowing the
-   other's implementation.
+## Supported matrix
 
-```text
-Annotation type                 Interaction                 Modality
----------------                 -----------                 --------
-Categorical        requires     none             supported by audio/video
-Segment            requires     temporal-regions supported by audio/video
-```
+| Family | Annotation keys | Audio | Video | Image | Interaction |
+| --- | --- | ---: | ---: | ---: | --- |
+| Categorical | `categorical` | Yes | Yes | Yes | `none` |
+| Transcription | `transcription` | Yes | Yes | No | `none` + audio capability |
+| Unlabeled temporal | `segment` | Yes | Yes | No | `temporal-regions` |
+| Labeled temporal | `speaker_diarization`, `speaker_identification`, `sound_event`, `speech_segmentation` | Yes | Yes | No | `labeled-temporal-regions` + audio capability |
+| Video temporal | `video_event`, `action_recognition` | No | Yes | No | `labeled-temporal-regions` + visual capability |
+| Spatial | `bounding_box`, `polygon`, `polyline`, `ellipse`, `keypoint` | No | Yes | Yes | `spatial-shapes` + visual capability |
 
-For example, the Segment plugin produces a generic `temporal-regions`
-interaction. The audio plugin draws those regions on a waveform, while the video
-plugin provides start/end controls around a video player. Segment code does not
-contain an audio/video branch.
+Text media and text-range interaction are reserved but unavailable. A modality
+is advertised only when its frontend renderer is actually registered.
 
-Compatibility is valid only when both sides agree:
+## Backend template lifecycle
 
-```text
-annotation.requiredInteraction ∈ modality.supportedInteractions
-```
+All backend modules inherit
+`backend/annotation_types/base_type.py::BaseAnnotationType[ConfigT, AnswerT]`.
+The base class is the template used by API creation, gold ingestion, submission,
+agreement, score rebuild, review, and export.
 
-The backend is authoritative. Frontend checks provide immediate feedback, but
-the API validates the experiment configuration and every submitted answer.
+The base owns these final public operations:
 
-## 2. Current support
+- `validate_config`
+- `validate_answer`
+- `validate_gold_answer`
+- `gold_match`
+- `agreement`
+- `catalog_entry`
 
-| Modality | Frontend plugin | Backend descriptor | Supported frontend interactions |
-| --- | --- | --- | --- |
-| Audio | Yes | Yes | `none`, `temporal-regions` |
-| Video | Yes | Yes | `none`, `temporal-regions` |
-| Image | Not yet | Reserved | None in the UI yet |
-| Text | Not yet | Reserved | None in the UI yet |
+A child cannot replace them. It declares metadata and implements protected hooks:
 
-The backend descriptors reserve `spatial-shapes` and `text-ranges` for future
-plugins. Those interactions must be added to the frontend contract before the UI
-can use them.
+- required: `_score_pair(left, right, config)`;
+- optional: `_validate_semantics(answer, config)`;
+- optional: `_score_gold(answer, gold, config)` when gold differs from agreement;
+- optional: `_aggregate_agreement(answers, config)` for a non-pairwise metric;
+- optional: `_get_answer_model(config)` for configuration-dependent answers;
+- optional: `_upgrade_config(raw, from_version)` for stored schema upgrades.
 
-## 3. Repository map
+The base validates schema identity/version, runs strict Pydantic parsing, invokes
+semantic validation, checks finite scores in `[0, 1]`, and averages pairwise
+agreement by default. A change to this base lifecycle applies to every child.
 
-```text
-backend/
-├── modalities.py                    # Modality registry and capabilities
-├── annotation_types/
-│   ├── base.py                       # AnnotationTypeSpec protocol
-│   ├── __init__.py                   # Annotation registry and compatibility
-│   ├── categorical.py                # Categorical config/answers/scoring
-│   └── segment.py                    # Temporal regions and IoU scoring
-├── services/scoring.py               # Dispatches scoring through the registry
-├── main.py                           # API validation and catalog endpoints
-└── tests/test_annotation_types.py    # Contract, validation, and scoring tests
-
-frontend/src/
-├── plugins/
-│   ├── contracts.ts                  # Shared plugin and interaction contracts
-│   ├── registry.test.ts              # Registry/capability tests
-│   ├── media/
-│   │   ├── registry.ts               # Media plugin registry
-│   │   ├── audio.tsx                 # Audio manifest and preview
-│   │   └── video.tsx                 # Video manifest and preview
-│   └── annotations/
-│       ├── registry.ts               # Annotation plugin registry
-│       ├── categorical.tsx           # Categorical UI and client validation
-│       └── segment.tsx               # Segment UI and interaction adapter
-└── components/
-    ├── CreateExperiment.tsx          # Resolves plugins for authoring/preview
-    ├── Annotator.tsx                 # Joins media + annotation plugins
-    ├── ReviewAnnotations.tsx         # Uses plugin previews and summaries
-    ├── datasetBundle.ts              # Delegates gold validation to plugins
-    └── annotator/
-        ├── AudioMediaRenderer.tsx
-        ├── VideoMediaRenderer.tsx
-        ├── AnnotationControl.tsx      # Thin annotation-registry adapter
-        └── types.ts                   # Shared schema and answer shapes
-```
-
-## 4. Backend annotation types
-
-Every backend annotation type implements `AnnotationTypeSpec` from
-`backend/annotation_types/base.py`.
-
-### Required fields
-
-- `key`: stable value stored in `label_schema.annotation_type`.
-- `name`: designer-facing name.
-- `required_interaction`: capability required from a modality.
-- `supports_choices`: whether the current designer UI should collect labels.
-- `supports_multi_select`: whether the designer may enable multiple choices.
-
-Keys and interaction names are persistent API/data values. Do not rename them
-after experiments exist unless a data migration and legacy normalization path are
-also added.
-
-### Required methods
-
-- `validate_config(config)` validates and normalizes the experiment's
-  `label_schema`. Return JSON-serializable normalized data.
-- `get_answer_model(config)` returns the Pydantic model for the current
-  configuration. It may select different models, as categorical does for single
-  versus multiple choice.
-- `validate_answer(answer, config)` validates both shape and experiment-specific
-  constraints, such as membership in configured choices.
-- `gold_match(answer, gold_answer, config)` returns a score from `0.0` to `1.0`.
-- `agreement(answers, config)` returns inter-annotator agreement from `0.0` to
-  `1.0`.
-
-Use strict Pydantic models with `extra="forbid"`. Shape validation alone is not
-enough: validate configured labels, uniqueness, ranges, ordering, and other
-semantic constraints inside `validate_config` or `validate_answer`.
-
-### Where the backend dispatches
-
-The registry is used automatically for:
-
-- experiment configuration in `POST /experiments`;
-- inline and manifest gold-answer validation;
-- annotator submissions;
-- gold scoring and overlap agreement;
-- score rebuilding.
-
-`GET /annotation-types` exposes annotation metadata and derived compatible
-modalities. `GET /modalities` exposes modality capabilities.
-
-## 5. Frontend plugins
-
-### MediaPlugin
-
-A media plugin owns everything specific to displaying or uploading one modality:
-
-- accepted browser file types and upload copy;
-- example filename used in gold guidance;
-- supported interaction capabilities;
-- lightweight dataset/review preview;
-- lazy-loaded full annotation renderer.
-
-The full renderer receives only:
-
-```ts
-interface MediaRendererProps {
-  mediaUrl: string;
-  interaction: MediaInteraction;
-}
-```
-
-It must not inspect `label_schema.annotation_type`. It renders the interaction it
-receives or ignores `none`.
-
-### AnnotationPlugin
-
-An annotation plugin owns task-specific behavior:
-
-- answer control and answer summary;
-- initial answer and completeness rules;
-- required media interaction and answer-to-interaction mapping;
-- gold-answer shape, example, guidance, and client validation;
-- optional interactive task preview.
-
-Controls must be controlled React components: read `answer`, and call `onChange`
-with the complete next answer. Do not keep the authoritative answer only in local
-component state.
-
-Client gold validation should mirror the backend for authoring feedback. The
-backend validator remains authoritative and must reject invalid data even if the
-frontend accepted it.
-
-## 6. Add a modality using existing interactions
-
-Use this path for additions such as a new playable temporal-media format.
-
-1. Add its backend descriptor to `backend/modalities.py`.
-2. Create `frontend/src/plugins/media/<modality>.tsx`.
-3. Create the annotation renderer under `frontend/src/components/annotator/`.
-4. Add the plugin to `frontend/src/plugins/media/registry.ts`.
-5. Add any modality-local styling and registry tests.
-6. Run the complete verification commands below.
-
-Minimal frontend plugin:
-
-```tsx
-import { lazy } from "react";
-import type { MediaPlugin, MediaPreviewProps } from "../contracts";
-
-function Preview({ mediaUrl, title }: MediaPreviewProps) {
-  return <MyMediaPreview src={mediaUrl} title={title} />;
-}
-
-export const myMediaPlugin: MediaPlugin = {
-  key: "my-media",
-  name: "My media",
-  accept: ".my-media",
-  uploadTitle: "Choose my media files",
-  uploadHelp: "Supported format description",
-  exampleFilename: "sample.my-media",
-  supportedInteractions: ["none"],
-  AnnotationRenderer: lazy(() => import("../../components/annotator/MyMediaRenderer")),
-  PreviewRenderer: Preview,
-};
-```
-
-Minimal backend descriptor:
+Minimal backend child:
 
 ```py
-"my-media": ModalitySpec("my-media", "My media", ["none"]),
+from typing import Literal
+from pydantic import BaseModel, ConfigDict
+from annotation_types.base_type import BaseAnnotationType
+
+class Config(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    annotation_type: Literal["my_type"]
+    schema_version: Literal[1] = 1
+
+class Answer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: float
+
+class MyType(BaseAnnotationType[Config, Answer]):
+    key = "my_type"
+    name = "My type"
+    schema_version = 1
+    required_interaction = "none"
+    config_model = Config
+    answer_model = Answer
+
+    def _score_pair(self, left, right, config):
+        return max(0.0, 1.0 - abs(left.value - right.value))
 ```
 
-Do not add modality branches to `CreateExperiment`, `Annotator`,
-`ReviewAnnotations`, or `datasetBundle`. If one of those files appears necessary,
-the behavior probably belongs in the media plugin contract instead.
+Register its class in `backend/annotation_types/__init__.py`. Declare
+`required_media_capabilities` when an interaction alone is insufficient; for
+example transcription requires `audio-content`, while spatial children require
+`visual-content`.
 
-## 7. Add an annotation type using an existing interaction
+### Backend answer examples
 
-1. Create `backend/annotation_types/<type>.py` with strict config and answer
-   models plus an `AnnotationTypeSpec` implementation.
-2. Register its instance in `backend/annotation_types/__init__.py`.
-3. Extend `LabelSchema` and `AnnotationAnswer` in frontend annotator types when
-   the stored fields are new.
-4. Create `frontend/src/plugins/annotations/<type>.tsx` implementing every
-   `AnnotationPlugin` field.
-5. Register it in `frontend/src/plugins/annotations/registry.ts`.
-6. Add backend validation/scoring tests and frontend plugin/gold tests.
+Categorical single and multiple choice:
 
-Minimal plugin outline:
+```json
+{ "value": "Good" }
+```
+
+```json
+{ "values": ["Good", "Noisy"] }
+```
+
+Transcription and labeled temporal regions:
+
+```json
+{ "text": "Expected transcript" }
+```
+
+```json
+{
+  "regions": [
+    { "start": 0.5, "end": 2.75, "label": "Speech" }
+  ]
+}
+```
+
+Image bounding box:
+
+```json
+{
+  "boxes": [
+    {
+      "id": "box-1",
+      "label": "Car",
+      "x": 0.1,
+      "y": 0.2,
+      "width": 0.3,
+      "height": 0.4
+    }
+  ]
+}
+```
+
+Video polygon uses the same normalized geometry plus seconds:
+
+```json
+{
+  "polygons": [
+    {
+      "id": "polygon-1",
+      "label": "Person",
+      "time": 1.25,
+      "points": [
+        { "x": 0.1, "y": 0.1 },
+        { "x": 0.7, "y": 0.1 },
+        { "x": 0.4, "y": 0.7 }
+      ]
+    }
+  ]
+}
+```
+
+Coordinates are normalized to `[0, 1]`. Shape IDs are stable and unique within
+an answer. `time` is required when `frame_aware=true` and forbidden otherwise.
+
+## Frontend template lifecycle
+
+All frontend annotation modules inherit
+`frontend/src/plugins/annotations/BaseAnnotationModule.ts`. A child supplies:
+
+- stable `key`, `name`, `schemaVersion`, and `requiredInteraction`;
+- `ConfigurationEditor`, `Control`, and `AnswerView` components;
+- `defaultSchema`, `createInitialAnswer`, and `createInteraction`;
+- `isComplete`, `validateAnswer`, and `createGoldExample`.
+
+The base owns shared gold validation/envelopes, validation formatting, and
+read-only interactions. Registry registration freezes modules and rejects child
+attempts to replace those lifecycle methods. Optional `schemaForContext` adapts
+a schema to modality-owned defaults; the spatial family uses it for timeless
+images and frame-aware video without a coordinator branch.
+
+Use TypeScript module augmentation so new schemas and answers join the open maps
+in `components/annotator/types.ts`. A family base should implement shared UI and
+mapping once; its children should normally declare only key, name, defaults,
+collection field, and tool.
+
+The spatial family demonstrates the intended pattern:
+
+```ts
+class BoundingBoxModule extends SpatialAnnotationModule<"bounding_box"> {
+  readonly key = "bounding_box" as const;
+  readonly name = "Bounding boxes";
+  readonly tool = "bounding_box" as const;
+  readonly collectionField = "boxes";
+  readonly defaultLabel = "Object";
+}
+```
+
+It inherits configuration UI, answer validation, completion, gold guidance,
+summaries, readonly overlays, and stored-answer/interaction conversion.
+
+## Media plugins and interaction context
+
+A `MediaPlugin` declares upload MIME types, copy, example filename, supported
+interactions, lightweight preview, lazy full renderer, and `moduleContext`.
 
 ```tsx
-export const myAnnotationPlugin: AnnotationPlugin = {
-  key: "my-annotation",
-  description: mediaName => `Annotate ${mediaName.toLowerCase()}`,
-  requiredInteraction: "none",
-  Control: MyAnswerControl,
-  AnswerView: MyAnswerView,
-  createInitialAnswer: () => ({}),
-  createInteraction: () => ({ kind: "none" }),
-  isComplete: (_schema, answer) => /* boolean */,
-  validateGold: (answer, schema) => /* string[] */,
-  goldAnswerShape: () => "{ ... }",
-  createGoldExample: schema => ({ /* valid example */ }),
+export const imagePlugin: MediaPlugin = {
+  key: "image",
+  name: "Image",
+  accept: "image/png,image/jpeg,image/webp",
+  uploadTitle: "Choose image files",
+  uploadHelp: "PNG, JPEG, or WebP images",
+  exampleFilename: "image.jpg",
+  moduleContext: { interactionDefaults: { frame_aware: false } },
+  supportedInteractions: ["none", "spatial-shapes"],
+  AnnotationRenderer: lazy(() => import("../../components/annotator/ImageMediaRenderer")),
+  PreviewRenderer: ImagePreview,
 };
 ```
 
-The current experiment builder has shared support for choice-based schemas via
-`choices` and `multi_select`. If a new type needs fundamentally different
-configuration, first add a typed configuration-editor hook to
-`AnnotationPlugin`; keep that configuration UI inside the plugin rather than
-adding a type check to the wizard.
+Renderers receive only `{ mediaUrl, interaction }`; they never inspect the
+annotation key. Image and video both consume `spatial-shapes`. Video enriches it
+with playback time and visibility filtering; image renders timeless shapes.
 
-## 8. Add a new interaction capability
+Compatibility requires all of the following:
 
-This is intentionally a wider change because it creates a new language between
-annotation and media plugins. Examples are bounding boxes and text ranges.
-
-1. Add a discriminated variant to `MediaInteraction` in `contracts.ts`.
-2. Add its string to the backend modality descriptors that can render it.
-3. Set the new annotation type's `required_interaction` on both backend and
-   frontend implementations.
-4. Implement the interaction in each supporting media renderer.
-5. Test compatible and incompatible modality/task pairs.
-
-Example shape:
-
-```ts
-type MediaInteraction =
-  | { kind: "none" }
-  | { kind: "temporal-regions"; regions: TemporalRegion[]; onChange: (...) => void }
-  | { kind: "spatial-shapes"; shapes: SpatialShape[]; onChange: (...) => void };
+```text
+annotation.requiredInteraction is supported by modality
+annotation.requiredMediaCapabilities are a subset of modality capabilities
+modality is marked available
+frontend media and annotation registries contain matching implementations
 ```
 
-Keep variants explicit and serializable except for their event callbacks. Avoid
-generic `Record<string, unknown>` interaction payloads because they remove
-exhaustive TypeScript checks.
+## Adding an annotation child using an existing interaction
 
-## 9. Modification rules
+1. Write failing backend config, answer, gold, and agreement tests.
+2. Add strict Pydantic models and a `BaseAnnotationType` child or family child.
+3. Register the backend class and assert modality capability resolution.
+4. Write failing frontend default/config/gold/interaction tests.
+5. Add a `BaseAnnotationModule` child and augment the schema/answer maps.
+6. Register the frontend instance. Do not edit shared screens.
+7. Add an API integration scenario covering create → gold manifest → two
+   annotators → review → export.
 
-When changing an existing modality:
+If step 6 requires a concrete key branch in `main.py`, `CreateExperiment.tsx`,
+`Annotator.tsx`, `ReviewAnnotations.tsx`, or `ExperimentAnnotators.tsx`, stop:
+the base/family contract is missing a hook.
 
-- preserve its `key`;
-- keep preview and annotation rendering behavior inside its plugin/renderer;
-- do not change annotation answer shapes unless the annotation type itself is
-  changing;
-- update `supportedInteractions` in frontend and backend together;
-- test every annotation type requiring a changed capability.
+## Adding a new interaction
 
-When changing an annotation type:
+A genuinely new gesture/rendering language is a framework change:
 
-- treat stored schemas and answers as versioned data contracts;
-- update config, normal answer, and gold-answer validation together;
-- update gold and agreement scoring together where semantics change;
-- ensure old experiments either remain valid or receive an explicit migration;
-- keep frontend validation, example payloads, summaries, and controls aligned.
+1. define a discriminated `MediaInteraction` variant in `contracts.ts`;
+2. implement pure state/coordinate helpers and tests;
+3. build an editable/read-only renderer;
+4. declare it on every capable frontend media plugin and backend modality;
+5. create child modules that translate stored answers to/from the interaction;
+6. integrate modality-owned defaults through `moduleContext`;
+7. verify authoring, runtime, review overlay, gold scoring, and export.
 
-## 10. Testing checklist
+Do not use an untyped `Record<string, unknown>` interaction payload. Exhaustive
+discriminated unions are what make renderer changes safe.
 
-Backend unit tests:
+## Scoring implementations
+
+- categorical single: exact equality;
+- categorical multi: Jaccard similarity;
+- transcription: normalized word edit similarity;
+- temporal: greedy labeled interval IoU;
+- diarization: label-cluster alignment followed by interval matching;
+- boxes/polygons/ellipses: IoU;
+- polylines: symmetric point-to-segment similarity;
+- keypoints: normalized Euclidean similarity;
+- spatial collections: deterministic greedy same-label matching with unmatched
+  penalties and optional timestamp tolerance.
+
+Shapely is used only in pure backend geometry scoring. Frontend SVG state remains
+dependency-free.
+
+## Verification checklist
 
 ```bash
 cd backend
 UV_CACHE_DIR=/tmp/annotate-it-uv-cache uv run python -m unittest discover -s tests -v
-```
 
-Frontend tests and production build:
+DATABASE_URL=postgresql://annotate_user:annotate_password@localhost:5433/annotate_db \
+RUN_INTEGRATION=1 UV_CACHE_DIR=/tmp/annotate-it-uv-cache \
+uv run python -m unittest discover -s tests -v
 
-```bash
-cd frontend
+cd ../frontend
 npm test
 npm run build
 ```
 
-With local PostgreSQL and MinIO available, run the integration suite:
-
-```bash
-cd backend
-DATABASE_URL=postgresql://annotate_user:annotate_password@localhost:5433/annotate_db \
-RUN_INTEGRATION=1 UV_CACHE_DIR=/tmp/annotate-it-uv-cache \
-uv run python -m unittest discover -s tests -v
-```
-
-Manually verify this full path with a real media file:
-
-1. Select the modality and a compatible annotation type.
-2. Upload media, metadata, and gold answers.
-3. Confirm dataset preview playback/rendering.
-4. Deploy and submit an annotation through the public link.
-5. Confirm the creator review renders the media and answer correctly.
-6. Confirm gold and agreement scores still update.
-
-## 11. Definition of done
-
-A modality addition is complete when it needs only its frontend plugin/renderer,
-backend descriptor, local styles, and tests. Existing shared screens should not
-change.
-
-An annotation-type addition is complete when normal answers and gold answers use
-the same documented schema, API validation rejects malformed answers, scoring is
-deterministic, compatible modalities are derived correctly, and all designer,
-annotator, review, and export paths understand the new plugin through the
-registry.
+Also manually test pointer accuracy at multiple viewport sizes, image aspect
+ratios, video seeks, and browser zoom levels. Unit tests prove transformations;
+they cannot prove the feel of drawing controls.

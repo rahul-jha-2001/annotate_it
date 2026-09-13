@@ -51,6 +51,7 @@ class TranscriptionAnnotationTests(unittest.TestCase):
         self.assertIsInstance(get_type("transcription"), TranscriptionType)
         self.assertIn("transcription", get_valid_types_for_modality("audio"))
         self.assertIn("transcription", get_valid_types_for_modality("video"))
+        self.assertNotIn("transcription", get_valid_types_for_modality("image"))
 
 
 if __name__ == "__main__":

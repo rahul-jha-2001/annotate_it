@@ -15,7 +15,10 @@ For implementation checklists and extension examples, see
   Clerk's Python SDK for FastAPI session-token verification
 - **Audio annotation UI**: wavesurfer.js (waveform render + region/point selection)
 - **Video annotation UI**: native browser video playback with plugin-owned temporal region controls
-- **Image annotation UI** (stretch, not v1 blocking): Konva.js / react-konva for bbox/polygon
+- **Image/spatial annotation UI**: dependency-free SVG overlay with normalized
+  coordinates, immutable editing state, and shared image/video tools
+- **Spatial scoring**: Shapely-backed polygon/ellipse geometry plus deterministic
+  pure matching functions
 - **Live dashboard updates**: polling (3–5s interval) against derived scoring tables — no websockets in v1
 - **Repo layout**: monorepo
   ```
@@ -32,21 +35,25 @@ must not switch directly on modality or annotation-type strings.
 
 Frontend media plugins live under `frontend/src/plugins/media/` and declare a
 stable key, display name, upload rules, supported interactions, dataset/review
-preview, and lazy-loaded annotator renderer. Frontend annotation plugins live
-under `frontend/src/plugins/annotations/` and declare their required interaction,
-answer control, completeness check, answer summary, initial state, gold format,
-validation, examples, and answer-to-media interaction mapping.
+preview, lazy-loaded annotator renderer, and modality-owned module defaults.
+Frontend annotation modules inherit `BaseAnnotationModule` and declare their
+required interaction, configuration editor, answer control, completeness check,
+answer summary, initial state, gold format, validation, examples, and
+answer-to-media interaction mapping. The base owns shared lifecycle behavior and
+the registry rejects child overrides of protected public operations.
 
 The coordinator passes a discriminated `MediaInteraction` to the selected media
 renderer. A segment task therefore produces `temporal-regions` without knowing
 whether audio or video renders it. Audio and video consume that interaction
 without knowing the task's answer schema.
 
-Backend modalities are registered in `backend/modalities.py` with their
-supported interactions. Backend annotation specs declare one
-`required_interaction`; compatible modalities are derived rather than repeated
-inside every annotation type. The backend remains authoritative for experiment,
-answer, gold, and compatibility validation.
+Backend modalities are registered in `backend/modalities.py` with interactions
+and media capabilities. Backend annotation classes inherit the generic
+`BaseAnnotationType`; the base owns schema-version handling, strict parsing,
+normal/gold validation, finite bounded scoring, pairwise agreement aggregation,
+and catalog output. Children implement protected semantic/scoring hooks.
+Compatible modalities are derived from required interaction, required media
+capabilities, and implementation availability. The backend remains authoritative.
 
 Architectural invariant:
 
@@ -54,9 +61,11 @@ Architectural invariant:
 > descriptor, and tests, but must not require changes to experiment creation,
 > dataset preview, annotator coordination, or review screens.
 
-Audio and video are the first implemented frontend media plugins. Categorical
-and temporal segment are the first annotation plugins. Heavy annotator renderers
-use `React.lazy`, keeping modality-specific dependencies out of the coordinator.
+Audio, video, and image are implemented media plugins. Annotation children cover
+categorical, transcription, unlabeled/labeled temporal tasks, diarization, and
+five spatial shapes. Shared read-only interactions render selectable gold and
+submission overlays in dataset and review workflows. Heavy renderers use
+`React.lazy`, keeping modality dependencies out of coordinators.
 
 ## 2. Data model
 
@@ -309,11 +318,15 @@ updates it as the annotation configuration changes. Supported answer payloads ar
 {"value": "Good"}
 {"values": ["Good", "Noisy"]}
 {"label": "Good", "regions": [{"start": 0.5, "end": 2.75}]}
+{"text": "Expected transcript"}
+{"regions": [{"start": 0.5, "end": 2.75, "label": "Speech"}]}
+{"boxes": [{"id": "box-1", "label": "Car", "x": 0.1, "y": 0.2, "width": 0.3, "height": 0.4}]}
+{"polygons": [{"id": "polygon-1", "label": "Person", "time": 1.25, "points": [{"x": 0.1, "y": 0.1}, {"x": 0.7, "y": 0.1}, {"x": 0.4, "y": 0.7}]}]}
 ```
 
-These represent categorical single-select, categorical multi-select, and audio
-segment answers respectively. Each gold-manifest item wraps one of these answers
-as `{ "filename": "clip.wav", "answer": ... }`.
+These represent categorical single/multi-select, segment, transcription, labeled
+temporal, image-box, and frame-aware video-polygon answers. Each gold-manifest
+item wraps one answer as `{ "filename": "clip.wav", "answer": ... }`.
 
 After preview validation, the draft-first API flow uploads media, registers typed
 metadata, applies gold answers, and only then activates the experiment. Incomplete
@@ -325,10 +338,11 @@ imports therefore remain inaccessible through the public share link.
    configuration and annotator qualification storage.
 2. **Experiment creation** — six-step designer flow, registry-backed task schema,
    dataset bundle validation/preview, presigned uploads, and draft deployment.
-3. **Audio annotation** — anonymous resumable session, qualification onboarding,
-   allocation, categorical/segment controls, and submission validation.
+3. **Annotation runtime** — anonymous resumable session, qualification onboarding,
+   allocation, and plugin controls for audio, video, and image tasks.
 4. **Scoring** — synchronous rolling gold/agreement updates with exact, Jaccard,
-   and temporal-IoU scoring; derived-score rebuild command included.
+   word-edit, temporal-IoU, cluster-aligned, spatial-IoU, path, and keypoint
+   scoring; derived-score rebuild command included.
 5. **Designer operations** — global navigation, polling dashboard, annotator
    pause/resume, and per-sample annotation review.
 6. **Export** — JSON data pack containing experiment configuration, metadata,
@@ -336,6 +350,9 @@ imports therefore remain inaccessible through the public share link.
 7. **Accounts and authorization** — Clerk-hosted authentication, security, and
    profile management; verified session tokens; app-owned user records,
    experiment ownership, protected designer routes, and optional annotator links.
+8. **Extensible module lifecycle** — inherited backend/frontend templates,
+   versioned schemas, capability-derived compatibility, modality context, and
+   editable/read-only shared interactions.
 
 ## 7. Visual system
 

@@ -39,11 +39,12 @@ Build a system where a single designer can:
   security settings, manage connected accounts, and terminate sessions.
 
 ### 4.1 Design an experiment
-- Designer creates an Experiment: name, modality (audio or video), instructions text.
+- Designer creates an Experiment: name, modality (audio, video, or image), instructions text.
 - Designer chooses whether annotators must sign in, provide a guest name, or may
   participate fully anonymously.
-- Designer defines one annotation type and its labels: categorical single-select,
-  categorical multi-select, or temporal segment/region.
+- Designer defines one annotation type and its configuration: categorical,
+  transcription, temporal segment, labeled temporal/diarization, bounding box,
+  polygon, polyline, ellipse, or keypoint.
 - The task step provides an interactive annotator preview and shows the exact
   gold-answer JSON structure required for the current task configuration.
 - Designer imports one dataset bundle consisting of media files, an optional
@@ -81,8 +82,9 @@ Build a system where a single designer can:
   once before receiving work. Required answers are validated, and sample routing
   uses only supported structured answers.
 - Annotator sees instructions, then is served the next unannotated item from their assigned queue (gold items interleaved).
-- Annotator uses plugin-driven media and answer controls: categorical choices or
-  labeled time regions over audio/video, then submits.
+- Annotator uses plugin-driven media and answer controls: categorical or
+  transcription input, labeled time regions over audio/video, or normalized
+  spatial tools over image/video, then submits.
 - Repeats until their queue is exhausted or they stop.
 - “Anonymous” means no account or name is required, not that activity is discarded. The
   same browser session continues under the same anonymous ID for that experiment.
@@ -100,6 +102,8 @@ Build a system where a single designer can:
 - Designer can manually pause/remove an annotator from the pool (their session stops receiving new items).
 - Designer can open an annotation review view organized by sample, with its media,
   metadata, gold answer, agreement, and every submitted annotation together.
+  Temporal and spatial answers can be selected as read-only overlays without
+  changing the stored submissions.
 
 ### 4.5 Export
 - Designer exports a "data pack": raw data + final annotations + per-item confidence/agreement + provenance (annotator id, timestamp), in a standard format (JSON/JSONL to start).
@@ -120,14 +124,17 @@ Build a system where a single designer can:
 - At least one full experiment can be run end-to-end (design → deploy → share → 3+ real annotators → export) as the acceptance test for this version.
 
 ## 6. Key risks / open questions
-- **Scoring correctness**: categorical exact/Jaccard similarity and temporal IoU
-  must be correctly implemented. Whether to replace pairwise categorical
+- **Scoring correctness**: categorical, word-edit, temporal, and spatial
+  similarity must remain deterministic and bounded. Whether to replace pairwise categorical
   agreement with Cohen/Fleiss kappa after gathering real usage data remains open.
 - **Cold start on agreement**: with few annotators, overlap-based agreement is statistically noisy. v1 should surface confidence/N alongside any agreement score rather than implying false precision.
 - **Ambiguous gold items**: some gold "correct" answers may be genuinely disputable (e.g. audio segment boundary ±200ms). No dispute/appeals flow in v1 — accepted risk, revisit once real usage surfaces this.
-- **Modality depth**: audio and video support categorical and temporal-region
-  tasks. Image/text and spatial/text-range interactions remain later plugins and
-  must preserve the same extension boundary.
+- **Advanced systems**: masks, skeletons, cuboids, tracking, OCR composition,
+  specialized imagery, multi-camera data, and LiDAR require new interaction or
+  storage infrastructure and are tracked in `docs/DEFERRED_ANNOTATION_SYSTEMS.md`.
+- **Browser interaction quality**: normalized SVG math is unit-tested, but drawing
+  ergonomics and coordinate accuracy still require browser-level testing across
+  viewport sizes, zoom levels, and real media.
 
 ## 7. Extensibility requirements
 
@@ -140,3 +147,6 @@ Build a system where a single designer can:
   always authoritative.
 - Runtime third-party modules and microfrontends are out of scope. Plugins are
   internal, build-time modules until independent deployment becomes a real need.
+- Backend and frontend annotation modules inherit shared template lifecycles.
+  Normal child additions implement protected/abstract hooks and may not replace
+  base-owned validation, gold, agreement, or read-only behavior.

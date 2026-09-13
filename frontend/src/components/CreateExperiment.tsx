@@ -12,6 +12,10 @@ import {
   type MetadataFieldDefinition,
   type ParsedDatasetRow,
 } from "./datasetBundle";
+import {
+  isDatasetAssemblyCurrent,
+  schemaFingerprint,
+} from "./experimentDraft";
 
 interface AnnotationTypeInfo {
   key: string;
@@ -73,6 +77,7 @@ export default function CreateExperiment() {
   const [metadataCsv, setMetadataCsv] = useState("");
   const [datasetRows, setDatasetRows] = useState<ParsedDatasetRow[]>([]);
   const [datasetErrors, setDatasetErrors] = useState<string[]>([]);
+  const [assembledSchemaFingerprint, setAssembledSchemaFingerprint] = useState<string | null>(null);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const [questions, setQuestions] = useState<QualificationQuestion[]>([]);
   const [rules, setRules] = useState<RoutingRule[]>([]);
@@ -136,6 +141,10 @@ export default function CreateExperiment() {
   }, [files]);
   const goldCount = datasetRows.filter(row => row.goldAnswer).length;
   const regularCount = datasetRows.length - goldCount;
+  const datasetAssemblyCurrent = isDatasetAssemblyCurrent(
+    assembledSchemaFingerprint,
+    annotationSchema,
+  );
 
   const addQuestion = () => {
     let index = questions.length + 1;
@@ -190,7 +199,7 @@ export default function CreateExperiment() {
     if (step === 0) return Boolean(form.name.trim() && form.instructions.trim());
     if (step === 1) return Boolean(annotationPlugin && currentType && annotationPlugin.validateSchema(annotationSchema).length === 0);
     if (step === 2) return files.length > 0 && duplicateFiles.size === 0;
-    if (step === 3) return datasetErrors.length === 0 && datasetRows.every(row => row.errors.length === 0);
+    if (step === 3) return datasetAssemblyCurrent && datasetRows.length > 0 && datasetErrors.length === 0 && datasetRows.every(row => row.errors.length === 0);
     if (step === 4) return questions.every(question => question.label.trim() && (!question.type.includes("choice") || question.options.length > 0));
     return true;
   })();
@@ -202,6 +211,7 @@ export default function CreateExperiment() {
       setMetadataFields(parsed.metadataFields);
       setDatasetRows(parsed.rows);
       setDatasetErrors(parsed.errors);
+      setAssembledSchemaFingerprint(schemaFingerprint(annotationSchema));
       setRules([]);
       setStep(3);
     } catch (caught) {
@@ -247,6 +257,9 @@ export default function CreateExperiment() {
     try {
       if (!datasetRows.length || datasetErrors.length || datasetRows.some(row => row.errors.length)) {
         throw new Error("Return to the dataset preview and resolve its validation errors");
+      }
+      if (!datasetAssemblyCurrent) {
+        throw new Error("The annotation task changed. Reassemble the dataset so its gold answers are validated against the current task");
       }
       if (form.gold_ratio > 0 && goldCount === 0) {
         throw new Error('Add at least one gold answer or set quality-check frequency to "None"');
@@ -405,6 +418,7 @@ export default function CreateExperiment() {
         </div>}
 
         {step === 3 && <div className="flex-col">
+          {!datasetAssemblyCurrent && <p className="form-error">The annotation task changed after this dataset was assembled. Go back to “Dataset bundle” and select “Assemble &amp; preview” again to revalidate every gold answer.</p>}
           <div className="dataset-summary">
             <div><strong>{datasetRows.length}</strong><span>samples</span></div>
             <div><strong>{metadataFields.length}</strong><span>metadata fields</span></div>

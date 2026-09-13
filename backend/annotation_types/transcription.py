@@ -30,6 +30,7 @@ class TranscriptionType(
     name = "Transcription"
     schema_version = 1
     required_interaction = "none"
+    required_media_capabilities = frozenset({"audio-content"})
     configuration_kind = "text"
     config_model = TranscriptionConfig
     answer_model = TranscriptionAnswer
