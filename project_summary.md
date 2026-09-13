@@ -81,6 +81,9 @@ quality during collection through gold answers and inter-annotator agreement.
 - An inherited frontend annotation template plus typed media/annotation registries centralize upload rules,
   renderers, answer controls, gold examples/validation, summaries, and answer-to-
   media interaction mapping.
+- The frontend base prepares empty or stale coordinator answers from each
+  module's declared initial shape before controls, completion checks, and media
+  interactions run, so switching annotation types cannot crash a child module.
 - Strict, distinct categorical answer models:
   - single-select: `{ "value": "Choice" }`
   - multi-select: `{ "values": ["Choice"] }`

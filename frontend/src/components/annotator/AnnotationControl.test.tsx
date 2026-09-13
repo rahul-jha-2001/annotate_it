@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { isAnswerComplete } from "./AnnotationControl";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+import AnnotationControl, { isAnswerComplete } from "./AnnotationControl";
 import type { LabelSchema } from "./types";
 
 const categorical: LabelSchema = {
@@ -30,5 +32,22 @@ describe("isAnswerComplete", () => {
     };
     expect(isAnswerComplete(schema, { regions: [] })).toBe(false);
     expect(isAnswerComplete(schema, { label: "Good", regions: [] })).toBe(true);
+  });
+
+  it("prepares an empty answer before rendering a labeled temporal child", () => {
+    const schema: LabelSchema = {
+      annotation_type: "sound_event",
+      schema_version: 1,
+      choices: ["Speech", "Music"],
+      allow_custom_labels: false,
+      max_regions: 500,
+    };
+
+    expect(() => renderToStaticMarkup(createElement(AnnotationControl, {
+      schema,
+      answer: {},
+      onChange: vi.fn(),
+    }))).not.toThrow();
+    expect(isAnswerComplete(schema, {})).toBe(false);
   });
 });

@@ -9,6 +9,15 @@ import type {
   TypedAnnotationControlProps,
 } from "../contracts";
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+const hasCompatibleValueShape = (fallback: unknown, candidate: unknown): boolean => {
+  if (Array.isArray(fallback)) return Array.isArray(candidate);
+  if (isRecord(fallback)) return isRecord(candidate);
+  return typeof fallback === typeof candidate;
+};
+
 export abstract class BaseAnnotationModule<
   SchemaT extends BaseAnnotationSchema,
   AnswerT extends object,
@@ -39,6 +48,18 @@ export abstract class BaseAnnotationModule<
   }
 
   abstract createInitialAnswer(schema: SchemaT): AnswerT;
+
+  prepareAnswer(schema: SchemaT, answer: unknown): AnswerT {
+    const initial = this.createInitialAnswer(schema);
+    if (!isRecord(answer)) return initial;
+    return Object.fromEntries(
+      Object.entries(initial).map(([field, fallback]) => [
+        field,
+        hasCompatibleValueShape(fallback, answer[field]) ? answer[field] : fallback,
+      ]),
+    ) as AnswerT;
+  }
+
   abstract createInteraction(
     schema: SchemaT,
     answer: AnswerT,
@@ -76,7 +97,7 @@ export abstract class BaseAnnotationModule<
 
   createReadonlyInteraction(schema: SchemaT, answer: AnswerT): MediaInteraction {
     return {
-      ...this.createInteraction(schema, answer, () => undefined),
+      ...this.createInteraction(schema, this.prepareAnswer(schema, answer), () => undefined),
       readonly: true,
     };
   }
@@ -87,6 +108,7 @@ export abstract class BaseAnnotationModule<
       "formatValidationErrors",
       "createReadonlyInteraction",
       "validateGold",
+      "prepareAnswer",
     ];
     let prototype = Object.getPrototypeOf(this) as object | null;
     while (prototype && prototype !== BaseAnnotationModule.prototype) {
@@ -109,6 +131,10 @@ export abstract class BaseAnnotationModule<
     }
     if (schema.schema_version !== this.schemaVersion) {
       throw new Error(`default schema version does not match module: ${this.key}`);
+    }
+    const initialAnswer = this.createInitialAnswer(schema);
+    if (!isRecord(initialAnswer) || Object.keys(initialAnswer).length === 0) {
+      throw new Error(`initial answer must declare its top-level fields: ${this.key}`);
     }
   }
 }

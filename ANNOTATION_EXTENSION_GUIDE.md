@@ -162,8 +162,11 @@ All frontend annotation modules inherit
 - `defaultSchema`, `createInitialAnswer`, and `createInteraction`;
 - `isComplete`, `validateAnswer`, and `createGoldExample`.
 
-The base owns shared gold validation/envelopes, validation formatting, and
-read-only interactions. Registry registration freezes modules and rejects child
+The base owns answer preparation, shared gold validation/envelopes, validation
+formatting, and read-only interactions. `createInitialAnswer` must declare every
+top-level answer field. The base uses that shape to discard stale fields and
+replace missing or incompatible values before controls, completeness checks, or
+media interactions run. Registry registration freezes modules and rejects child
 attempts to replace those lifecycle methods. Optional `schemaForContext` adapts
 a schema to modality-owned defaults; the spatial family uses it for timeless
 images and frame-aware video without a coordinator branch.

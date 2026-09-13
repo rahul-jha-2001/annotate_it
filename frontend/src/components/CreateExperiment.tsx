@@ -104,6 +104,7 @@ export default function CreateExperiment() {
   });
   const currentType = availableTypes.find(type => type.key === annotationType);
   const annotationPlugin = getAnnotationPlugin(annotationType);
+  const preparedPreviewAnswer = annotationPlugin?.prepareAnswer(annotationSchema, previewAnswer) ?? previewAnswer;
   useEffect(() => {
     const selectedMedia = getMediaPlugin(form.modality);
     setAnnotationSchema(current => {
@@ -376,15 +377,15 @@ export default function CreateExperiment() {
             {annotationPlugin && <annotationPlugin.ConfigurationEditor schema={annotationSchema} onChange={setAnnotationSchema} />}
             <div className="config-preview">
               <span>Interactive annotator preview</span>
-              {annotationPlugin?.PreviewInteractionEditor && <annotationPlugin.PreviewInteractionEditor schema={annotationSchema} answer={previewAnswer} onChange={setPreviewAnswer} />}
+              {annotationPlugin?.PreviewInteractionEditor && <annotationPlugin.PreviewInteractionEditor schema={annotationSchema} answer={preparedPreviewAnswer} onChange={setPreviewAnswer} />}
               <AnnotationControl
                 schema={annotationSchema}
-                answer={previewAnswer}
+                answer={preparedPreviewAnswer}
                 onChange={setPreviewAnswer}
               />
               <div className="preview-payload">
                 <span>Answer payload</span>
-                <code>{JSON.stringify(previewAnswer)}</code>
+                <code>{JSON.stringify(preparedPreviewAnswer)}</code>
               </div>
             </div>
           </div>

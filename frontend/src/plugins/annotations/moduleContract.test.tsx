@@ -78,6 +78,11 @@ describe("annotation module base", () => {
       kind: "none",
       readonly: true,
     });
+    expect(module.prepareAnswer(schema, {})).toEqual({ value: "" });
+    expect(module.prepareAnswer(schema, { value: "ready", stale: true })).toEqual({
+      value: "ready",
+    });
+    expect(module.prepareAnswer(schema, { value: 42 })).toEqual({ value: "" });
   });
 
   it("rejects duplicate keys at the single registry boundary", () => {
@@ -96,6 +101,18 @@ describe("annotation module base", () => {
 
     expect(() => new AnnotationModuleRegistry().register(new InvalidModule())).toThrow(
       /formatValidationErrors/,
+    );
+  });
+
+  it("requires every initial answer to declare its top-level fields", () => {
+    class EmptyInitialAnswerModule extends DummyModule {
+      createInitialAnswer(): DummyAnswer {
+        return {} as DummyAnswer;
+      }
+    }
+
+    expect(() => new AnnotationModuleRegistry().register(new EmptyInitialAnswerModule())).toThrow(
+      /initial answer must declare/,
     );
   });
 });

@@ -89,7 +89,9 @@ export class CategoricalAnnotationModule extends BaseAnnotationModule<Categorica
 
   description(mediaName: string) { return `Choose one or more labels for the whole ${mediaName.toLowerCase()} sample`; }
   defaultSchema(): CategoricalSchema { return { annotation_type: "categorical", schema_version: 1, choices: ["Good", "Noisy", "Unusable"], multi_select: false }; }
-  createInitialAnswer(): CategoricalAnswer { return {}; }
+  createInitialAnswer(schema: CategoricalSchema): CategoricalAnswer {
+    return schema.multi_select ? { values: [] } : { value: "" };
+  }
   createInteraction() { return { kind: "none" as const }; }
   isComplete(schema: CategoricalSchema, answer: CategoricalAnswer) { return schema.multi_select ? (answer.values?.length ?? 0) > 0 : Boolean(answer.value); }
   validateSchema(schema: CategoricalSchema): string[] {

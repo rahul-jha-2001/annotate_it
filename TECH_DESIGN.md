@@ -40,7 +40,10 @@ Frontend annotation modules inherit `BaseAnnotationModule` and declare their
 required interaction, configuration editor, answer control, completeness check,
 answer summary, initial state, gold format, validation, examples, and
 answer-to-media interaction mapping. The base owns shared lifecycle behavior and
-the registry rejects child overrides of protected public operations.
+the registry rejects child overrides of protected public operations. Its
+`prepareAnswer` lifecycle derives a safe render shape from each child's declared
+initial answer, preventing stale or empty coordinator state from leaking into a
+newly selected annotation module.
 
 The coordinator passes a discriminated `MediaInteraction` to the selected media
 renderer. A segment task therefore produces `temporal-regions` without knowing

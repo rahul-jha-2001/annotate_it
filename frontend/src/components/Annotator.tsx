@@ -225,7 +225,8 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
   const compatible = Boolean(
     mediaPlugin && annotationPlugin && supportsAnnotation(mediaPlugin, annotationPlugin.requiredInteraction),
   );
-  const interaction = annotationPlugin?.createInteraction(session.label_schema, answer, setAnswer) ?? { kind: "none" as const };
+  const preparedAnswer = annotationPlugin?.prepareAnswer(session.label_schema, answer) ?? answer;
+  const interaction = annotationPlugin?.createInteraction(session.label_schema, preparedAnswer, setAnswer) ?? { kind: "none" as const };
   const MediaRenderer = mediaPlugin?.AnnotationRenderer;
   return (
     <div className="container animate-fade-in" style={{ width: "100%", maxWidth: "1000px" }}>

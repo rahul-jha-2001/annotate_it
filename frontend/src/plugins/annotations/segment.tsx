@@ -50,7 +50,7 @@ export class SegmentAnnotationModule extends BaseAnnotationModule<SegmentSchema,
 
   description(mediaName: string) { return `Mark labeled time regions in ${mediaName.toLowerCase()}`; }
   defaultSchema(): SegmentSchema { return { annotation_type: "segment", schema_version: 1, choices: ["Region"], multi_select: false }; }
-  createInitialAnswer(): SegmentAnswer { return { regions: [] }; }
+  createInitialAnswer(): SegmentAnswer { return { label: "", regions: [] }; }
   createInteraction(_schema: SegmentSchema, answer: SegmentAnswer, onChange: (answer: SegmentAnswer) => void) {
     return { kind: "temporal-regions" as const, regions: answer.regions, onChange: (regions: TemporalRegion[]) => onChange({ ...answer, regions }) };
   }
