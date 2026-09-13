@@ -371,6 +371,12 @@ input[type="checkbox"], input[type="radio"] {
   user-select: none;
 }
 
+.spatial-media-stage .annotation-video {
+  height: 100%;
+  max-height: none;
+  object-fit: contain;
+}
+
 .spatial-overlay {
   position: absolute;
   inset: 0;
@@ -420,6 +426,19 @@ input[type="checkbox"], input[type="radio"] {
   align-items: flex-start;
   gap: 12px;
   margin-top: 16px;
+}
+
+.video-spatial-controls {
+  display: grid;
+  grid-template-columns: auto minmax(160px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.video-spatial-controls .help-text {
+  grid-column: 1 / -1;
+  margin: 0;
 }
 
 .inline-icon-button {

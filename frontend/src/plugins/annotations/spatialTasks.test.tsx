@@ -13,6 +13,8 @@ describe("image and spatial annotation plugins", () => {
     expect(image.supportedInteractions).toEqual(["none", "spatial-shapes"]);
     expect(supportsAnnotation(image, "temporal-regions")).toBe(false);
     expect(image.moduleContext.interactionDefaults).toMatchObject({ frame_aware: false });
+    expect(supportsAnnotation(getMediaPlugin("video")!, "spatial-shapes")).toBe(true);
+    expect(getMediaPlugin("video")!.moduleContext.interactionDefaults).toMatchObject({ frame_aware: true });
   });
 
   it("registers five inherited spatial children with modality-owned defaults", () => {
