@@ -2,8 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft, BarChart3, RefreshCw } from "lucide-react";
 import { Link } from "wouter";
 import { getAnnotationPlugin } from "../plugins/annotations/registry";
-import { getMediaPlugin } from "../plugins/media/registry";
 import type { AnnotationAnswer } from "./annotator/types";
+import type { LabelSchema } from "./annotator/types";
+import AnnotationOverlaySelector, { buildOverlayOptions } from "./AnnotationOverlaySelector";
 import { apiFetch } from "../api";
 
 interface AnnotationRecord {
@@ -31,7 +32,7 @@ interface ReviewData {
     id: string;
     name: string;
     modality: string;
-    label_schema: { annotation_type: string };
+    label_schema: LabelSchema;
   };
   samples: ReviewSample[];
 }
@@ -60,10 +61,8 @@ export default function ReviewAnnotations({ experimentId }: { experimentId: stri
 
   if (loading) return <div className="container text-center">Loading annotations…</div>;
   if (!data) return <div className="container text-center">{error || "Experiment not found"}</div>;
-  const mediaPlugin = getMediaPlugin(data.experiment.modality);
   const annotationPlugin = getAnnotationPlugin(data.experiment.label_schema.annotation_type);
   const AnswerView = annotationPlugin?.AnswerView;
-  const MediaPreview = mediaPlugin?.PreviewRenderer;
 
   return (
     <div className="container animate-fade-in" style={{ maxWidth: "1200px" }}>
@@ -102,9 +101,17 @@ export default function ReviewAnnotations({ experimentId }: { experimentId: stri
                 </div>
               </div>
 
-              {MediaPreview
-                ? <MediaPreview mediaUrl={sample.media_url} title={sample.filename} />
-                : <p>Unsupported media modality: {data.experiment.modality}</p>}
+              <AnnotationOverlaySelector
+                modality={data.experiment.modality}
+                schema={data.experiment.label_schema}
+                mediaUrl={sample.media_url}
+                title={sample.filename}
+                options={buildOverlayOptions(sample.gold_answer, sample.annotations.map((annotation, index) => ({
+                  id: annotation.id,
+                  label: `Annotation ${index + 1}`,
+                  answer: annotation.answer,
+                })))}
+              />
 
               {Object.keys(sample.metadata).length > 0 && (
                 <div className="sample-metadata" style={{ marginBottom: "20px" }}>

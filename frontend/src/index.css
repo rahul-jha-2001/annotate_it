@@ -441,6 +441,25 @@ input[type="checkbox"], input[type="radio"] {
   margin: 0;
 }
 
+.annotation-overlay-review {
+  margin-bottom: 20px;
+}
+
+.annotation-overlay-review .media-annotation-panel {
+  margin-bottom: 0 !important;
+}
+
+.overlay-selector-label {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 320px);
+  align-items: center;
+  justify-content: end;
+  gap: 10px;
+  margin-bottom: 10px;
+  color: var(--text-secondary);
+  font-size: 0.86rem;
+}
+
 .inline-icon-button {
   display: inline-flex;
   padding: 0;

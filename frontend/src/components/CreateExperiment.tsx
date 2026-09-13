@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, Plus, Settings, Trash2, UploadCloud } from "lucide-react";
 import AnnotationControl from "./annotator/AnnotationControl";
 import type { AnnotationAnswer, LabelSchema } from "./annotator/types";
+import AnnotationOverlaySelector, { buildOverlayOptions } from "./AnnotationOverlaySelector";
 import { getAnnotationPlugin } from "../plugins/annotations/registry";
 import { getMediaPlugin, listMediaPlugins, supportsAnnotation } from "../plugins/media/registry";
 import { apiFetch } from "../api";
@@ -414,7 +415,10 @@ export default function CreateExperiment() {
           <div className="dataset-table-wrap"><table className="dataset-table"><thead><tr><th>Sample</th><th>Preview</th>{metadataFields.map(field => <th key={field.key}>{field.label}</th>)}<th>Gold answer</th><th>Status</th></tr></thead><tbody>
             {datasetRows.map(row => <tr key={row.filename} className={row.errors.length ? "invalid" : ""}>
               <td><strong>{row.filename}</strong></td>
-              <td>{mediaPlugin ? <mediaPlugin.PreviewRenderer mediaUrl={mediaUrls[row.filename]} title={row.filename} /> : <span>Unsupported media</span>}</td>
+              <td>{mediaPlugin ? row.goldAnswer
+                ? <AnnotationOverlaySelector modality={form.modality} schema={annotationSchema} mediaUrl={mediaUrls[row.filename]} title={row.filename} options={buildOverlayOptions(row.goldAnswer as AnnotationAnswer, [])} />
+                : <mediaPlugin.PreviewRenderer mediaUrl={mediaUrls[row.filename]} title={row.filename} />
+                : <span>Unsupported media</span>}</td>
               {metadataFields.map(field => <td key={field.key}>
                 {field.type === "choice" ? <select className="table-input" value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value || undefined)}><option value="">—</option>{field.options.map(option => <option key={option}>{option}</option>)}</select>
                   : field.type === "boolean" ? <select className="table-input" value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value ? event.target.value === "true" : undefined)}><option value="">—</option><option value="true">Yes</option><option value="false">No</option></select>
