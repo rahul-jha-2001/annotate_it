@@ -58,6 +58,7 @@ export interface MediaPlugin {
   uploadTitle: string;
   uploadHelp: string;
   exampleFilename: string;
+  moduleContext: AnnotationModuleContext;
   supportedInteractions: MediaInteractionKind[];
   AnnotationRenderer: LazyExoticComponent<ComponentType<MediaRendererProps>>;
   PreviewRenderer: ComponentType<MediaPreviewProps>;

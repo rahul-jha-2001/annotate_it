@@ -63,7 +63,7 @@ export default function CreateExperiment() {
   });
   const [annotationTypes, setAnnotationTypes] = useState<AnnotationTypeInfo[]>([]);
   const [annotationSchema, setAnnotationSchema] = useState<LabelSchema>(() =>
-    getAnnotationPlugin("categorical")!.defaultSchema({ interactionDefaults: {} }),
+    getAnnotationPlugin("categorical")!.defaultSchema(getMediaPlugin("audio")!.moduleContext),
   );
   const annotationType = annotationSchema.annotation_type;
   const [previewAnswer, setPreviewAnswer] = useState<AnnotationAnswer>({});
@@ -99,11 +99,20 @@ export default function CreateExperiment() {
   const currentType = availableTypes.find(type => type.key === annotationType);
   const annotationPlugin = getAnnotationPlugin(annotationType);
   useEffect(() => {
+    const selectedMedia = getMediaPlugin(form.modality);
+    setAnnotationSchema(current => {
+      const selectedModule = getAnnotationPlugin(current.annotation_type);
+      return selectedMedia && selectedModule
+        ? selectedModule.schemaForContext(current, selectedMedia.moduleContext)
+        : current;
+    });
+  }, [form.modality]);
+  useEffect(() => {
     if (availableTypes.length && !availableTypes.some(type => type.key === annotationType)) {
       const next = getAnnotationPlugin(availableTypes[0].key);
-      if (next) setAnnotationSchema(next.defaultSchema({ interactionDefaults: {} }));
+      if (next && mediaPlugin) setAnnotationSchema(next.defaultSchema(mediaPlugin.moduleContext));
     }
-  }, [annotationType, availableTypes]);
+  }, [annotationType, availableTypes, mediaPlugin]);
   useEffect(() => {
     setPreviewAnswer(annotationPlugin?.createInitialAnswer(annotationSchema) ?? {});
   }, [annotationPlugin, annotationSchema]);
@@ -349,7 +358,7 @@ export default function CreateExperiment() {
 
         {step === 1 && <div className="task-config-layout">
           <div className="flex-col">
-            <div className="task-type-grid">{availableTypes.map(type => { const plugin = getAnnotationPlugin(type.key); return <button type="button" key={type.key} className={`task-type-card ${annotationType === type.key ? "selected" : ""}`} onClick={() => { if (plugin) setAnnotationSchema(plugin.defaultSchema({ interactionDefaults: {} })); }}><strong>{type.name}</strong><span>{plugin?.description(mediaPlugin?.name ?? "media")}</span></button>; })}</div>
+            <div className="task-type-grid">{availableTypes.map(type => { const plugin = getAnnotationPlugin(type.key); return <button type="button" key={type.key} className={`task-type-card ${annotationType === type.key ? "selected" : ""}`} onClick={() => { if (plugin && mediaPlugin) setAnnotationSchema(plugin.defaultSchema(mediaPlugin.moduleContext)); }}><strong>{type.name}</strong><span>{plugin?.description(mediaPlugin?.name ?? "media")}</span></button>; })}</div>
             {annotationPlugin && <annotationPlugin.ConfigurationEditor schema={annotationSchema} onChange={setAnnotationSchema} />}
             <div className="config-preview">
               <span>Interactive annotator preview</span>

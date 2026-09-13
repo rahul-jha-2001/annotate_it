@@ -345,6 +345,75 @@ input[type="checkbox"], input[type="radio"] {
   background: #102a32;
 }
 
+.image-preview {
+  display: block;
+  max-width: 260px;
+  max-height: 180px;
+  object-fit: contain;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+
+.spatial-media-stage {
+  position: relative;
+  width: 100%;
+  max-height: 70vh;
+  overflow: hidden;
+  border-radius: 12px;
+  background: #102a32;
+}
+
+.annotation-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+}
+
+.spatial-overlay {
+  position: absolute;
+  inset: 0;
+  outline: none;
+}
+
+.spatial-overlay:focus-visible {
+  box-shadow: inset 0 0 0 3px var(--accent-primary);
+}
+
+.spatial-overlay-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.spatial-shape {
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  cursor: move;
+}
+
+.spatial-shape.selected {
+  stroke-width: 4;
+}
+
+.spatial-draft {
+  stroke-width: 2;
+  stroke-dasharray: 7 5;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.spatial-resize-handle {
+  fill: white;
+  stroke: var(--accent-strong);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  cursor: nwse-resize;
+}
+
 .video-region-editor {
   display: flex;
   flex-direction: column;

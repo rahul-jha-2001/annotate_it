@@ -149,14 +149,14 @@ class SpatialAnnotationTests(unittest.TestCase):
         self.assertEqual(module.gold_match(at_one, at_nearby, video_config), 1.0)
         self.assertEqual(module.gold_match(at_one, at_later, video_config), 0.0)
 
-    def test_capabilities_keep_spatial_types_off_audio_and_unready_image(self):
+    def test_capabilities_resolve_spatial_types_for_image_and_video_but_not_audio(self):
         expected = {task.key for task in (task_type() for task_type in SPATIAL_TASK_TYPES)}
         self.assertTrue(expected.issubset(set(get_valid_types_for_modality("video"))))
         self.assertTrue(expected.isdisjoint(set(get_valid_types_for_modality("audio"))))
-        self.assertEqual(get_valid_types_for_modality("image"), [])
+        self.assertTrue(expected.issubset(set(get_valid_types_for_modality("image"))))
         self.assertIn("spatial-shapes", get_modality("image").supported_interactions)
         for key in expected:
-            self.assertEqual(get_compatible_modalities(get_type(key)), ["video"])
+            self.assertEqual(get_compatible_modalities(get_type(key)), ["video", "image"])
 
 
 if __name__ == "__main__":

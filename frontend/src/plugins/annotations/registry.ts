@@ -3,6 +3,7 @@ import { categoricalPlugin } from "./categorical";
 import { segmentPlugin } from "./segment";
 import { transcriptionPlugin } from "./transcription";
 import { temporalTaskModules } from "./temporalTasks";
+import { spatialTaskModules } from "./spatialTasks";
 
 type AnyAnnotationModule = BaseAnnotationModule<any, any>;
 
@@ -33,6 +34,7 @@ registry.register(categoricalPlugin);
 registry.register(segmentPlugin);
 registry.register(transcriptionPlugin);
 temporalTaskModules.forEach(module => registry.register(module));
+spatialTaskModules.forEach(module => registry.register(module));
 
 export const annotationPlugins: Record<string, AnyAnnotationModule> = Object.fromEntries(
   registry.values().map(module => [module.key, module]),

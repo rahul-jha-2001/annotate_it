@@ -33,6 +33,11 @@ export abstract class BaseAnnotationModule<
   }
 
   abstract defaultSchema(context: AnnotationModuleContext): SchemaT;
+
+  schemaForContext(schema: SchemaT, _context: AnnotationModuleContext): SchemaT {
+    return schema;
+  }
+
   abstract createInitialAnswer(schema: SchemaT): AnswerT;
   abstract createInteraction(
     schema: SchemaT,

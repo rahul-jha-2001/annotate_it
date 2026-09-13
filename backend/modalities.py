@@ -14,7 +14,7 @@ class ModalitySpec:
 REGISTRY: Dict[str, ModalitySpec] = {
     "audio": ModalitySpec("audio", "Audio", ["none", "temporal-regions", "labeled-temporal-regions"], True, frozenset({"audio-content"})),
     "video": ModalitySpec("video", "Video", ["none", "temporal-regions", "labeled-temporal-regions", "spatial-shapes"], True, frozenset({"audio-content", "visual-content"})),
-    "image": ModalitySpec("image", "Image", ["none", "spatial-shapes"], False, frozenset({"visual-content"})),
+    "image": ModalitySpec("image", "Image", ["none", "spatial-shapes"], True, frozenset({"visual-content"})),
     "text": ModalitySpec("text", "Text", ["none", "text-ranges"], False, frozenset({"text-content"})),
 }
 

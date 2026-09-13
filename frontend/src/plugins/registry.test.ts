@@ -24,8 +24,8 @@ describe("plugin compatibility", () => {
     ]));
   });
 
-  it("exposes audio and video without changing screen coordinators", () => {
-    expect(listMediaPlugins().map(plugin => plugin.key)).toEqual(["audio", "video"]);
+  it("exposes registered media without changing screen coordinators", () => {
+    expect(listMediaPlugins().map(plugin => plugin.key)).toEqual(["audio", "video", "image"]);
     expect(getMediaPlugin("video")?.accept).toBe("video/*");
   });
 
