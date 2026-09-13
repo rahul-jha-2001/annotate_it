@@ -1,5 +1,6 @@
 import type { ComponentType, LazyExoticComponent } from "react";
 import type { AnnotationAnswer, LabelSchema } from "../components/annotator/types";
+import type { SpatialShape, SpatialTool } from "./spatial/types";
 
 export interface TemporalRegion {
   start: number;
@@ -23,6 +24,18 @@ export type MediaInteraction =
       regions: LabeledTemporalRegion[];
       newRegionLabel: string;
       onChange: (regions: LabeledTemporalRegion[]) => void;
+      readonly?: boolean;
+    }
+  | {
+      kind: "spatial-shapes";
+      tool: SpatialTool;
+      shapes: SpatialShape[];
+      newShapeLabel: string;
+      frameAware: boolean;
+      timeTolerance: number;
+      creationTime?: number;
+      canCreate?: boolean;
+      onChange: (shapes: SpatialShape[]) => void;
       readonly?: boolean;
     };
 
