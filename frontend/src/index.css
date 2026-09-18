@@ -297,6 +297,85 @@ input[type="checkbox"], input[type="radio"] {
   margin-bottom: 18px;
 }
 
+.review-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 0 0 20px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.review-filter-summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.review-filter-summary strong {
+  color: var(--text-primary);
+  font-size: 1.35rem;
+}
+
+.review-filter-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+
+.review-filter-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 11px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.review-filter-tabs button:hover {
+  color: var(--text-primary);
+  background: rgba(146, 238, 255, 0.22);
+}
+
+.review-filter-tabs button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(48, 175, 255, 0.2);
+}
+
+.review-filter-tabs button[aria-pressed="true"] {
+  color: var(--accent-strong);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.review-filter-tabs button span {
+  min-width: 22px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: inherit;
+  background: rgba(48, 175, 255, 0.12);
+  font-size: 0.76rem;
+  text-align: center;
+}
+
+.review-filter-empty p {
+  margin-bottom: 0;
+}
+
 .sample-number, .annotation-label {
   color: var(--accent-strong);
   font-size: 0.78rem;
@@ -1127,6 +1206,20 @@ summary {
   .page-actions {
     width: 100%;
     flex-wrap: wrap;
+  }
+
+  .review-filter-bar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .review-filter-tabs {
+    width: 100%;
+  }
+
+  .review-filter-tabs button {
+    justify-content: center;
+    flex: 1 0 auto;
   }
 
   .wizard-steps {
