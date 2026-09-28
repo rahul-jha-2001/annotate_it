@@ -24,7 +24,9 @@ from sqlalchemy.orm import Session, selectinload
 from annotation_types import REGISTRY, get_compatible_modalities, get_type, get_valid_types_for_modality
 from auth import get_current_user, get_optional_user, router as auth_router
 from config import (
-    CORS_ORIGINS, MINIO_ACCESS_KEY, MINIO_BUCKET, MINIO_SECRET_KEY, MINIO_URL,
+    AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
+    CORS_ORIGINS, MINIO_ACCESS_KEY, MINIO_BUCKET, MINIO_PUBLIC_URL,
+    MINIO_SECRET_KEY, MINIO_URL, PRESIGNED_URL_EXPIRY_SECONDS, S3_BUCKET, STORAGE_BACKEND,
 )
 from database import get_db
 from modalities import REGISTRY as MODALITY_REGISTRY
@@ -52,11 +54,17 @@ logging.getLogger("uvicorn.access").disabled = True
 async def lifespan(_: FastAPI):
     try:
         s3_client.head_bucket(Bucket=BUCKET_NAME)
-    except Exception:
+        logger.info("Storage bucket '%s' verified.", BUCKET_NAME)
+    except Exception as head_exc:
+        logger.info("Storage bucket '%s' check failed (%s); attempting to create...", BUCKET_NAME, head_exc)
         try:
-            s3_client.create_bucket(Bucket=BUCKET_NAME)
+            kwargs = {"Bucket": BUCKET_NAME}
+            if STORAGE_BACKEND == "s3" and AWS_REGION and AWS_REGION != "us-east-1":
+                kwargs["CreateBucketConfiguration"] = {"LocationConstraint": AWS_REGION}
+            s3_client.create_bucket(**kwargs)
+            logger.info("Created storage bucket '%s'.", BUCKET_NAME)
         except Exception as exc:
-            logger.warning("Could not create object-storage bucket: %s", exc)
+            logger.warning("Could not auto-create bucket '%s' (ensure it exists in S3/MinIO): %s", BUCKET_NAME, exc)
     yield
 
 
@@ -151,12 +159,42 @@ app.add_middleware(
 )
 app.include_router(auth_router)
 
-BUCKET_NAME = MINIO_BUCKET
-s3_client = boto3.client(
-    "s3", endpoint_url=MINIO_URL, aws_access_key_id=MINIO_ACCESS_KEY,
-    aws_secret_access_key=MINIO_SECRET_KEY,
-    config=Config(signature_version="s3v4"),
-)
+BUCKET_NAME = S3_BUCKET
+
+if STORAGE_BACKEND == "s3":
+    logger.info("Initializing storage with native AWS S3 (region: %s, bucket: %s)", AWS_REGION, BUCKET_NAME)
+    s3_kwargs = {
+        "region_name": AWS_REGION,
+        "config": Config(signature_version="s3v4"),
+    }
+    if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY:
+        s3_kwargs["aws_access_key_id"] = AWS_ACCESS_KEY_ID
+        s3_kwargs["aws_secret_access_key"] = AWS_SECRET_ACCESS_KEY
+    if AWS_SESSION_TOKEN:
+        s3_kwargs["aws_session_token"] = AWS_SESSION_TOKEN
+
+    s3_client = boto3.client("s3", **s3_kwargs)
+    s3_presign_client = s3_client
+else:
+    logger.info("Initializing storage with MinIO endpoint: %s (bucket: %s)", MINIO_URL, BUCKET_NAME)
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=MINIO_URL,
+        aws_access_key_id=MINIO_ACCESS_KEY,
+        aws_secret_access_key=MINIO_SECRET_KEY,
+        config=Config(signature_version="s3v4"),
+    )
+    s3_presign_client = (
+        boto3.client(
+            "s3",
+            endpoint_url=MINIO_PUBLIC_URL,
+            aws_access_key_id=MINIO_ACCESS_KEY,
+            aws_secret_access_key=MINIO_SECRET_KEY,
+            config=Config(signature_version="s3v4"),
+        )
+        if MINIO_PUBLIC_URL and MINIO_PUBLIC_URL != MINIO_URL
+        else s3_client
+    )
 
 
 def generate_share_token() -> str:
@@ -190,13 +228,33 @@ def get_owned_experiment(
     return experiment
 
 
-def generate_media_url(raw_uri: str) -> str:
-    object_key = raw_uri.replace(f"s3://{BUCKET_NAME}/", "", 1)
-    return s3_client.generate_presigned_url(
-        "get_object",
-        Params={"Bucket": BUCKET_NAME, "Key": object_key},
-        ExpiresIn=3600,
-    )
+def parse_s3_uri(raw_uri: str) -> tuple[str, str]:
+    """Extract bucket and key from an S3 URI (s3://bucket/key) or relative key."""
+    if raw_uri.startswith("s3://"):
+        remainder = raw_uri[5:]
+        if "/" in remainder:
+            bucket, key = remainder.split("/", 1)
+            return bucket, key
+        return remainder, ""
+    return BUCKET_NAME, raw_uri.lstrip("/")
+
+
+def generate_media_url(raw_uri: str, expires_in: int = PRESIGNED_URL_EXPIRY_SECONDS) -> str:
+    """Generate a presigned GET URL for an S3/MinIO item, or return direct URL."""
+    if not raw_uri:
+        return ""
+    if raw_uri.startswith(("http://", "https://")):
+        return raw_uri
+    bucket, object_key = parse_s3_uri(raw_uri)
+    try:
+        return s3_presign_client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket, "Key": object_key},
+            ExpiresIn=expires_in,
+        )
+    except Exception as exc:
+        logger.error("Failed to generate presigned media URL for %s: %s", raw_uri, exc)
+        return ""
 
 
 def ensure_current_schema(experiment: Experiment) -> None:
@@ -455,16 +513,23 @@ def presign_urls(
     urls = []
     for filename in request.filenames:
         object_key = f"uploads/{uuid.uuid4()}/{filename}"
+        s3_uri = f"s3://{BUCKET_NAME}/{object_key}"
         try:
-            upload_url = s3_client.generate_presigned_url(
+            upload_url = s3_presign_client.generate_presigned_url(
                 "put_object", Params={"Bucket": BUCKET_NAME, "Key": object_key},
-                ExpiresIn=3600,
+                ExpiresIn=PRESIGNED_URL_EXPIRY_SECONDS,
+            )
+            media_url = s3_presign_client.generate_presigned_url(
+                "get_object", Params={"Bucket": BUCKET_NAME, "Key": object_key},
+                ExpiresIn=PRESIGNED_URL_EXPIRY_SECONDS,
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         urls.append(PresignResponseItem(
-            filename=filename, upload_url=upload_url,
-            s3_uri=f"s3://{BUCKET_NAME}/{object_key}",
+            filename=filename,
+            upload_url=upload_url,
+            media_url=media_url,
+            s3_uri=s3_uri,
         ))
     return PresignResponse(urls=urls)
 
@@ -513,7 +578,67 @@ def create_data_units(
         db.add(unit)
         created_units.append(unit)
     db.commit()
-    return {"message": f"Successfully created {len(created_units)} data units."}
+    for unit in created_units:
+        db.refresh(unit)
+    return {
+        "message": f"Successfully created {len(created_units)} data units.",
+        "data_units": [
+            {
+                "id": unit.id,
+                "raw_uri": unit.raw_uri,
+                "media_url": generate_media_url(unit.raw_uri),
+                "is_gold": unit.is_gold,
+            }
+            for unit in created_units
+        ],
+    }
+
+
+@app.get("/experiments/{experiment_id}/data-units/{data_unit_id}/media-url")
+def get_data_unit_media_url(
+    experiment_id: uuid.UUID,
+    data_unit_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    unit = db.query(DataUnit).filter_by(id=data_unit_id, experiment_id=experiment.id).first()
+    if unit is None:
+        raise HTTPException(status_code=404, detail="Data unit not found")
+    return {
+        "data_unit_id": unit.id,
+        "raw_uri": unit.raw_uri,
+        "media_url": generate_media_url(unit.raw_uri),
+    }
+
+
+@app.get("/annotate/{share_token}/items/{data_unit_id}/media-url")
+def get_annotator_item_media_url(
+    share_token: str,
+    data_unit_id: uuid.UUID,
+    session_token: str,
+    db: Session = Depends(get_db),
+):
+    experiment = db.query(Experiment).filter(
+        Experiment.share_token == share_token,
+        Experiment.status != "deleted",
+    ).first()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+    annotator = db.query(Annotator).filter_by(
+        session_token=session_token,
+        experiment_id=experiment.id,
+        status="active",
+    ).first()
+    if annotator is None:
+        raise HTTPException(status_code=401, detail="Invalid or inactive session")
+    unit = db.query(DataUnit).filter_by(id=data_unit_id, experiment_id=experiment.id).first()
+    if unit is None:
+        raise HTTPException(status_code=404, detail="Data unit not found")
+    return {
+        "data_unit_id": unit.id,
+        "media_url": generate_media_url(unit.raw_uri),
+    }
 
 
 @app.post("/experiments/{experiment_id}/gold-manifest")
@@ -1085,8 +1210,12 @@ def export_experiment(
         ],
         "data_units": [
             {
-                "id": unit.id, "raw_uri": unit.raw_uri, "is_gold": unit.is_gold,
-                "gold_answer": unit.gold_answer, "metadata": unit.metadata_json or {},
+                "id": unit.id,
+                "raw_uri": unit.raw_uri,
+                "media_url": generate_media_url(unit.raw_uri),
+                "is_gold": unit.is_gold,
+                "gold_answer": unit.gold_answer,
+                "metadata": unit.metadata_json or {},
                 "agreement": (
                     {"score": unit.agreement.agreement_score, "n_annotations": unit.agreement.n_annotations}
                     if unit.agreement else None

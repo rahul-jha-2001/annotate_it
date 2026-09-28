@@ -174,6 +174,7 @@ class PresignResponseItem(BaseModel):
     filename: str
     upload_url: str
     s3_uri: str
+    media_url: Optional[str] = None
 
 class PresignResponse(BaseModel):
     urls: List[PresignResponseItem]
