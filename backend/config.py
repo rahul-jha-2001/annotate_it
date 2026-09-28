@@ -19,7 +19,8 @@ AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", os.getenv("MINIO_SECR
 AWS_SESSION_TOKEN = os.getenv("AWS_SESSION_TOKEN")
 S3_BUCKET = os.getenv("S3_BUCKET", os.getenv("MINIO_BUCKET", "annotate-it-data"))
 # Optional custom S3 endpoint URL (e.g., local MinIO, LocalStack, or custom VPC endpoint)
-S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", os.getenv("MINIO_URL"))
+_raw_endpoint_url = os.getenv("S3_ENDPOINT_URL", os.getenv("MINIO_URL"))
+S3_ENDPOINT_URL = _raw_endpoint_url.strip() if _raw_endpoint_url and _raw_endpoint_url.strip() else None
 
 PRESIGNED_URL_EXPIRY_SECONDS = int(os.getenv("PRESIGNED_URL_EXPIRY_SECONDS", "3600"))
 CORS_ORIGINS = [
