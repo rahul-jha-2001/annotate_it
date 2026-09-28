@@ -24,7 +24,7 @@ quality during collection through gold answers and inter-annotator agreement.
 
 ### Experiment design and storage
 
-- FastAPI, PostgreSQL, SQLAlchemy, Alembic, and MinIO foundation.
+- FastAPI, PostgreSQL, SQLAlchemy, Alembic, and AWS S3 (with local MinIO support) foundation.
 - Experiment creation with modality, instructions, annotation schema,
   `overlap_n`, `gold_ratio`, and annotator access mode.
 - Owner-only experiment settings allow name and instruction edits at any time.
@@ -34,7 +34,7 @@ quality during collection through gold answers and inter-annotator agreement.
   collected annotations will also disappear from product access. Deletion is
   soft: the experiment receives `status="deleted"` and `deleted_at`, while its
   samples, annotator profiles, annotations, and scores remain retained in PostgreSQL.
-- Direct-to-MinIO uploads through presigned URLs and batch data-unit creation.
+- Direct-to-S3 uploads through presigned URLs and batch data-unit creation.
 - JSON gold-manifest processing with filename matching and per-entry errors.
 - Environment-driven database, object-storage, CORS, and score-window settings.
 - Six-step experiment wizard covering basics, annotation task, a combined dataset
@@ -166,7 +166,7 @@ quality during collection through gold answers and inter-annotator agreement.
   invalid-answer rejection, two-annotator overlap, scoring, dashboard, export,
   annotator summaries and submission drill-down, cross-experiment session isolation,
   draft deployment, qualification onboarding, and metadata-based language routing.
-- The current backend suite contains 21 passing tests when PostgreSQL and MinIO
+- The current backend suite contains 21 passing tests when PostgreSQL and S3/MinIO
   integration services are enabled. The latest Alembic migration passes a full
   downgrade/upgrade cycle and reports no missing schema operations.
 
@@ -182,7 +182,7 @@ quality during collection through gold answers and inter-annotator agreement.
   threshold in addition to the current continuous score.
 - Add image/text media plugins and spatial-shape/text-range annotation plugins
   after validating the audio/video flows with real users.
-- Add browser-level tests for waveform interactions and direct MinIO uploads.
+- Add browser-level tests for waveform interactions and direct S3 uploads.
 - Push metadata filtering into SQL or a dedicated routing index if experiments
   grow beyond the current in-process v1 allocator scale.
 

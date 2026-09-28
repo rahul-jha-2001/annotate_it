@@ -5,7 +5,7 @@ import uuid
 from fastapi.testclient import TestClient
 
 
-@unittest.skipUnless(os.getenv("RUN_INTEGRATION") == "1", "requires local PostgreSQL and MinIO")
+@unittest.skipUnless(os.getenv("RUN_INTEGRATION") == "1", "requires local PostgreSQL and S3/MinIO")
 class ApiIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -316,7 +316,7 @@ npm test
 npm run build
 ```
 
-With local PostgreSQL and MinIO available, run the integration suite:
+With local PostgreSQL and S3/MinIO available, run the integration suite:
 
 ```bash
 cd backend

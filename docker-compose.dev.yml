@@ -1,10 +1,11 @@
 services:
   db:
     image: postgres:15-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: annotate_user
-      POSTGRES_PASSWORD: annotate_password
-      POSTGRES_DB: annotate_db
+      POSTGRES_USER: ${POSTGRES_USER:-annotate_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-annotate_password}
+      POSTGRES_DB: ${POSTGRES_DB:-annotate_db}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:

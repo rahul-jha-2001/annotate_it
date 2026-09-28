@@ -2,10 +2,10 @@
 
 Open three terminals in the repository root.
 
-## 1. Start PostgreSQL and MinIO
+## 1. Start PostgreSQL and MinIO (Local Development)
 
 ```bash
-POSTGRES_PORT=5433 docker compose up -d
+POSTGRES_PORT=5433 docker compose -f docker-compose.dev.yml up -d
 ```
 
 ## 2. Configure Clerk
@@ -71,5 +71,5 @@ Frontend: <http://localhost:5173>
 From the repository root:
 
 ```bash
-POSTGRES_PORT=5433 docker compose down
+POSTGRES_PORT=5433 docker compose -f docker-compose.dev.yml down
 ```

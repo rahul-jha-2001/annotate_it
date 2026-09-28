@@ -25,8 +25,7 @@ from annotation_types import REGISTRY, get_compatible_modalities, get_type, get_
 from auth import get_current_user, get_optional_user, router as auth_router
 from config import (
     AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
-    CORS_ORIGINS, MINIO_ACCESS_KEY, MINIO_BUCKET, MINIO_PUBLIC_URL,
-    MINIO_SECRET_KEY, MINIO_URL, PRESIGNED_URL_EXPIRY_SECONDS, S3_BUCKET, STORAGE_BACKEND,
+    CORS_ORIGINS, PRESIGNED_URL_EXPIRY_SECONDS, S3_BUCKET, S3_ENDPOINT_URL,
 )
 from database import get_db
 from modalities import REGISTRY as MODALITY_REGISTRY
@@ -54,17 +53,17 @@ logging.getLogger("uvicorn.access").disabled = True
 async def lifespan(_: FastAPI):
     try:
         s3_client.head_bucket(Bucket=BUCKET_NAME)
-        logger.info("Storage bucket '%s' verified.", BUCKET_NAME)
+        logger.info("S3 storage bucket '%s' verified.", BUCKET_NAME)
     except Exception as head_exc:
-        logger.info("Storage bucket '%s' check failed (%s); attempting to create...", BUCKET_NAME, head_exc)
+        logger.info("S3 bucket '%s' check failed (%s); attempting to create...", BUCKET_NAME, head_exc)
         try:
             kwargs = {"Bucket": BUCKET_NAME}
-            if STORAGE_BACKEND == "s3" and AWS_REGION and AWS_REGION != "us-east-1":
+            if AWS_REGION and AWS_REGION != "us-east-1" and not S3_ENDPOINT_URL:
                 kwargs["CreateBucketConfiguration"] = {"LocationConstraint": AWS_REGION}
             s3_client.create_bucket(**kwargs)
-            logger.info("Created storage bucket '%s'.", BUCKET_NAME)
+            logger.info("Created S3 storage bucket '%s'.", BUCKET_NAME)
         except Exception as exc:
-            logger.warning("Could not auto-create bucket '%s' (ensure it exists in S3/MinIO): %s", BUCKET_NAME, exc)
+            logger.warning("Could not auto-create S3 bucket '%s' (ensure it exists in AWS S3): %s", BUCKET_NAME, exc)
     yield
 
 
@@ -161,40 +160,19 @@ app.include_router(auth_router)
 
 BUCKET_NAME = S3_BUCKET
 
-if STORAGE_BACKEND == "s3":
-    logger.info("Initializing storage with native AWS S3 (region: %s, bucket: %s)", AWS_REGION, BUCKET_NAME)
-    s3_kwargs = {
-        "region_name": AWS_REGION,
-        "config": Config(signature_version="s3v4"),
-    }
-    if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY:
-        s3_kwargs["aws_access_key_id"] = AWS_ACCESS_KEY_ID
-        s3_kwargs["aws_secret_access_key"] = AWS_SECRET_ACCESS_KEY
-    if AWS_SESSION_TOKEN:
-        s3_kwargs["aws_session_token"] = AWS_SESSION_TOKEN
+s3_kwargs = {
+    "region_name": AWS_REGION,
+    "config": Config(signature_version="s3v4"),
+}
+if S3_ENDPOINT_URL:
+    s3_kwargs["endpoint_url"] = S3_ENDPOINT_URL
+if AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY:
+    s3_kwargs["aws_access_key_id"] = AWS_ACCESS_KEY_ID
+    s3_kwargs["aws_secret_access_key"] = AWS_SECRET_ACCESS_KEY
+if AWS_SESSION_TOKEN:
+    s3_kwargs["aws_session_token"] = AWS_SESSION_TOKEN
 
-    s3_client = boto3.client("s3", **s3_kwargs)
-    s3_presign_client = s3_client
-else:
-    logger.info("Initializing storage with MinIO endpoint: %s (bucket: %s)", MINIO_URL, BUCKET_NAME)
-    s3_client = boto3.client(
-        "s3",
-        endpoint_url=MINIO_URL,
-        aws_access_key_id=MINIO_ACCESS_KEY,
-        aws_secret_access_key=MINIO_SECRET_KEY,
-        config=Config(signature_version="s3v4"),
-    )
-    s3_presign_client = (
-        boto3.client(
-            "s3",
-            endpoint_url=MINIO_PUBLIC_URL,
-            aws_access_key_id=MINIO_ACCESS_KEY,
-            aws_secret_access_key=MINIO_SECRET_KEY,
-            config=Config(signature_version="s3v4"),
-        )
-        if MINIO_PUBLIC_URL and MINIO_PUBLIC_URL != MINIO_URL
-        else s3_client
-    )
+s3_client = boto3.client("s3", **s3_kwargs)
 
 
 def generate_share_token() -> str:
@@ -240,20 +218,20 @@ def parse_s3_uri(raw_uri: str) -> tuple[str, str]:
 
 
 def generate_media_url(raw_uri: str, expires_in: int = PRESIGNED_URL_EXPIRY_SECONDS) -> str:
-    """Generate a presigned GET URL for an S3/MinIO item, or return direct URL."""
+    """Generate an AWS S3 presigned GET URL for an item, or return direct URL."""
     if not raw_uri:
         return ""
     if raw_uri.startswith(("http://", "https://")):
         return raw_uri
     bucket, object_key = parse_s3_uri(raw_uri)
     try:
-        return s3_presign_client.generate_presigned_url(
+        return s3_client.generate_presigned_url(
             "get_object",
             Params={"Bucket": bucket, "Key": object_key},
             ExpiresIn=expires_in,
         )
     except Exception as exc:
-        logger.error("Failed to generate presigned media URL for %s: %s", raw_uri, exc)
+        logger.error("Failed to generate S3 presigned media URL for %s: %s", raw_uri, exc)
         return ""
 
 
@@ -515,11 +493,11 @@ def presign_urls(
         object_key = f"uploads/{uuid.uuid4()}/{filename}"
         s3_uri = f"s3://{BUCKET_NAME}/{object_key}"
         try:
-            upload_url = s3_presign_client.generate_presigned_url(
+            upload_url = s3_client.generate_presigned_url(
                 "put_object", Params={"Bucket": BUCKET_NAME, "Key": object_key},
                 ExpiresIn=PRESIGNED_URL_EXPIRY_SECONDS,
             )
-            media_url = s3_presign_client.generate_presigned_url(
+            media_url = s3_client.generate_presigned_url(
                 "get_object", Params={"Bucket": BUCKET_NAME, "Key": object_key},
                 ExpiresIn=PRESIGNED_URL_EXPIRY_SECONDS,
             )

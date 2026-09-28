@@ -12,25 +12,14 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://annotate_user:annotate_password@localhost:5432/annotate_db",
 )
-# Storage configuration (AWS S3 or MinIO)
-STORAGE_BACKEND = os.getenv(
-    "STORAGE_BACKEND",
-    "s3" if os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_REGION") or os.getenv("S3_BUCKET") else "minio",
-)
-
-# AWS S3 Settings (used when STORAGE_BACKEND is "s3")
+# AWS S3 Object Storage Configuration (with local MinIO endpoint support)
 AWS_REGION = os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
-AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
-AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
+AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID", os.getenv("MINIO_ACCESS_KEY"))
+AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY", os.getenv("MINIO_SECRET_KEY"))
 AWS_SESSION_TOKEN = os.getenv("AWS_SESSION_TOKEN")
 S3_BUCKET = os.getenv("S3_BUCKET", os.getenv("MINIO_BUCKET", "annotate-it-data"))
-
-# MinIO Settings (used when STORAGE_BACKEND is "minio")
-MINIO_URL = os.getenv("MINIO_URL", "http://localhost:9000")
-MINIO_PUBLIC_URL = os.getenv("MINIO_PUBLIC_URL", MINIO_URL)
-MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
-MINIO_BUCKET = S3_BUCKET
+# Optional custom S3 endpoint URL (e.g., local MinIO, LocalStack, or custom VPC endpoint)
+S3_ENDPOINT_URL = os.getenv("S3_ENDPOINT_URL", os.getenv("MINIO_URL"))
 
 PRESIGNED_URL_EXPIRY_SECONDS = int(os.getenv("PRESIGNED_URL_EXPIRY_SECONDS", "3600"))
 CORS_ORIGINS = [
