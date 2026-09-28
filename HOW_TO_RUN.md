@@ -73,3 +73,33 @@ From the repository root:
 ```bash
 POSTGRES_PORT=5433 docker compose -f docker-compose.dev.yml down
 ```
+
+## Docker Deployment (Production / EC2)
+
+You can build and run both the backend and frontend Docker containers for production or EC2 deployment.
+
+### 1. Build Docker Images Directly
+
+```bash
+# Build backend image
+docker build -t annotate-it-backend:latest ./backend
+
+# Build frontend image (optionally pass Clerk publishable key)
+docker build --build-arg VITE_CLERK_PUBLISHABLE_KEY=pk_test_your_key -t annotate-it-frontend:latest ./frontend
+```
+
+### 2. Run with Docker Compose (EC2 / Production Stack)
+
+Use `docker-compose.ec2.yml` to launch PostgreSQL, the migrated FastAPI backend, and Nginx-powered frontend together:
+
+```bash
+# Launch full stack
+docker compose -f docker-compose.ec2.yml up -d --build
+
+# View logs
+docker compose -f docker-compose.ec2.yml logs -f
+
+# Teardown
+docker compose -f docker-compose.ec2.yml down
+```
+
