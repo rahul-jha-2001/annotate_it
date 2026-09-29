@@ -44,6 +44,8 @@ export type MediaInteractionKind = MediaInteraction["kind"];
 export interface MediaRendererProps {
   mediaUrl: string;
   interaction: MediaInteraction;
+  onReady?: () => void;
+  onError?: (message: string) => void;
 }
 
 export interface MediaPreviewProps {

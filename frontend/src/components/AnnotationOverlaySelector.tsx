@@ -1,8 +1,8 @@
 import { Suspense, useEffect, useState } from "react";
 
-import { getAnnotationPlugin } from "../plugins/annotations/registry";
+import { getAnnotationPlugin, supportsAnnotationModule } from "../plugins/annotations/registry";
 import type { MediaInteraction } from "../plugins/contracts";
-import { getMediaPlugin, supportsAnnotation } from "../plugins/media/registry";
+import { getMediaPlugin } from "../plugins/media/registry";
 import type { AnnotationAnswer, LabelSchema } from "./annotator/types";
 
 export interface OverlayOption {
@@ -69,7 +69,7 @@ export default function AnnotationOverlaySelector({
   }, [options, selectedId]);
 
   if (!mediaPlugin) return <code>{selected ? JSON.stringify(selected.answer) : `Unsupported media: ${modality}`}</code>;
-  if (!selected || !annotationPlugin || !interaction || !supportsAnnotation(mediaPlugin, annotationPlugin.requiredInteraction)) {
+  if (!selected || !annotationPlugin || !interaction || !supportsAnnotationModule(mediaPlugin, annotationPlugin)) {
     const Preview = mediaPlugin.PreviewRenderer;
     return <div>
       <Preview mediaUrl={mediaUrl} title={title} />

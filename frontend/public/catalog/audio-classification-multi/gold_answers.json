@@ -1,0 +1,18 @@
+[
+  {
+    "filename": "sample_001.wav",
+    "answer": {
+      "values": [
+        "Speech"
+      ]
+    }
+  },
+  {
+    "filename": "sample_002.wav",
+    "answer": {
+      "values": [
+        "Speech"
+      ]
+    }
+  }
+]

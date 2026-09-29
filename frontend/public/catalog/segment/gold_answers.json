@@ -1,0 +1,26 @@
+[
+  {
+    "filename": "sample_001.wav",
+    "answer": {
+      "label": "Good",
+      "regions": [
+        {
+          "start": 0.5,
+          "end": 2.22
+        }
+      ]
+    }
+  },
+  {
+    "filename": "sample_002.wav",
+    "answer": {
+      "label": "Bad",
+      "regions": [
+        {
+          "start": 0.5,
+          "end": 1.95
+        }
+      ]
+    }
+  }
+]

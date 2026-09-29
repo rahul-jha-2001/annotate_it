@@ -62,6 +62,7 @@ export abstract class LabeledTemporalAnnotationModule<KeyT extends string> exten
   abstract readonly name: string;
   abstract readonly defaultChoices: string[];
   abstract readonly allowCustomLabels: boolean;
+  abstract readonly supportedModalities: readonly string[];
   readonly schemaVersion = 1 as const;
   readonly requiredInteraction = "labeled-temporal-regions" as const;
   readonly ConfigurationEditor = LabeledTemporalConfiguration<KeyT>;

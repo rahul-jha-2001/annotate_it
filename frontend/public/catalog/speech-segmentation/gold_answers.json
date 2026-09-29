@@ -1,0 +1,76 @@
+[
+  {
+    "filename": "recording_001.wav",
+    "answer": {
+      "regions": [
+        {
+          "start": 0,
+          "end": 2.04,
+          "label": "Speech"
+        },
+        {
+          "start": 2.04,
+          "end": 2.67,
+          "label": "Silence"
+        },
+        {
+          "start": 2.67,
+          "end": 4.81,
+          "label": "Speech"
+        },
+        {
+          "start": 4.81,
+          "end": 5.37,
+          "label": "Silence"
+        },
+        {
+          "start": 5.37,
+          "end": 7.3,
+          "label": "Speech"
+        },
+        {
+          "start": 7.3,
+          "end": 8.03,
+          "label": "Silence"
+        }
+      ]
+    }
+  },
+  {
+    "filename": "recording_002.wav",
+    "answer": {
+      "regions": [
+        {
+          "start": 0,
+          "end": 2.45,
+          "label": "Speech"
+        },
+        {
+          "start": 2.45,
+          "end": 3.39,
+          "label": "Silence"
+        },
+        {
+          "start": 3.39,
+          "end": 5.15,
+          "label": "Speech"
+        },
+        {
+          "start": 5.15,
+          "end": 5.9,
+          "label": "Silence"
+        },
+        {
+          "start": 5.9,
+          "end": 7.58,
+          "label": "Speech"
+        },
+        {
+          "start": 7.58,
+          "end": 8.54,
+          "label": "Silence"
+        }
+      ]
+    }
+  }
+]

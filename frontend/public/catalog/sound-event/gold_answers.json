@@ -1,0 +1,46 @@
+[
+  {
+    "filename": "street_001.wav",
+    "answer": {
+      "regions": [
+        {
+          "start": 0.9,
+          "end": 2.65,
+          "label": "Music"
+        },
+        {
+          "start": 1.71,
+          "end": 3.11,
+          "label": "Noise"
+        },
+        {
+          "start": 2.66,
+          "end": 4.47,
+          "label": "Speech"
+        }
+      ]
+    }
+  },
+  {
+    "filename": "street_002.wav",
+    "answer": {
+      "regions": [
+        {
+          "start": 1.61,
+          "end": 3.49,
+          "label": "Noise"
+        },
+        {
+          "start": 0.92,
+          "end": 3.42,
+          "label": "Music"
+        },
+        {
+          "start": 1.83,
+          "end": 3.96,
+          "label": "Noise"
+        }
+      ]
+    }
+  }
+]

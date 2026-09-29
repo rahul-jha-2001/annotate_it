@@ -1,0 +1,60 @@
+[
+  {
+    "filename": "city_001.jpg",
+    "answer": {
+      "polygons": [
+        {
+          "id": "building-1",
+          "label": "Building",
+          "points": [
+            {
+              "x": 0.1,
+              "y": 0.1
+            },
+            {
+              "x": 0.7,
+              "y": 0.1
+            },
+            {
+              "x": 0.75,
+              "y": 0.65
+            },
+            {
+              "x": 0.15,
+              "y": 0.7
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "filename": "city_002.jpg",
+    "answer": {
+      "polygons": [
+        {
+          "id": "building-1",
+          "label": "Building",
+          "points": [
+            {
+              "x": 0.1,
+              "y": 0.1
+            },
+            {
+              "x": 0.7,
+              "y": 0.1
+            },
+            {
+              "x": 0.75,
+              "y": 0.65
+            },
+            {
+              "x": 0.15,
+              "y": 0.7
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

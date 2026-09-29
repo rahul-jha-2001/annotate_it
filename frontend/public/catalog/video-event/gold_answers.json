@@ -1,0 +1,36 @@
+[
+  {
+    "filename": "security_001.mp4",
+    "answer": {
+      "regions": [
+        {
+          "start": 2.42,
+          "end": 2.72,
+          "label": "Object enters"
+        },
+        {
+          "start": 4.51,
+          "end": 4.81,
+          "label": "Object exits"
+        }
+      ]
+    }
+  },
+  {
+    "filename": "security_002.mp4",
+    "answer": {
+      "regions": [
+        {
+          "start": 1.73,
+          "end": 2.03,
+          "label": "Object enters"
+        },
+        {
+          "start": 3.8,
+          "end": 4.1,
+          "label": "Object exits"
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "filename": "sample_001.wav",
+    "answer": {
+      "text": "Hello, how are you?"
+    }
+  },
+  {
+    "filename": "sample_002.wav",
+    "answer": {
+      "text": "The weather is nice today."
+    }
+  }
+]

@@ -3,8 +3,8 @@ import { ArrowLeft, ArrowRight, Check, Plus, Settings, Trash2, UploadCloud } fro
 import AnnotationControl from "./annotator/AnnotationControl";
 import type { AnnotationAnswer, LabelSchema } from "./annotator/types";
 import AnnotationOverlaySelector, { buildOverlayOptions } from "./AnnotationOverlaySelector";
-import { getAnnotationPlugin } from "../plugins/annotations/registry";
-import { getMediaPlugin, listMediaPlugins, supportsAnnotation } from "../plugins/media/registry";
+import { getAnnotationPlugin, supportsAnnotationModule } from "../plugins/annotations/registry";
+import { getMediaPlugin, listMediaPlugins } from "../plugins/media/registry";
 import { apiFetch } from "../api";
 import {
   parseDatasetBundle,
@@ -15,6 +15,7 @@ import {
 import {
   isDatasetAssemblyCurrent,
   schemaFingerprint,
+  resolveExperimentPreset,
 } from "./experimentDraft";
 
 interface AnnotationTypeInfo {
@@ -58,18 +59,17 @@ const routingOperatorFor = (
 
 export default function CreateExperiment() {
   const [step, setStep] = useState(0);
-  const [form, setForm] = useState({
+  const [initialPreset] = useState(() => resolveExperimentPreset(window.location.search));
+  const [form, setForm] = useState(() => ({
     name: "",
-    modality: "audio",
+    modality: initialPreset.modality,
     instructions: "",
     overlap_n: 2,
     gold_ratio: 0.1,
     access_mode: "guest_name",
-  });
+  }));
   const [annotationTypes, setAnnotationTypes] = useState<AnnotationTypeInfo[]>([]);
-  const [annotationSchema, setAnnotationSchema] = useState<LabelSchema>(() =>
-    getAnnotationPlugin("categorical")!.defaultSchema(getMediaPlugin("audio")!.moduleContext),
-  );
+  const [annotationSchema, setAnnotationSchema] = useState<LabelSchema>(() => initialPreset.schema);
   const annotationType = annotationSchema.annotation_type;
   const [previewAnswer, setPreviewAnswer] = useState<AnnotationAnswer>({});
   const [files, setFiles] = useState<File[]>([]);
@@ -99,7 +99,7 @@ export default function CreateExperiment() {
       && mediaPlugin
       && type.required_interaction === plugin.requiredInteraction
       && type.compatible_modalities.includes(form.modality)
-      && supportsAnnotation(mediaPlugin, plugin.requiredInteraction),
+      && supportsAnnotationModule(mediaPlugin, plugin),
     );
   });
   const currentType = availableTypes.find(type => type.key === annotationType);

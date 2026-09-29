@@ -1,6 +1,8 @@
-import type { ConfigurationEditorProps, TypedAnnotationControlProps } from "../contracts";
+import type { AnnotationModuleContext, ConfigurationEditorProps, TypedAnnotationControlProps } from "../contracts";
 import { BaseAnnotationModule } from "./BaseAnnotationModule";
 import { ChoiceConfiguration } from "./categorical";
+import { catalogBundlePaths, catalogSamples, defineCatalogPreset } from "../catalog/fixtures";
+import type { AnnotationCatalogPreset } from "../catalog/types";
 
 export interface TemporalRegion { start: number; end: number }
 export interface SegmentSchema {
@@ -43,10 +45,28 @@ export class SegmentAnnotationModule extends BaseAnnotationModule<SegmentSchema,
   readonly name = "Segment / Region";
   readonly schemaVersion = 1 as const;
   readonly requiredInteraction = "temporal-regions" as const;
+  readonly supportedModalities = ["audio", "video"] as const;
   readonly ConfigurationEditor = SegmentConfiguration;
   readonly Control = SegmentControl;
   readonly AnswerView = SegmentAnswerView;
   readonly goldGuidance = "Region start/end values are seconds, with end greater than start.";
+
+  catalogPresets(_context: AnnotationModuleContext): AnnotationCatalogPreset<SegmentSchema>[] {
+    const slug = "segment";
+    return [defineCatalogPreset({
+      slug, title: "Audio segment labeling",
+      summary: "Choose a label and mark one or more matching time ranges on a waveform.", family: "Temporal",
+      useCases: ["Quality regions", "Highlights", "Defect localization"], modality: "audio",
+      schema: { annotation_type: "segment", schema_version: 1, choices: ["Good", "Bad"], multi_select: false },
+      samples: catalogSamples(slug, [
+        { filename: "sample_001.wav", metadata: { language: "English", difficulty: 1, content_type: "Tone" }, goldAnswer: { label: "Good", regions: [{ start: 0.5, end: 2.22 }] } },
+        { filename: "sample_002.wav", metadata: { language: "English", difficulty: 1, content_type: "Tone" }, goldAnswer: { label: "Bad", regions: [{ start: 0.5, end: 1.95 }] } },
+      ]),
+      metadataDescription: "Language, difficulty, and content type describe each clip.",
+      scoringDescription: "Region overlap and label equality determine gold and annotator agreement scores.",
+      ...catalogBundlePaths(slug),
+    })];
+  }
 
   description(mediaName: string) { return `Mark labeled time regions in ${mediaName.toLowerCase()}`; }
   defaultSchema(): SegmentSchema { return { annotation_type: "segment", schema_version: 1, choices: ["Region"], multi_select: false }; }

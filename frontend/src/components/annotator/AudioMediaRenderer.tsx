@@ -4,12 +4,13 @@ import WaveSurfer from "wavesurfer.js";
 import RegionsPlugin from "wavesurfer.js/dist/plugins/regions.esm.js";
 import type { MediaRendererProps } from "../../plugins/contracts";
 import { labelColor } from "../../plugins/interactions/labelColors";
+import { shouldReportMediaLoadError } from "./mediaLoadError";
 import {
   interactionRegionKey,
   waveformRegionOptions,
 } from "../../plugins/interactions/waveformRegions";
 
-export default function AudioMediaRenderer({ mediaUrl, interaction }: MediaRendererProps) {
+export default function AudioMediaRenderer({ mediaUrl, interaction, onReady, onError }: MediaRendererProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wavesurferRef = useRef<WaveSurfer | null>(null);
   const regionsPluginRef = useRef<ReturnType<typeof RegionsPlugin.create> | null>(null);
@@ -17,12 +18,21 @@ export default function AudioMediaRenderer({ mediaUrl, interaction }: MediaRende
   const regionLabelsRef = useRef(new Map<string, string>());
   const hydratingRegionsRef = useRef(false);
   const interactionRef = useRef(interaction);
+  const onReadyRef = useRef(onReady);
+  const onErrorRef = useRef(onError);
   const [isPlaying, setIsPlaying] = useState(false);
   interactionRef.current = interaction;
+  onReadyRef.current = onReady;
+  onErrorRef.current = onError;
   const regionsEnabled = interaction.kind === "temporal-regions" || interaction.kind === "labeled-temporal-regions";
 
   useEffect(() => {
     if (!containerRef.current) return;
+    let disposed = false;
+    const reportLoadError = (error: unknown) => {
+      if (!shouldReportMediaLoadError(error, disposed)) return;
+      onErrorRef.current?.(error instanceof Error ? error.message : "Audio could not be loaded or decoded.");
+    };
     const wavesurfer = WaveSurfer.create({
       container: containerRef.current,
       waveColor: "#92EEFF",
@@ -72,8 +82,11 @@ export default function AudioMediaRenderer({ mediaUrl, interaction }: MediaRende
     wavesurfer.on("play", () => setIsPlaying(true));
     wavesurfer.on("pause", () => setIsPlaying(false));
     wavesurfer.on("finish", () => setIsPlaying(false));
-    wavesurfer.load(mediaUrl);
+    wavesurfer.on("ready", () => onReadyRef.current?.());
+    wavesurfer.on("error", reportLoadError);
+    void wavesurfer.load(mediaUrl).catch(reportLoadError);
     return () => {
+      disposed = true;
       wavesurfer.destroy();
       wavesurferRef.current = null;
       regionsPluginRef.current = null;

@@ -374,3 +374,14 @@ The frontend uses a light Aqua Lab theme designed for long annotation sessions:
 Large saturated backgrounds are avoided. Cards remain white with subtle borders
 and shadows, tables use low-contrast row differentiation, and the annotator view
 keeps color subordinate to the media and answer controls.
+
+
+## Annotation catalog architecture
+
+Implemented catalog entries are owned by `BaseAnnotationModule.catalogPresets()`. The catalog registry flattens those declarations and rejects blank or duplicate slugs, missing assets, unknown/incompatible modalities, schema key/version mismatches, invalid schemas, duplicate filenames, and invalid gold answers. Categorical can expose multiple presets while retaining one runtime module.
+
+Examples live under `frontend/public/catalog/<slug>/` with media, `metadata.csv`, `gold_answers.json`, and a downloadable ZIP. Catalog pages use same-origin static fetches only; they have no backend, PostgreSQL, MinIO/S3, upload, session, or submission dependency.
+
+`AnnotationExperience` is the shared production composition boundary for both the annotator runtime and catalog preview. It resolves registered annotation/media plugins, prepares the answer, creates the interaction, renders the registered media renderer and control, and contains media failures behind a retryable local boundary. Catalog answer state exists only in the detail component.
+
+Both catalog routes use the existing Clerk `Protected` boundary. Creation links send `modality` and `annotation_type`; `resolveExperimentPreset()` accepts the pair only when both plugins exist and their capabilities match, otherwise it applies one atomic default pair.

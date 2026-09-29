@@ -1,5 +1,7 @@
 import type { AnnotationModuleContext, ConfigurationEditorProps, TypedAnnotationControlProps } from "../contracts";
 import { BaseAnnotationModule } from "./BaseAnnotationModule";
+import { catalogBundlePaths, catalogSamples, defineCatalogPreset } from "../catalog/fixtures";
+import type { AnnotationCatalogPreset } from "../catalog/types";
 
 export interface TranscriptionSchema {
   annotation_type: "transcription";
@@ -43,9 +45,26 @@ export class TranscriptionAnnotationModule extends BaseAnnotationModule<Transcri
   readonly name = "Transcription";
   readonly schemaVersion = 1 as const;
   readonly requiredInteraction = "none" as const;
+  readonly supportedModalities = ["audio"] as const;
   readonly ConfigurationEditor = TranscriptionConfiguration;
   readonly Control = TranscriptionControl;
   readonly AnswerView = TranscriptionAnswerView;
+
+  catalogPresets(context: AnnotationModuleContext): AnnotationCatalogPreset<TranscriptionSchema>[] {
+    const slug = "transcription";
+    return [defineCatalogPreset({
+      slug, title: "Audio transcription", summary: "Listen to an audio sample and type the spoken content.", family: "Speech",
+      useCases: ["Speech-to-text evaluation", "Captioning", "Call transcription"], modality: "audio",
+      schema: this.defaultSchema(context),
+      samples: catalogSamples(slug, [
+        { filename: "sample_001.wav", metadata: { language: "English", difficulty: 1, content_type: "Speech" }, goldAnswer: { text: "Hello, how are you?" } },
+        { filename: "sample_002.wav", metadata: { language: "English", difficulty: 1, content_type: "Speech" }, goldAnswer: { text: "The weather is nice today." } },
+      ]),
+      metadataDescription: "Language, difficulty, and content type support qualification-aware routing.",
+      scoringDescription: "Normalized word error rate drives gold and pairwise transcript similarity scores.",
+      ...catalogBundlePaths(slug),
+    })];
+  }
 
   description(mediaName: string) { return `Write the spoken content in this ${mediaName.toLowerCase()} sample`; }
   defaultSchema(_context: AnnotationModuleContext): TranscriptionSchema { return { annotation_type: "transcription", schema_version: 1, case_sensitive: false, collapse_whitespace: true, strip_punctuation: false, minimum_length: 1 }; }

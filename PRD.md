@@ -150,3 +150,10 @@ Build a system where a single designer can:
 - Backend and frontend annotation modules inherit shared template lifecycles.
   Normal child additions implement protected/abstract hooks and may not replace
   base-owned validation, gold, agreement, or read-only behavior.
+
+
+## Annotation Catalog
+
+Authenticated designers need a safe discovery space before committing data to an experiment. The catalog presents modality-first browsing, text search, and cards for every implemented annotation preset. A preset detail page demonstrates the real annotator experience, joins example media with metadata and gold answers, explains scoring, and offers a version-controlled bundle download.
+
+Preview answers are never persisted. Working entries may start the existing experiment wizard with modality and task preselected, while experiment name, instructions, data, qualifications, access, and quality settings remain the designer's responsibility. Planned entries are explicitly marked Coming soon and expose neither preview nor creation actions.

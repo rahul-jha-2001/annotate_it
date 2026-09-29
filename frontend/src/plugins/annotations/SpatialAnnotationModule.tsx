@@ -90,6 +90,7 @@ export abstract class SpatialAnnotationModule<KeyT extends string> extends BaseA
   abstract readonly defaultLabel: string;
   readonly schemaVersion = 1 as const;
   readonly requiredInteraction = "spatial-shapes" as const;
+  readonly supportedModalities = ["image", "video"] as const;
   readonly ConfigurationEditor = SpatialConfiguration<KeyT>;
   readonly Control = SpatialControl<KeyT>;
   readonly AnswerView = SpatialAnswerView;

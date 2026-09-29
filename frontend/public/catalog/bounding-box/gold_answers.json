@@ -1,0 +1,48 @@
+[
+  {
+    "filename": "street_001.jpg",
+    "answer": {
+      "boxes": [
+        {
+          "id": "person-1",
+          "label": "Person",
+          "x": 0.1,
+          "y": 0.15,
+          "width": 0.25,
+          "height": 0.7
+        },
+        {
+          "id": "car-1",
+          "label": "Car",
+          "x": 0.45,
+          "y": 0.5,
+          "width": 0.4,
+          "height": 0.3
+        }
+      ]
+    }
+  },
+  {
+    "filename": "street_002.jpg",
+    "answer": {
+      "boxes": [
+        {
+          "id": "person-1",
+          "label": "Person",
+          "x": 0.1,
+          "y": 0.15,
+          "width": 0.25,
+          "height": 0.7
+        },
+        {
+          "id": "car-1",
+          "label": "Car",
+          "x": 0.45,
+          "y": 0.5,
+          "width": 0.4,
+          "height": 0.3
+        }
+      ]
+    }
+  }
+]

@@ -317,3 +317,18 @@ the same documented schema, API validation rejects malformed answers, scoring is
 deterministic, compatible modalities are derived correctly, and all designer,
 annotator, review, and export paths understand the new plugin through the
 registry.
+
+
+## Making a module discoverable in the catalog
+
+A runtime module is not automatically advertised. To expose it to designers:
+
+1. Return at least one typed preset from the module's `catalogPresets(context)` method. Configurable modules may return multiple presets.
+2. Give every preset a unique slug, title, summary, family, use cases, compatible modality, valid versioned schema, metadata/scoring descriptions, and bundle paths.
+3. Add at least two representative browser-compatible media samples under `frontend/public/catalog/<slug>/media/`.
+4. Add matching UTF-8 `metadata.csv` and `gold_answers.json` files joined by exact filename.
+5. Add `<slug>-example.zip` containing the media directory and both data files.
+6. Ensure every typed and raw gold answer passes the owning module's `validateGold` method and the modality supports `requiredInteraction`.
+7. Run `npm test -- src/plugins/catalog/fixtures.test.ts src/plugins/catalog/registry.test.ts` and `npm run build` from `frontend`.
+
+Do not add an implemented type to `comingSoon.ts`; that manifest is only for concepts without a runnable annotation module. Do not create catalog-specific annotation controls—the preset must render through `AnnotationExperience` and the production registries.

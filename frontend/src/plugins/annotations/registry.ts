@@ -4,6 +4,8 @@ import { segmentPlugin } from "./segment";
 import { transcriptionPlugin } from "./transcription";
 import { temporalTaskModules } from "./temporalTasks";
 import { spatialTaskModules } from "./spatialTasks";
+import type { MediaPlugin } from "../contracts";
+import { supportsAnnotation } from "../media/registry";
 
 type AnyAnnotationModule = BaseAnnotationModule<any, any>;
 
@@ -41,3 +43,6 @@ export const annotationPlugins: Record<string, AnyAnnotationModule> = Object.fro
 );
 export const getAnnotationPlugin = (key: string) => registry.get(key);
 export const listAnnotationModules = () => registry.values();
+export const supportsAnnotationModule = (media: MediaPlugin, module: AnyAnnotationModule) =>
+  module.supportsModality(media.key)
+  && supportsAnnotation(media, module.requiredInteraction);

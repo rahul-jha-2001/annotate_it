@@ -211,3 +211,12 @@ Run one audio, one image, and one video experiment with at least three annotator
 across all access modes. Validate onboarding, spatial coordinate accuracy at
 multiple viewport sizes, temporal/spatial ergonomics, gold cadence, overlay
 review, settings-lock messaging, and whether quality metrics are understandable.
+
+
+### Authenticated annotation catalog
+
+- Signed-in designers can open `/catalog`, filter the 15 implemented presets by Audio, Image, or Video, and search by annotation family and use case.
+- Each working preset has a focused detail page with two curated samples, the production annotation controls and media renderer, raw metadata and gold-answer examples, scoring guidance, and a downloadable example bundle.
+- Catalog interactions are preview-only React state: switching samples, resetting, or leaving the page discards the answer and never calls annotation or submission APIs.
+- LiDAR/3D concepts are shown separately as coming soon and cannot open a preview or create an experiment.
+- A working preset can open the existing experiment wizard with only its validated modality and annotation type preselected; invalid query pairs fall back to the normal audio/categorical defaults.

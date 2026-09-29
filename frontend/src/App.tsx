@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { RedirectToSignIn, useAuth, useClerk, useUser } from "@clerk/react";
 import { Route, Switch, Link, useLocation } from "wouter";
-import { Activity, LayoutDashboard, LogIn, LogOut, Plus, UserRound } from "lucide-react";
+import { Activity, BookOpen, LayoutDashboard, LogIn, LogOut, Plus, UserRound } from "lucide-react";
 import Dashboard from "./components/Dashboard";
 import CreateExperiment from "./components/CreateExperiment";
 import Annotator from "./components/Annotator";
@@ -11,6 +11,8 @@ import Login from "./components/Login";
 import Profile from "./components/Profile";
 import ExperimentAnnotators, { AnnotatorDetail } from "./components/ExperimentAnnotators";
 import ExperimentSettings from "./components/ExperimentSettings";
+import AnnotationCatalog from "./components/catalog/AnnotationCatalog";
+import AnnotationCatalogDetail from "./components/catalog/AnnotationCatalogDetail";
 import { setAuthTokenGetter } from "./api";
 
 function Protected({ children }: { children: ReactNode }) {
@@ -37,6 +39,7 @@ function App() {
         <nav className="app-nav" aria-label="Main navigation">
           {isSignedIn ? <>
             <Link href="/" className="nav-link"><LayoutDashboard size={17} /> Dashboard</Link>
+            <Link href="/catalog" className="nav-link"><BookOpen size={17} /> Annotation Catalog</Link>
             <Link href="/experiments/new" className="nav-link nav-link-primary"><Plus size={17} /> New Experiment</Link>
             <Link href="/profile" className="nav-link"><UserRound size={17} /> {displayName}</Link>
             <button className="nav-link nav-button" onClick={async () => { await signOut(); navigate("/login"); }}><LogOut size={17} /> Sign out</button>
@@ -49,6 +52,10 @@ function App() {
           <Route path="/login"><Login /></Route>
           <Route path="/signup"><Login signup /></Route>
           <Route path="/profile"><Protected><Profile /></Protected></Route>
+          <Route path="/catalog/:presetSlug">
+            {(params) => <Protected><AnnotationCatalogDetail presetSlug={params.presetSlug!} /></Protected>}
+          </Route>
+          <Route path="/catalog"><Protected><AnnotationCatalog /></Protected></Route>
           <Route path="/"><Protected><Dashboard /></Protected></Route>
           <Route path="/experiments/new">
             <Protected><div className="container animate-fade-in">

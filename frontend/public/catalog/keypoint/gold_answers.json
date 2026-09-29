@@ -1,0 +1,52 @@
+[
+  {
+    "filename": "face_001.jpg",
+    "answer": {
+      "keypoints": [
+        {
+          "id": "left-eye-1",
+          "label": "Left eye",
+          "x": 0.38,
+          "y": 0.42
+        },
+        {
+          "id": "right-eye-1",
+          "label": "Right eye",
+          "x": 0.62,
+          "y": 0.42
+        },
+        {
+          "id": "nose-1",
+          "label": "Nose",
+          "x": 0.5,
+          "y": 0.57
+        }
+      ]
+    }
+  },
+  {
+    "filename": "face_002.jpg",
+    "answer": {
+      "keypoints": [
+        {
+          "id": "left-eye-1",
+          "label": "Left eye",
+          "x": 0.38,
+          "y": 0.42
+        },
+        {
+          "id": "right-eye-1",
+          "label": "Right eye",
+          "x": 0.62,
+          "y": 0.42
+        },
+        {
+          "id": "nose-1",
+          "label": "Nose",
+          "x": 0.5,
+          "y": 0.57
+        }
+      ]
+    }
+  }
+]

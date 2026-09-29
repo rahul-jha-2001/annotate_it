@@ -1,0 +1,52 @@
+[
+  {
+    "filename": "road_001.jpg",
+    "answer": {
+      "polylines": [
+        {
+          "id": "lane-1",
+          "label": "Lane",
+          "points": [
+            {
+              "x": 0.1,
+              "y": 0.8
+            },
+            {
+              "x": 0.4,
+              "y": 0.5
+            },
+            {
+              "x": 0.8,
+              "y": 0.2
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "filename": "road_002.jpg",
+    "answer": {
+      "polylines": [
+        {
+          "id": "lane-1",
+          "label": "Lane",
+          "points": [
+            {
+              "x": 0.1,
+              "y": 0.8
+            },
+            {
+              "x": 0.4,
+              "y": 0.5
+            },
+            {
+              "x": 0.8,
+              "y": 0.2
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

@@ -485,11 +485,33 @@ input[type="checkbox"], input[type="radio"] {
   stroke-width: 4;
 }
 
+.spatial-vertex-handle {
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+  cursor: grab;
+}
+
+.spatial-vertex-handle.selected {
+  stroke-width: 3;
+}
+
+.spatial-vertex-handle.readonly {
+  cursor: default;
+}
+
 .spatial-draft {
   stroke-width: 2;
   stroke-dasharray: 7 5;
   vector-effect: non-scaling-stroke;
   pointer-events: none;
+}
+
+.spatial-draft-vertex {
+  fill: white;
+  stroke: var(--accent-strong);
+  stroke-width: 2;
+  stroke-dasharray: none;
+  vector-effect: non-scaling-stroke;
 }
 
 .spatial-resize-handle {

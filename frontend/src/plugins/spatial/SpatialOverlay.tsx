@@ -12,6 +12,7 @@ import { labelColor } from "../interactions/labelColors";
 import { containedMediaRect, mediaPointFromClient, type ContentRect } from "./coordinates";
 import { initialSpatialState, spatialReducer } from "./reducer";
 import type { SpatialAction, SpatialPoint, SpatialShape } from "./types";
+import { moveVertex } from "./vertices";
 
 interface SpatialOverlayProps {
   interaction: Extract<MediaInteraction, { kind: "spatial-shapes" }>;
@@ -21,9 +22,10 @@ interface SpatialOverlayProps {
 }
 
 interface DragState {
-  mode: "create" | "move" | "resize";
+  mode: "create" | "move" | "resize" | "vertex";
   start: SpatialPoint;
   shape?: SpatialShape;
+  vertexIndex?: number;
 }
 
 let fallbackId = 0;
@@ -191,10 +193,28 @@ export default function SpatialOverlay({
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
+  const beginVertexDrag = (event: ReactPointerEvent, shape: Extract<SpatialShape, { kind: "polygon" }>, vertexIndex: number) => {
+    event.stopPropagation();
+    apply({ type: "select", id: shape.id });
+    if (interaction.readonly) return;
+    const point = pointFromEvent(event);
+    if (!point) return;
+    setDrag({ mode: "vertex", start: point, shape, vertexIndex });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
   const moveShape = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (!drag?.shape || drag.mode === "create") return;
     const point = pointFromEvent(event);
     if (!point) return;
+    if (drag.mode === "vertex" && drag.shape.kind === "polygon" && drag.vertexIndex !== undefined) {
+      apply({
+        type: "update",
+        id: drag.shape.id,
+        patch: { points: moveVertex(drag.shape.points, drag.vertexIndex, point) },
+      });
+      return;
+    }
     if (drag.mode === "resize" && (drag.shape.kind === "bounding_box" || drag.shape.kind === "ellipse")) {
       apply({
         type: "update",
@@ -258,29 +278,47 @@ export default function SpatialOverlay({
           const selected = shape.id === state.selectedId;
           const color = labelColor(shape.label);
           const shared = {
-            key: shape.id,
             className: `spatial-shape${selected ? " selected" : ""}`,
             stroke: color,
             fill: labelColor(shape.label, 0.16),
             onPointerDown: (event: ReactPointerEvent) => beginShapeDrag(event, shape),
           };
           if (shape.kind === "bounding_box") {
-            return <rect {...shared} x={x(shape.x)} y={y(shape.y)} width={shape.width * contentRect.width} height={shape.height * contentRect.height} />;
+            return <rect key={shape.id} {...shared} x={x(shape.x)} y={y(shape.y)} width={shape.width * contentRect.width} height={shape.height * contentRect.height} />;
           }
           if (shape.kind === "ellipse") {
-            return <ellipse {...shared} cx={x(shape.x + shape.width / 2)} cy={y(shape.y + shape.height / 2)} rx={shape.width * contentRect.width / 2} ry={shape.height * contentRect.height / 2} />;
+            return <ellipse key={shape.id} {...shared} cx={x(shape.x + shape.width / 2)} cy={y(shape.y + shape.height / 2)} rx={shape.width * contentRect.width / 2} ry={shape.height * contentRect.height / 2} />;
           }
-          if (shape.kind === "polygon") return <polygon {...shared} points={points(shape.points)} />;
-          if (shape.kind === "polyline") return <polyline {...shared} points={points(shape.points)} fill="none" />;
-          return <circle {...shared} cx={x(shape.x)} cy={y(shape.y)} r={selected ? 7 : 5} />;
+          if (shape.kind === "polygon") return <g key={shape.id}>
+            <polygon {...shared} points={points(shape.points)} />
+            {shape.points.map((point, vertexIndex) => <circle
+              key={shape.id + "-vertex-" + vertexIndex}
+              className={"spatial-vertex-handle" + (selected ? " selected" : "") + (interaction.readonly ? " readonly" : "")}
+              cx={x(point.x)}
+              cy={y(point.y)}
+              r={selected ? 6 : 4}
+              fill="white"
+              stroke={color}
+              aria-label={"Move vertex " + (vertexIndex + 1)}
+              onPointerDown={event => beginVertexDrag(event, shape, vertexIndex)}
+            />)}
+          </g>;
+          if (shape.kind === "polyline") return <polyline key={shape.id} {...shared} points={points(shape.points)} fill="none" />;
+          return <circle key={shape.id} {...shared} cx={x(shape.x)} cy={y(shape.y)} r={selected ? 7 : 5} />;
         })}
         {state.draft && (
-          <polyline
-            className="spatial-draft"
-            points={points(state.draft.points)}
-            stroke={labelColor(state.draft.label)}
-            fill={state.draft.kind === "polygon" ? labelColor(state.draft.label, 0.12) : "none"}
-          />
+          <g className="spatial-draft">
+            <polyline
+              points={points(state.draft.points)}
+              stroke={labelColor(state.draft.label)}
+              fill={state.draft.kind === "polygon" ? labelColor(state.draft.label, 0.12) : "none"}
+            />
+            {state.draft.points.map((point, vertexIndex) => <circle
+              key={"draft-vertex-" + vertexIndex}
+              className="spatial-draft-vertex"
+              cx={x(point.x)} cy={y(point.y)} r={4}
+            />)}
+          </g>
         )}
         {!interaction.readonly && state.selectedId && (() => {
           const selected = state.shapes.find(shape => shape.id === state.selectedId);

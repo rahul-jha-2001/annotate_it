@@ -5,7 +5,7 @@ import SpatialOverlay from "../../plugins/spatial/SpatialOverlay";
 import { canCreateAtPlaybackState, visibleShapesAtTime } from "../../plugins/spatial/videoTime";
 import VideoRegionTimeline from "./VideoRegionTimeline";
 
-export default function VideoMediaRenderer({ mediaUrl, interaction }: MediaRendererProps) {
+export default function VideoMediaRenderer({ mediaUrl, interaction, onReady, onError }: MediaRendererProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [dimensions, setDimensions] = useState({ width: 16, height: 9 });
   const [currentTime, setCurrentTime] = useState(0);
@@ -47,7 +47,9 @@ export default function VideoMediaRenderer({ mediaUrl, interaction }: MediaRende
           onLoadedMetadata={event => {
             setDimensions({ width: event.currentTarget.videoWidth, height: event.currentTarget.videoHeight });
             setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0);
+            onReady?.();
           }}
+          onError={() => onError?.("Video could not be loaded or decoded.")}
           onTimeUpdate={event => setCurrentTime(event.currentTarget.currentTime)}
           onSeeked={event => setCurrentTime(event.currentTarget.currentTime)}
           onPlay={() => setPaused(false)}

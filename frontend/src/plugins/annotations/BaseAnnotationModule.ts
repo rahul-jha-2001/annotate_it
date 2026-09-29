@@ -8,6 +8,7 @@ import type {
   MediaInteractionKind,
   TypedAnnotationControlProps,
 } from "../contracts";
+import type { AnnotationCatalogPreset } from "../catalog/types";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -26,6 +27,7 @@ export abstract class BaseAnnotationModule<
   abstract readonly name: string;
   abstract readonly schemaVersion: SchemaT["schema_version"];
   abstract readonly requiredInteraction: MediaInteractionKind;
+  readonly supportedModalities?: readonly string[];
   abstract readonly ConfigurationEditor: ComponentType<
     ConfigurationEditorProps<SchemaT>
   >;
@@ -41,6 +43,10 @@ export abstract class BaseAnnotationModule<
     return `Annotate this ${mediaName.toLowerCase()} sample`;
   }
 
+  supportsModality(modality: string): boolean {
+    return this.supportedModalities === undefined || this.supportedModalities.includes(modality);
+  }
+
   abstract defaultSchema(context: AnnotationModuleContext): SchemaT;
 
   schemaForContext(schema: SchemaT, _context: AnnotationModuleContext): SchemaT {
@@ -48,6 +54,10 @@ export abstract class BaseAnnotationModule<
   }
 
   abstract createInitialAnswer(schema: SchemaT): AnswerT;
+
+  catalogPresets(_context: AnnotationModuleContext): AnnotationCatalogPreset<SchemaT>[] {
+    return [];
+  }
 
   prepareAnswer(schema: SchemaT, answer: unknown): AnswerT {
     const initial = this.createInitialAnswer(schema);

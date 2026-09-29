@@ -1,11 +1,10 @@
-import { type FormEvent, Suspense, useCallback, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { SignInButton, useAuth } from "@clerk/react";
 import { LogIn, Send, UserRound } from "lucide-react";
-import AnnotationControl, { isAnswerComplete } from "./annotator/AnnotationControl";
+import { isAnswerComplete } from "./annotator/AnnotationControl";
+import { AnnotationExperience, resolveAnnotationExperience } from "./annotator/AnnotationExperience";
 import QualificationForm from "./annotator/QualificationForm";
 import type { AnnotationAnswer, AnnotationSession } from "./annotator/types";
-import { getAnnotationPlugin } from "../plugins/annotations/registry";
-import { getMediaPlugin, supportsAnnotation } from "../plugins/media/registry";
 import { apiFetch } from "../api";
 
 interface NextItem {
@@ -39,6 +38,7 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
   const [completionMessage, setCompletionMessage] = useState("There are no more items left for you to annotate. Thank you!");
   const [error, setError] = useState<string | null>(null);
   const [guestName, setGuestName] = useState("");
+  const [readyMediaKey, setReadyMediaKey] = useState<string | null>(null);
 
   const fetchNextItem = useCallback(async (sessionToken: string) => {
     setLoading(true);
@@ -51,10 +51,12 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
       const data = await response.json();
       if (data.message) {
         setNextItem(null);
+        setReadyMediaKey(null);
         setQueueExhausted(true);
         setCompletionMessage(data.message);
       } else {
         setNextItem(data);
+        setReadyMediaKey(null);
         setQueueExhausted(false);
         setAnswer({});
       }
@@ -220,46 +222,32 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
     );
   }
 
-  const mediaPlugin = getMediaPlugin(session.modality);
-  const annotationPlugin = getAnnotationPlugin(session.label_schema.annotation_type);
-  const compatible = Boolean(
-    mediaPlugin && annotationPlugin && supportsAnnotation(mediaPlugin, annotationPlugin.requiredInteraction),
-  );
-  const preparedAnswer = annotationPlugin?.prepareAnswer(session.label_schema, answer) ?? answer;
-  const interaction = annotationPlugin?.createInteraction(session.label_schema, preparedAnswer, setAnswer) ?? { kind: "none" as const };
-  const MediaRenderer = mediaPlugin?.AnnotationRenderer;
+  const compatible = !resolveAnnotationExperience(
+    session.modality, session.label_schema, answer, setAnswer,
+  ).error;
   return (
     <div className="container animate-fade-in" style={{ width: "100%", maxWidth: "1000px" }}>
       <div className="glass-panel" style={{ marginBottom: "20px" }}>
         <h2>Instructions</h2>
         <p>{session.instructions || "Review the item and provide your annotation."}</p>
       </div>
-      {compatible && MediaRenderer ? (
-        <Suspense fallback={<div className="glass-panel">Loading media tools…</div>}>
-          <MediaRenderer
-            key={nextItem.data_unit_id}
-            mediaUrl={nextItem.media_url}
-            interaction={interaction}
-          />
-        </Suspense>
-      ) : (
-        <div className="glass-panel">
-          {!mediaPlugin
-            ? `Unsupported media modality: ${session.modality}`
-            : !annotationPlugin
-              ? `Unsupported annotation type: ${session.label_schema.annotation_type}`
-              : `${annotationPlugin.key} annotations are not compatible with ${mediaPlugin.name.toLowerCase()}`}
-        </div>
-      )}
+      <AnnotationExperience
+        modality={session.modality}
+        schema={session.label_schema}
+        answer={answer}
+        onChange={setAnswer}
+        mediaUrl={nextItem.media_url}
+        mediaKey={nextItem.data_unit_id}
+        controlHeading="Submit Annotation"
+        onMediaStateChange={ready => setReadyMediaKey(ready ? nextItem.data_unit_id : null)}
+      />
       <div className="glass-panel">
-        <h3 style={{ marginBottom: "16px" }}>Submit Annotation</h3>
-        <AnnotationControl schema={session.label_schema} answer={answer} onChange={setAnswer} />
         {error && <p style={{ color: "var(--danger)", marginTop: "16px" }}>{error}</p>}
         <button
           className="btn btn-primary"
           style={{ width: "100%", marginTop: "20px" }}
           onClick={submitAnnotation}
-          disabled={submitting || !compatible || !isAnswerComplete(session.label_schema, answer)}
+          disabled={submitting || !compatible || readyMediaKey !== nextItem.data_unit_id || !isAnswerComplete(session.label_schema, answer)}
         >
           <Send size={18} /> {submitting ? "Submitting…" : "Submit & Next"}
         </button>

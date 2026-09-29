@@ -1,0 +1,36 @@
+[
+  {
+    "filename": "person_001.mp4",
+    "answer": {
+      "regions": [
+        {
+          "start": 0,
+          "end": 3.87,
+          "label": "Walking"
+        },
+        {
+          "start": 3.87,
+          "end": 7.5,
+          "label": "Running"
+        }
+      ]
+    }
+  },
+  {
+    "filename": "person_002.mp4",
+    "answer": {
+      "regions": [
+        {
+          "start": 0,
+          "end": 3.42,
+          "label": "Walking"
+        },
+        {
+          "start": 3.42,
+          "end": 7.5,
+          "label": "Running"
+        }
+      ]
+    }
+  }
+]

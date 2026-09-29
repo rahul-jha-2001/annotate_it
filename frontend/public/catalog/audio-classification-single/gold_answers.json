@@ -1,0 +1,14 @@
+[
+  {
+    "filename": "sample_001.wav",
+    "answer": {
+      "value": "Good"
+    }
+  },
+  {
+    "filename": "sample_002.wav",
+    "answer": {
+      "value": "Good"
+    }
+  }
+]

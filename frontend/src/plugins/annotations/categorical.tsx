@@ -1,5 +1,7 @@
-import type { ConfigurationEditorProps, TypedAnnotationControlProps } from "../contracts";
+import type { AnnotationModuleContext, ConfigurationEditorProps, TypedAnnotationControlProps } from "../contracts";
 import { BaseAnnotationModule } from "./BaseAnnotationModule";
+import { catalogBundlePaths, catalogSamples, defineCatalogPreset } from "../catalog/fixtures";
+import type { AnnotationCatalogPreset } from "../catalog/types";
 
 export interface CategoricalSchema {
   annotation_type: "categorical";
@@ -86,6 +88,39 @@ export class CategoricalAnnotationModule extends BaseAnnotationModule<Categorica
   readonly ConfigurationEditor = ChoiceConfiguration;
   readonly Control = CategoricalControl;
   readonly AnswerView = CategoricalAnswerView;
+
+  catalogPresets(_context: AnnotationModuleContext): AnnotationCatalogPreset<CategoricalSchema>[] {
+    const singleSlug = "audio-classification-single";
+    const multiSlug = "audio-classification-multi";
+    return [
+      defineCatalogPreset({
+        slug: singleSlug, title: "Audio classification · single choice",
+        summary: "Assign exactly one quality or content label to an entire audio clip.", family: "Classification",
+        useCases: ["Audio quality", "Intent classification", "Content labeling"], modality: "audio",
+        schema: { annotation_type: "categorical", schema_version: 1, choices: ["Good", "Noisy", "Unusable"], multi_select: false },
+        samples: catalogSamples(singleSlug, [
+          { filename: "sample_001.wav", metadata: { language: "English", difficulty: 2, content_type: "Speech" }, goldAnswer: { value: "Good" } },
+          { filename: "sample_002.wav", metadata: { language: "Hindi", difficulty: 2, content_type: "Speech" }, goldAnswer: { value: "Good" } },
+        ]),
+        metadataDescription: "Language, difficulty, and content type can route clips to qualified annotators.",
+        scoringDescription: "Gold scoring is exact label match; agreement compares the selected label across annotators.",
+        ...catalogBundlePaths(singleSlug),
+      }),
+      defineCatalogPreset({
+        slug: multiSlug, title: "Audio classification · multiple choice",
+        summary: "Assign every applicable label to an audio clip.", family: "Classification",
+        useCases: ["Mixed-content tagging", "Acoustic attributes", "Multi-label moderation"], modality: "audio",
+        schema: { annotation_type: "categorical", schema_version: 1, choices: ["Speech", "Music", "Noise"], multi_select: true },
+        samples: catalogSamples(multiSlug, [
+          { filename: "sample_001.wav", metadata: { language: "English", difficulty: 1, content_type: "Mixed" }, goldAnswer: { values: ["Speech"] } },
+          { filename: "sample_002.wav", metadata: { language: "English", difficulty: 1, content_type: "Mixed" }, goldAnswer: { values: ["Speech"] } },
+        ]),
+        metadataDescription: "Language, difficulty, and content type describe each mixed clip.",
+        scoringDescription: "Gold and agreement scoring use set overlap across the selected labels.",
+        ...catalogBundlePaths(multiSlug),
+      }),
+    ];
+  }
 
   description(mediaName: string) { return `Choose one or more labels for the whole ${mediaName.toLowerCase()} sample`; }
   defaultSchema(): CategoricalSchema { return { annotation_type: "categorical", schema_version: 1, choices: ["Good", "Noisy", "Unusable"], multi_select: false }; }
