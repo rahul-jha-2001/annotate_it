@@ -22,10 +22,38 @@ export default function Dashboard() {
     fetchExperiments();
   }, []);
 
-  const copyLink = (token: string) => {
+  const copyLink = async (token: string) => {
     const link = `${window.location.origin}/annotate/${token}`;
-    navigator.clipboard.writeText(link);
-    alert("Share link copied to clipboard!");
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(link);
+        alert("Share link copied to clipboard!");
+        return;
+      }
+    } catch {
+      // Fall through to execCommand fallback
+    }
+
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = link;
+      textarea.style.position = "fixed";
+      textarea.style.left = "-9999px";
+      textarea.style.top = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const successful = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      if (successful) {
+        alert("Share link copied to clipboard!");
+        return;
+      }
+    } catch {
+      // Fall through to prompt fallback
+    }
+
+    window.prompt("Copy this share link:", link);
   };
 
   return (
