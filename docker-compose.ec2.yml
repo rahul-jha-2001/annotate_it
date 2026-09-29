@@ -1,20 +1,20 @@
 services:
-  db:
-    image: postgres:15-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-annotate_user}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-annotate_password}
-      POSTGRES_DB: ${POSTGRES_DB:-annotate_db}
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-annotate_user} -d ${POSTGRES_DB:-annotate_db}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
+  # db:
+  #   image: postgres:15-alpine
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: ${POSTGRES_USER:-annotate_user}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-annotate_password}
+  #     POSTGRES_DB: ${POSTGRES_DB:-annotate_db}
+  #   ports:
+  #     - "${POSTGRES_PORT:-5432}:5432"
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-annotate_user} -d ${POSTGRES_DB:-annotate_db}"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 5
 
   backend:
     build:
@@ -25,7 +25,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-annotate_user}:${POSTGRES_PASSWORD:-annotate_password}@db:5432/${POSTGRES_DB:-annotate_db}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-annotate_user}:${POSTGRES_PASSWORD:-annotate_password}@db:5432/${POSTGRES_DB:-annotate_db}}
       S3_BUCKET: ${S3_BUCKET:-taskglass-annotation-data}
       AWS_REGION: ${AWS_REGION:-ap-south-1}
       CORS_ORIGINS: ${CORS_ORIGINS}
@@ -34,9 +34,9 @@ services:
       CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES}
       PLATFORM_ADMIN_CLERK_USER_IDS: ${PLATFORM_ADMIN_CLERK_USER_IDS}
       PRESIGNED_URL_EXPIRY_SECONDS: ${PRESIGNED_URL_EXPIRY_SECONDS:-3600}
-    depends_on:
-      db:
-        condition: service_healthy
+    # depends_on:
+    #   db:
+    #     condition: service_healthy
 
   frontend:
     build:
