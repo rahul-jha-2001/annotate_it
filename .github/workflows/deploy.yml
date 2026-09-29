@@ -6,6 +6,7 @@ on:
     paths:
       - 'backend/**'
       - 'frontend/**'
+      - 'gateway/**'
       - 'docker-compose.ec2.yml'
 
 jobs:
