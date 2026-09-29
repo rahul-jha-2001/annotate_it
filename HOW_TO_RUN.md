@@ -86,11 +86,14 @@ docker build -t annotate-it-backend:latest ./backend
 
 # Build frontend image (optionally pass Clerk publishable key)
 docker build --build-arg VITE_CLERK_PUBLISHABLE_KEY=pk_test_your_key -t annotate-it-frontend:latest ./frontend
+
+# Build gateway image
+docker build -t annotate-it-gateway:latest ./gateway
 ```
 
 ### 2. Run with Docker Compose (EC2 / Production Stack)
 
-Use `docker-compose.ec2.yml` to launch PostgreSQL, the migrated FastAPI backend, and Nginx-powered frontend together:
+Use `docker-compose.ec2.yml` to launch the FastAPI backend, frontend SPA, and Nginx gateway reverse proxy together. The gateway acts as the single ingress on port 80 routing `/api/*` to the backend and all other traffic to the frontend:
 
 ```bash
 # Launch full stack
