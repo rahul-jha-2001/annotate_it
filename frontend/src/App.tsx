@@ -13,6 +13,8 @@ import ExperimentAnnotators, { AnnotatorDetail } from "./components/ExperimentAn
 import ExperimentSettings from "./components/ExperimentSettings";
 import AnnotationCatalog from "./components/catalog/AnnotationCatalog";
 import AnnotationCatalogDetail from "./components/catalog/AnnotationCatalogDetail";
+import LandingPage from "./components/landing/LandingPage";
+import { showAppHeader, wrapInAppMain } from "./appShell";
 import { setAuthTokenGetter } from "./api";
 
 function Protected({ children }: { children: ReactNode }) {
@@ -26,28 +28,29 @@ function App() {
   const { isSignedIn, getToken } = useAuth();
   const { user } = useUser();
   const { signOut } = useClerk();
-  const [, navigate] = useLocation();
+  const [location, navigate] = useLocation();
   setAuthTokenGetter(() => getToken());
+  const ContentWrapper = wrapInAppMain(location) ? "main" : "div";
   const displayName = user?.fullName || user?.username || user?.primaryEmailAddress?.emailAddress || "Account";
   return (
     <>
-      <header className="app-header">
-        <Link href="/" className="app-logo">
+      {showAppHeader(location) && <header className="app-header">
+        <Link href={isSignedIn ? "/dashboard" : "/"} className="app-logo">
           <Activity className="app-logo-icon" size={28} />
           Annotate It
         </Link>
         <nav className="app-nav" aria-label="Main navigation">
           {isSignedIn ? <>
-            <Link href="/" className="nav-link"><LayoutDashboard size={17} /> Dashboard</Link>
+            <Link href="/dashboard" className="nav-link"><LayoutDashboard size={17} /> Dashboard</Link>
             <Link href="/catalog" className="nav-link"><BookOpen size={17} /> Annotation Catalog</Link>
             <Link href="/experiments/new" className="nav-link nav-link-primary"><Plus size={17} /> New Experiment</Link>
             <Link href="/profile" className="nav-link"><UserRound size={17} /> {displayName}</Link>
             <button className="nav-link nav-button" onClick={async () => { await signOut(); navigate("/login"); }}><LogOut size={17} /> Sign out</button>
           </> : <Link href="/login" className="nav-link nav-link-primary"><LogIn size={17} /> Sign in</Link>}
         </nav>
-      </header>
+      </header>}
 
-      <main>
+      <ContentWrapper>
         <Switch>
           <Route path="/login"><Login /></Route>
           <Route path="/signup"><Login signup /></Route>
@@ -56,7 +59,8 @@ function App() {
             {(params) => <Protected><AnnotationCatalogDetail presetSlug={params.presetSlug!} /></Protected>}
           </Route>
           <Route path="/catalog"><Protected><AnnotationCatalog /></Protected></Route>
-          <Route path="/"><Protected><Dashboard /></Protected></Route>
+          <Route path="/"><LandingPage isSignedIn={Boolean(isSignedIn)} /></Route>
+          <Route path="/dashboard"><Protected><Dashboard /></Protected></Route>
           <Route path="/experiments/new">
             <Protected><div className="container animate-fade-in">
               <div className="flex-col" style={{ alignItems: "center", textAlign: "center", marginBottom: "40px" }}>
@@ -92,7 +96,7 @@ function App() {
             </div>
           </Route>
         </Switch>
-      </main>
+      </ContentWrapper>
     </>
   );
 }
