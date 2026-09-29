@@ -40,17 +40,16 @@ quality during collection through gold answers and inter-annotator agreement.
 - Six-step experiment wizard covering basics, annotation task, a combined dataset
   bundle, dataset preview, annotator qualifications/routing, and final review.
 - Task selection includes an interactive annotator preview and a dynamic gold-data
-  reference panel. The required JSON shape and example update for categorical
-  single-select, categorical multi-select, and segment tasks.
+  reference panel. Required JSON and examples are owned by each annotation module.
 - Draft-first deployment: an experiment becomes public only after its files and
   configuration have been registered successfully.
 - Media, metadata CSV, and gold-answer JSON are assembled by exact filename
   before upload. The preview table plays each sample, displays and edits its
   inferred typed metadata and gold answer, and blocks invalid rows.
-- Audio and video are registered media plugins. Each owns accepted upload types,
+- Audio, video, and image are registered media plugins. Each owns accepted upload types,
   dataset/review previews, and its lazy-loaded annotation renderer.
-- Video supports categorical tasks and labeled temporal regions using native
-  playback plus start/end region controls.
+- Video supports categorical/transcription tasks, labeled temporal regions, and
+  timestamped spatial shapes. Image supports categorical and spatial tasks.
 - The shared Aqua Lab visual system uses white surfaces, cyan interaction states,
   mint completion/validation feedback, dark ocean text, and reserved amber for
   gold-data semantics across designer and annotator screens.
@@ -74,17 +73,31 @@ quality during collection through gold answers and inter-annotator agreement.
 ### Annotation-type architecture
 
 - One annotation type per experiment, with choices as labels/options within it.
-- Registry-based backend contract covering config validation, answer validation,
-  gold matching, and agreement calculation.
+- Generic inherited backend template owns schema upgrades, config/answer/gold
+  validation, catalog output, bounded scoring, and pairwise agreement. Children
+  implement protected semantic and scoring hooks; public lifecycle replacement is rejected.
 - Capability-based backend modality registry. Annotation types declare a required
   interaction and modality compatibility is derived from modality capabilities.
-- Typed frontend media and annotation plugin registries centralize upload rules,
+- An inherited frontend annotation template plus typed media/annotation registries centralize upload rules,
   renderers, answer controls, gold examples/validation, summaries, and answer-to-
   media interaction mapping.
+- The frontend base prepares empty or stale coordinator answers from each
+  module's declared initial shape before controls, completion checks, and media
+  interactions run, so switching annotation types cannot crash a child module.
 - Strict, distinct categorical answer models:
   - single-select: `{ "value": "Choice" }`
   - multi-select: `{ "values": ["Choice"] }`
 - Segment answers: `{ "label": "Choice", "regions": [{ "start": 0, "end": 1 }] }`.
+- Transcription normalizes text and scores word-level edit similarity.
+- Six labeled temporal children cover diarization, speaker identification, sound
+  events, speech/silence, video events, and action recognition. Diarization aligns
+  consistently renamed speaker clusters before temporal matching.
+- Five spatial children cover boxes, polygons, polylines, ellipses, and keypoints.
+  Answers use normalized coordinates and stable IDs; video shapes require seconds,
+  while image shapes forbid time.
+- Shared deterministic geometry scorers provide IoU, point-to-segment path
+  similarity, normalized keypoint distance, same-label matching, unmatched-shape
+  penalties, and timestamp tolerance.
 - Configured-choice membership, duplicate choices, extra fields, and invalid
   segment boundaries are rejected at the API boundary.
 
@@ -96,8 +109,8 @@ quality during collection through gold answers and inter-annotator agreement.
   a stale sign-in session is replaced safely when a different account continues.
 - Guest names are stored on the annotator profile and shown as unverified, while
   anonymous-mode sessions deliberately avoid account linkage.
-- Plugin-driven annotation controls for categorical single-select, categorical
-  multi-select, and temporal segments over audio or video.
+- Plugin-driven controls cover categorical, transcription, temporal/labeled
+  temporal, and spatial tasks over compatible audio, video, or image media.
 - Experiment creation, dataset preview, annotation runtime, and review resolve
   behavior through registries and contain no audio/video task-routing branches.
 - Submission errors, paused sessions, loading states, queue completion, and
@@ -134,6 +147,8 @@ quality during collection through gold answers and inter-annotator agreement.
   and per-gold-item expected answer and score.
 - The sample-oriented review page shows each uploaded sample with all of its
   annotations, modality-native preview, metadata, gold answer, and agreement.
+- Dataset preview, sample review, and annotator drill-down provide selectable
+  read-only gold/submission overlays through the same module interaction contract.
 - Manual annotator pause/resume.
 - JSON export with experiment configuration, data-unit metadata, gold answers,
   qualification provenance, annotations, timestamps, and agreement scores.
@@ -155,18 +170,20 @@ quality during collection through gold answers and inter-annotator agreement.
 
 - Frontend TypeScript and Vite production build passes.
 - Frontend unit tests cover plugin discovery, capability compatibility, temporal
-  interaction mapping, annotation completion, quoted CSV parsing, metadata type
-  inference, filename joining, and bundle validation errors.
-- Backend unit tests cover modality capability derivation, strict categorical
-  shapes, choice validation, Jaccard similarity, segment boundaries, IoU,
-  unmatched regions, and free-text qualification validation.
+  and spatial mapping, contained-media coordinates, immutable editing, video-time
+  filtering, read-only overlay selection, annotation completion, CSV parsing,
+  metadata inference, filename joining, and bundle validation.
+- Backend unit tests cover the base lifecycle, capability derivation, strict
+  categorical/temporal/spatial shapes, schema versions, text similarity, temporal
+  matching, geometry scoring, unmatched penalties, and qualification validation.
 - Database-backed API integration tests cover experiment creation, access-mode
   enforcement, guest-name persistence, safe settings edits and locking, confirmed
   soft deletion with retained annotation rows, allocation,
   invalid-answer rejection, two-annotator overlap, scoring, dashboard, export,
   annotator summaries and submission drill-down, cross-experiment session isolation,
-  draft deployment, qualification onboarding, and metadata-based language routing.
-- The current backend suite contains 21 passing tests when PostgreSQL and S3/MinIO
+  draft deployment, qualification onboarding, metadata routing, and complete
+  transcription, diarization, image-box, and video-polygon workflows.
+- The current backend suite contains 56 passing tests when PostgreSQL and S3/MinIO
   integration services are enabled. The latest Alembic migration passes a full
   downgrade/upgrade cycle and reports no missing schema operations.
 
@@ -180,15 +197,17 @@ quality during collection through gold answers and inter-annotator agreement.
   Cohen/Fleiss kappa after enough production data is available.
 - Decide whether segment gold correctness needs an explicit pass/fail IoU
   threshold in addition to the current continuous score.
-- Add image/text media plugins and spatial-shape/text-range annotation plugins
-  after validating the audio/video flows with real users.
-- Add browser-level tests for waveform interactions and direct S3 uploads.
+- Add text media/text-range plugins after validating the current flows with real users.
+- Evaluate masks, skeletons, cuboids, OCR composition, attributes, tracking,
+  multi-camera, specialized imagery, and LiDAR using the boundary report in
+  `docs/DEFERRED_ANNOTATION_SYSTEMS.md`; these are framework projects, not ordinary children.
+- Add browser-level tests for waveform interactions and direct S3/MinIO uploads.
 - Push metadata filtering into SQL or a dedicated routing index if experiments
   grow beyond the current in-process v1 allocator scale.
 
 ## Recommended Next Action
 
-Run one small audio experiment and one video experiment with at least three
-annotators across all access modes. Use them to validate onboarding friction,
-guest-name clarity, gold cadence, temporal-region ergonomics, media compatibility,
-settings-lock messaging, and whether the displayed quality metrics are understandable.
+Run one audio, one image, and one video experiment with at least three annotators
+across all access modes. Validate onboarding, spatial coordinate accuracy at
+multiple viewport sizes, temporal/spatial ergonomics, gold cadence, overlay
+review, settings-lock messaging, and whether quality metrics are understandable.

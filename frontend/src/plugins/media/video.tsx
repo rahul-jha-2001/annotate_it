@@ -16,7 +16,8 @@ export const videoPlugin: MediaPlugin = {
   uploadTitle: "Choose video files",
   uploadHelp: "MP4, WebM, or other browser-supported video",
   exampleFilename: "clip.mp4",
-  supportedInteractions: ["none", "temporal-regions"],
+  moduleContext: { interactionDefaults: { frame_aware: true, time_tolerance: 0.1 } },
+  supportedInteractions: ["none", "temporal-regions", "labeled-temporal-regions", "spatial-shapes"],
   AnnotationRenderer: lazy(() => import("../../components/annotator/VideoMediaRenderer")),
   PreviewRenderer: VideoPreview,
 };

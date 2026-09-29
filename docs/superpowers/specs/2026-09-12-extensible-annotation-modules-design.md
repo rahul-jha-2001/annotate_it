@@ -51,10 +51,10 @@ The base class owns these public lifecycle operations:
   semantic-validation hook, and emits normalized JSON.
 - `validate_gold_answer(raw, config)` uses the same answer contract as normal
   submissions.
-- `gold_match(answer, gold, config)` parses both sides, invokes `score_pair`, and
+- `gold_match(answer, gold, config)` parses both sides, invokes `_score_gold`, and
   enforces a finite result in `[0, 1]`.
-- `agreement(answers, config)` validates every answer and averages all unique
-  pairwise `score_pair` results.
+- `agreement(answers, config)` validates every answer and invokes
+  `_aggregate_agreement`.
 - `catalog_entry()` produces the API registry descriptor consistently.
 
 Children provide:
@@ -62,7 +62,11 @@ Children provide:
 - stable `key`, display `name`, `schema_version`, and `required_interaction`;
 - Pydantic `config_model` and `answer_model`;
 - optional `_validate_semantics(answer, config)`;
-- required `score_pair(left, right, config)`.
+- required `_score_pair(left, right, config)`;
+- optional `_score_gold(answer, gold, config)`, defaulting to `_score_pair`;
+- optional `_aggregate_agreement(answers, config)`, defaulting to average pairwise
+  `_score_pair` results;
+- optional `_upgrade_config(raw, from_version)` for stepwise stored-schema upgrades.
 
 Family bases provide reusable decisions:
 
@@ -76,7 +80,8 @@ BaseAnnotationType
 
 Registrations accept only `BaseAnnotationType` instances, reject duplicate keys,
 and run a contract self-check at import/test time. Public lifecycle methods are
-marked `@final`; child classes override only documented hooks.
+marked `@final` and protected at runtime with `__init_subclass__`; child classes
+override only documented hooks.
 
 Pure scoring utilities remain separate from lifecycle classes:
 
@@ -108,16 +113,20 @@ and safe conversion at the registry boundary. Children supply:
 - `isComplete(schema, answer)`;
 - annotation-specific client validation.
 
-Replace optional-field containers with discriminated unions:
+Replace optional-field containers with open type maps. Each annotation module
+augments these maps locally, so adding a child does not edit a central union:
 
 ```text
-AnnotationSchema = Categorical | SegmentV1 | Text | LabeledTemporal | Spatial
-AnnotationAnswer = Categorical | SegmentV1 | Text | LabeledTemporal | Spatial
+AnnotationSchema = AnnotationSchemaMap[keyof AnnotationSchemaMap]
+AnnotationAnswer = AnnotationAnswerMap[keyof AnnotationAnswerMap]
 MediaInteraction = None | TemporalRegions | LabeledTemporalRegions | SpatialShapes
 ```
 
 The frontend registry accepts only base-module instances and rejects duplicate
 keys. A shared contract test runs against every registered module.
+TypeScript cannot enforce final methods, so lifecycle methods are final by
+contract: the registry owns the single erased boundary and contract tests verify
+every registered module.
 
 `CreateExperiment` stores the selected module's schema as a single state object
 and renders its `ConfigurationEditor`. It does not own `labels`, `multiSelect`, or
@@ -138,6 +147,8 @@ plugin key `segment`.
 
 Both legacy config models accept missing `schema_version` as version 1. Existing
 stored records are read without a bulk migration.
+Future versions upgrade one step at a time through `_upgrade_config` before the
+current Pydantic model validates them.
 
 ### Text/transcription
 

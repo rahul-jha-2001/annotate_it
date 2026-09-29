@@ -6,6 +6,9 @@ class AnnotationTypeSpec(Protocol):
     key: str
     name: str
     required_interaction: str
+    required_media_capabilities: frozenset[str]
+    schema_version: int
+    configuration_kind: str
     supports_choices: bool
     supports_multi_select: bool
 
@@ -26,6 +29,14 @@ class AnnotationTypeSpec(Protocol):
         self, answer: Dict[str, Any], config: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Validate an answer, including constraints imposed by the config."""
+        ...
+
+    def validate_gold_answer(
+        self, answer: Dict[str, Any], config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        ...
+
+    def catalog_entry(self) -> Dict[str, Any]:
         ...
         
     def gold_match(

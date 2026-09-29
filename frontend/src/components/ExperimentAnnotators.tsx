@@ -11,8 +11,8 @@ import {
 import { Link } from "wouter";
 import { apiFetch } from "../api";
 import { getAnnotationPlugin } from "../plugins/annotations/registry";
-import { getMediaPlugin } from "../plugins/media/registry";
-import type { AnnotationAnswer } from "./annotator/types";
+import type { AnnotationAnswer, LabelSchema } from "./annotator/types";
+import AnnotationOverlaySelector, { buildOverlayOptions } from "./AnnotationOverlaySelector";
 
 interface QualificationQuestion {
   key: string;
@@ -65,7 +65,7 @@ interface AnnotatorDetailData {
     id: string;
     name: string;
     modality: string;
-    label_schema: { annotation_type: string };
+    label_schema: LabelSchema;
     qualification_form: QualificationQuestion[];
   };
   annotator: AnnotatorSummary;
@@ -216,9 +216,7 @@ export function AnnotatorDetail({ experimentId, annotatorId }: { experimentId: s
   if (!data) return <div className="container text-center">{error || "Annotator not found"}</div>;
 
   const annotationPlugin = getAnnotationPlugin(data.experiment.label_schema.annotation_type);
-  const mediaPlugin = getMediaPlugin(data.experiment.modality);
   const AnswerView = annotationPlugin?.AnswerView;
-  const MediaPreview = mediaPlugin?.PreviewRenderer;
   const annotator = data.annotator;
 
   return (
@@ -278,7 +276,17 @@ export function AnnotatorDetail({ experimentId, annotatorId }: { experimentId: s
                 </div>
               </div>
 
-              {MediaPreview && <MediaPreview mediaUrl={annotation.media_url} title={annotation.filename} />}
+              <AnnotationOverlaySelector
+                modality={data.experiment.modality}
+                schema={data.experiment.label_schema}
+                mediaUrl={annotation.media_url}
+                title={annotation.filename}
+                options={buildOverlayOptions(annotation.gold_answer, [{
+                  id: annotation.id,
+                  label: "Submitted answer",
+                  answer: annotation.answer,
+                }])}
+              />
               {Object.keys(annotation.metadata).length > 0 && (
                 <div className="sample-metadata annotation-metadata">
                   {Object.entries(annotation.metadata).map(([key, value]) => <span key={key} className="metadata-chip">{key}: {formatAnswer(value)}</span>)}

@@ -1,17 +1,42 @@
 import type { ComponentType, LazyExoticComponent } from "react";
 import type { AnnotationAnswer, LabelSchema } from "../components/annotator/types";
+import type { SpatialShape, SpatialTool } from "./spatial/types";
 
 export interface TemporalRegion {
   start: number;
   end: number;
 }
 
+export interface LabeledTemporalRegion extends TemporalRegion {
+  label: string;
+}
+
 export type MediaInteraction =
-  | { kind: "none" }
+  | { kind: "none"; readonly?: boolean }
   | {
       kind: "temporal-regions";
       regions: TemporalRegion[];
       onChange: (regions: TemporalRegion[]) => void;
+      readonly?: boolean;
+    }
+  | {
+      kind: "labeled-temporal-regions";
+      regions: LabeledTemporalRegion[];
+      newRegionLabel: string;
+      onChange: (regions: LabeledTemporalRegion[]) => void;
+      readonly?: boolean;
+    }
+  | {
+      kind: "spatial-shapes";
+      tool: SpatialTool;
+      shapes: SpatialShape[];
+      newShapeLabel: string;
+      frameAware: boolean;
+      timeTolerance: number;
+      creationTime?: number;
+      canCreate?: boolean;
+      onChange: (shapes: SpatialShape[]) => void;
+      readonly?: boolean;
     };
 
 export type MediaInteractionKind = MediaInteraction["kind"];
@@ -33,9 +58,33 @@ export interface MediaPlugin {
   uploadTitle: string;
   uploadHelp: string;
   exampleFilename: string;
+  moduleContext: AnnotationModuleContext;
   supportedInteractions: MediaInteractionKind[];
   AnnotationRenderer: LazyExoticComponent<ComponentType<MediaRendererProps>>;
   PreviewRenderer: ComponentType<MediaPreviewProps>;
+}
+
+export interface BaseAnnotationSchema {
+  annotation_type: string;
+  schema_version: number;
+}
+
+export interface AnnotationModuleContext {
+  interactionDefaults: Record<string, unknown>;
+}
+
+export interface ConfigurationEditorProps<SchemaT extends BaseAnnotationSchema> {
+  schema: SchemaT;
+  onChange: (schema: SchemaT) => void;
+}
+
+export interface TypedAnnotationControlProps<
+  SchemaT extends BaseAnnotationSchema,
+  AnswerT extends object,
+> {
+  schema: SchemaT;
+  answer: AnswerT;
+  onChange: (answer: AnswerT) => void;
 }
 
 export interface AnnotationControlProps {

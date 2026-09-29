@@ -91,6 +91,118 @@ class ApiIntegrationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()["session_token"]
 
+    def create_typed_experiment(self, name, modality, label_schema):
+        response = self.client.post(
+            "/experiments",
+            json={
+                "name": name,
+                "modality": modality,
+                "instructions": "Complete the configured annotation task",
+                "label_schema": label_schema,
+                "overlap_n": 2,
+                "gold_ratio": 1,
+                "access_mode": "anonymous",
+            },
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        experiment = response.json()
+        experiment["requested_annotation_type"] = label_schema["annotation_type"]
+        self.experiment_ids.append(experiment["id"])
+        return experiment
+
+    def exercise_typed_gold_experiment(
+        self,
+        *,
+        experiment,
+        filename,
+        gold_answer,
+        answers,
+    ):
+        created = self.client.post(
+            f"/experiments/{experiment['id']}/data-units",
+            json={"items": [{"raw_uri": f"s3://annotate-it-data/typed/{filename}"}]},
+        )
+        self.assertEqual(created.status_code, 200, created.text)
+        manifest = self.client.post(
+            f"/experiments/{experiment['id']}/gold-manifest",
+            json={"manifest": [{"filename": filename, "answer": gold_answer}]},
+        )
+        self.assertEqual(manifest.status_code, 200, manifest.text)
+        self.assertEqual(manifest.json(), {"applied": [filename], "errors": []})
+
+        item_id = None
+        for answer in answers:
+            session = self.create_session(experiment)
+            next_item = self.client.get(
+                f"/annotate/{experiment['share_token']}/next",
+                params={"session_token": session},
+            )
+            self.assertEqual(next_item.status_code, 200, next_item.text)
+            current_id = next_item.json()["data_unit_id"]
+            item_id = item_id or current_id
+            self.assertEqual(current_id, item_id)
+            submitted = self.client.post(
+                f"/annotate/{experiment['share_token']}/items/{current_id}/annotations",
+                params={"session_token": session},
+                json={"answer": answer},
+            )
+            self.assertEqual(submitted.status_code, 200, submitted.text)
+
+        review_response = self.client.get(f"/experiments/{experiment['id']}/review")
+        self.assertEqual(review_response.status_code, 200, review_response.text)
+        review = review_response.json()
+        self.assertEqual(
+            review["experiment"]["label_schema"]["annotation_type"],
+            experiment["requested_annotation_type"],
+        )
+        self.assertEqual(review["samples"][0]["gold_answer"], gold_answer)
+        self.assertEqual(review["samples"][0]["n_annotations"], 2)
+        stored_answers = [
+            annotation["answer"] for annotation in review["samples"][0]["annotations"]
+        ]
+
+        dashboard_response = self.client.get(
+            f"/experiments/{experiment['id']}/dashboard"
+        )
+        self.assertEqual(dashboard_response.status_code, 200, dashboard_response.text)
+        dashboard = dashboard_response.json()
+        self.assertEqual(dashboard["items"][0]["agreement_score"], review["samples"][0]["agreement_score"])
+        participants_response = self.client.get(
+            f"/experiments/{experiment['id']}/annotators"
+        )
+        self.assertEqual(participants_response.status_code, 200, participants_response.text)
+        participants = participants_response.json()["annotators"]
+        self.assertEqual(len(participants), 2)
+        gold_scores = []
+        for participant in participants:
+            detail_response = self.client.get(
+                f"/experiments/{experiment['id']}/annotators/{participant['id']}"
+            )
+            self.assertEqual(detail_response.status_code, 200, detail_response.text)
+            detail = detail_response.json()
+            self.assertEqual(detail["annotations"][0]["answer"], stored_answers[len(gold_scores)])
+            self.assertIsNotNone(detail["annotations"][0]["gold_score"])
+            gold_scores.append(detail["annotations"][0]["gold_score"])
+
+        export_response = self.client.get(f"/experiments/{experiment['id']}/export")
+        self.assertEqual(export_response.status_code, 200, export_response.text)
+        exported = export_response.json()
+        self.assertEqual(exported["data_units"][0]["gold_answer"], gold_answer)
+        self.assertEqual(len(exported["data_units"][0]["annotations"]), 2)
+        return review["samples"][0], stored_answers, gold_scores
+
+    def assert_invalid_typed_config(self, modality, label_schema):
+        response = self.client.post(
+            "/experiments",
+            json={
+                "name": "Invalid typed experiment",
+                "modality": modality,
+                "instructions": "Must be rejected",
+                "label_schema": label_schema,
+            },
+        )
+        self.assertEqual(response.status_code, 422, response.text)
+
     def test_designer_routes_require_authentication_and_ownership(self):
         from database import SessionLocal
         from models import User
@@ -469,6 +581,7 @@ class ApiIntegrationTests(unittest.TestCase):
             response.json()["label_schema"],
             {
                 "annotation_type": "categorical",
+                "schema_version": 1,
                 "choices": ["Category 1", "Category 2"],
                 "multi_select": False,
             },
@@ -579,3 +692,143 @@ class ApiIntegrationTests(unittest.TestCase):
         self.assertEqual(deployed.status_code, 200, deployed.text)
         session = self.client.get(f"/annotate/{experiment['share_token']}/session")
         self.assertEqual(session.status_code, 200, session.text)
+
+    def test_transcription_creation_gold_similarity_review_and_export(self):
+        self.assert_invalid_typed_config(
+            "audio",
+            {"annotation_type": "transcription", "minimum_length": -1},
+        )
+        experiment = self.create_typed_experiment(
+            "Transcription module integration",
+            "audio",
+            {
+                "annotation_type": "transcription",
+                "case_sensitive": False,
+                "collapse_whitespace": True,
+                "strip_punctuation": False,
+                "minimum_length": 1,
+            },
+        )
+        sample, stored, gold_scores = self.exercise_typed_gold_experiment(
+            experiment=experiment,
+            filename="transcription.wav",
+            gold_answer={"text": "hello world"},
+            answers=[{"text": "  Hello   world  "}, {"text": "hello brave world"}],
+        )
+        self.assertEqual(stored[0], {"text": "hello world"})
+        self.assertEqual(stored[1], {"text": "hello brave world"})
+        self.assertAlmostEqual(sample["agreement_score"], 2 / 3)
+        self.assertEqual(gold_scores[0], 1)
+        self.assertAlmostEqual(gold_scores[1], 2 / 3)
+
+    def test_diarization_cluster_alignment_creation_gold_review_and_export(self):
+        self.assert_invalid_typed_config(
+            "audio",
+            {
+                "annotation_type": "speaker_diarization",
+                "choices": [],
+                "allow_custom_labels": True,
+                "max_regions": 0,
+            },
+        )
+        experiment = self.create_typed_experiment(
+            "Diarization module integration",
+            "audio",
+            {
+                "annotation_type": "speaker_diarization",
+                "choices": [],
+                "allow_custom_labels": True,
+                "max_regions": 100,
+            },
+        )
+        gold = {"regions": [
+            {"start": 0, "end": 1, "label": "Speaker 1"},
+            {"start": 1, "end": 2, "label": "Speaker 2"},
+        ]}
+        sample, _stored, gold_scores = self.exercise_typed_gold_experiment(
+            experiment=experiment,
+            filename="conversation.wav",
+            gold_answer=gold,
+            answers=[
+                gold,
+                {"regions": [
+                    {"start": 0, "end": 1, "label": "A"},
+                    {"start": 1, "end": 2, "label": "B"},
+                ]},
+            ],
+        )
+        self.assertEqual(sample["agreement_score"], 1)
+        self.assertEqual(gold_scores, [1, 1])
+
+    def test_image_boxes_creation_gold_iou_review_and_export(self):
+        self.assert_invalid_typed_config(
+            "image",
+            {"annotation_type": "bounding_box", "choices": [], "frame_aware": False},
+        )
+        experiment = self.create_typed_experiment(
+            "Bounding-box module integration",
+            "image",
+            {
+                "annotation_type": "bounding_box",
+                "choices": ["Car"],
+                "max_shapes": 10,
+                "frame_aware": False,
+                "time_tolerance": 0.1,
+                "distance_tolerance": 0.1,
+            },
+        )
+        exact = {"boxes": [{
+            "id": "box-1", "label": "Car", "x": 0, "y": 0,
+            "width": 0.5, "height": 0.5,
+        }]}
+        shifted = {"boxes": [{
+            "id": "box-2", "label": "Car", "x": 0.25, "y": 0,
+            "width": 0.5, "height": 0.5,
+        }]}
+        sample, stored, gold_scores = self.exercise_typed_gold_experiment(
+            experiment=experiment,
+            filename="street.jpg",
+            gold_answer=exact,
+            answers=[exact, shifted],
+        )
+        self.assertEqual(stored[0], exact)
+        self.assertAlmostEqual(sample["agreement_score"], 1 / 3)
+        self.assertEqual(gold_scores[0], 1)
+        self.assertAlmostEqual(gold_scores[1], 1 / 3)
+
+    def test_video_polygons_use_timestamp_tolerance_through_export(self):
+        self.assert_invalid_typed_config(
+            "video",
+            {
+                "annotation_type": "polygon",
+                "choices": ["Person"],
+                "frame_aware": True,
+                "time_tolerance": -1,
+            },
+        )
+        experiment = self.create_typed_experiment(
+            "Video polygon module integration",
+            "video",
+            {
+                "annotation_type": "polygon",
+                "choices": ["Person"],
+                "max_shapes": 10,
+                "frame_aware": True,
+                "time_tolerance": 0.1,
+                "distance_tolerance": 0.1,
+            },
+        )
+        points = [{"x": 0.1, "y": 0.1}, {"x": 0.7, "y": 0.1}, {"x": 0.4, "y": 0.7}]
+        gold = {"polygons": [{"id": "polygon-gold", "label": "Person", "time": 1, "points": points}]}
+        sample, stored, gold_scores = self.exercise_typed_gold_experiment(
+            experiment=experiment,
+            filename="scene.mp4",
+            gold_answer=gold,
+            answers=[
+                {"polygons": [{"id": "polygon-a", "label": "Person", "time": 1, "points": points}]},
+                {"polygons": [{"id": "polygon-b", "label": "Person", "time": 1.05, "points": points}]},
+            ],
+        )
+        self.assertEqual(stored[1]["polygons"][0]["time"], 1.05)
+        self.assertEqual(sample["agreement_score"], 1)
+        self.assertEqual(gold_scores, [1, 1])

@@ -9,11 +9,14 @@ class AnnotationTypeResponse(BaseModel):
     supports_choices: bool
     supports_multi_select: bool
     required_interaction: str
+    schema_version: int
+    configuration_kind: str
 
 class ModalityResponse(BaseModel):
     key: str
     name: str
     supported_interactions: List[str]
+    available: bool
 
 class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

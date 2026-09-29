@@ -1,8 +1,8 @@
-export interface LabelSchema {
-  annotation_type: "categorical" | "segment" | string;
-  choices: string[];
-  multi_select: boolean;
-}
+export interface AnnotationSchemaMap {}
+export interface AnnotationAnswerMap {}
+
+export type LabelSchema = AnnotationSchemaMap[keyof AnnotationSchemaMap];
+export type AnnotationAnswer = AnnotationAnswerMap[keyof AnnotationAnswerMap];
 
 export interface AnnotationSession {
   session_token: string;
@@ -24,11 +24,4 @@ export interface QualificationQuestion {
   options: string[];
   minimum?: number | null;
   maximum?: number | null;
-}
-
-export interface AnnotationAnswer {
-  value?: string;
-  values?: string[];
-  label?: string;
-  regions?: Array<{ start: number; end: number }>;
 }
