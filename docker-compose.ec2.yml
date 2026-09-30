@@ -34,6 +34,15 @@ services:
       CLERK_AUTHORIZED_PARTIES: ${CLERK_AUTHORIZED_PARTIES}
       PLATFORM_ADMIN_CLERK_USER_IDS: ${PLATFORM_ADMIN_CLERK_USER_IDS}
       PRESIGNED_URL_EXPIRY_SECONDS: ${PRESIGNED_URL_EXPIRY_SECONDS:-3600}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+    logging:
+      driver: "awslogs"
+      options:
+        awslogs-region: ${AWS_REGION:-ap-south-1}
+        awslogs-group: ${AWSLOGS_GROUP:-/taskglass/production}
+        awslogs-stream: "backend"
+        awslogs-create-group: "true"
     # depends_on:
     #   db:
     #     condition: service_healthy
@@ -48,6 +57,13 @@ services:
     restart: unless-stopped
     expose:
       - "80"
+    logging:
+      driver: "awslogs"
+      options:
+        awslogs-region: ${AWS_REGION:-ap-south-1}
+        awslogs-group: ${AWSLOGS_GROUP:-/taskglass/production}
+        awslogs-stream: "frontend"
+        awslogs-create-group: "true"
     depends_on:
       - backend
 
@@ -61,6 +77,13 @@ services:
       - "80:80"
     volumes:
       - ./gateway/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    logging:
+      driver: "awslogs"
+      options:
+        awslogs-region: ${AWS_REGION:-ap-south-1}
+        awslogs-group: ${AWSLOGS_GROUP:-/taskglass/production}
+        awslogs-stream: "gateway"
+        awslogs-create-group: "true"
     depends_on:
       - backend
       - frontend
