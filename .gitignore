@@ -63,6 +63,9 @@ ehthumbs.db
 # Git worktrees
 .worktrees/
 
+# Local Superpowers runtime state
+.superpowers/
+
 # Generated sample datasets & archives
 sample/all_datasets/
 sample/*.zip

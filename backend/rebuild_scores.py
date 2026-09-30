@@ -1,9 +1,15 @@
 import argparse
+import logging
 import uuid
 
+from config import LOG_FORMAT, LOG_LEVEL
 from database import SessionLocal
+from logging_config import setup_logging
 from models import Experiment
 from services.scoring import rebuild_experiment_scores
+
+setup_logging(log_level=LOG_LEVEL, log_format=LOG_FORMAT)
+logger = logging.getLogger("rebuild_scores")
 
 
 def main() -> None:
@@ -21,8 +27,12 @@ def main() -> None:
         for experiment in experiments:
             rebuild_experiment_scores(db, experiment)
         db.commit()
-        print(f"Rebuilt scores for {len(experiments)} experiment(s)")
+        logger.info(
+            "scores.rebuild_summary",
+            extra={"rebuilt_count": len(experiments), "filter_experiment_id": args.experiment_id},
+        )
 
 
 if __name__ == "__main__":
     main()
+

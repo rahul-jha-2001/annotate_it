@@ -1,8 +1,11 @@
+import logging
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from models import Annotation, Annotator, DataUnit, Experiment
 from services.qualifications import sample_matches_qualifications
+
+logger = logging.getLogger(__name__)
 
 
 def _unseen_filter(db: Session, annotator: Annotator):
@@ -34,6 +37,19 @@ def allocate_next_item(
         and int((completed + 1) * experiment.gold_ratio) > gold_seen
     )
     qualification_answers = annotator.qualification_answers or {}
+
+    logger.debug(
+        "allocation.evaluating",
+        extra={
+            "experiment_id": str(experiment.id),
+            "annotator_id": str(annotator.id),
+            "completed": completed,
+            "gold_seen": gold_seen,
+            "gold_due": gold_due,
+            "gold_ratio": experiment.gold_ratio,
+            "overlap_n": experiment.overlap_n,
+        },
+    )
 
     def first_matching(candidates):
         return next(
@@ -81,8 +97,43 @@ def allocate_next_item(
         return first_matching(candidates)
 
     if gold_due:
-        return gold_candidate() or regular_candidate()
-    return regular_candidate() or gold_candidate()
+        logger.info(
+            "allocation.gold_cadence_due",
+            extra={
+                "experiment_id": str(experiment.id),
+                "annotator_id": str(annotator.id),
+                "completed": completed,
+                "gold_seen": gold_seen,
+                "gold_ratio": experiment.gold_ratio,
+            },
+        )
+        allocated = gold_candidate() or regular_candidate()
+    else:
+        allocated = regular_candidate() or gold_candidate()
+
+    if allocated is not None:
+        logger.info(
+            "allocation.item_allocated",
+            extra={
+                "experiment_id": str(experiment.id),
+                "annotator_id": str(annotator.id),
+                "data_unit_id": str(allocated.id),
+                "is_gold": allocated.is_gold,
+                "gold_due": gold_due,
+            },
+        )
+        return allocated
+
+    pending_unseen = has_pending_unseen_items(db, experiment, annotator)
+    logger.info(
+        "allocation.queue_exhausted",
+        extra={
+            "experiment_id": str(experiment.id),
+            "annotator_id": str(annotator.id),
+            "reason": "qualification_mismatch" if pending_unseen else "all_items_completed",
+        },
+    )
+    return None
 
 
 def has_pending_unseen_items(

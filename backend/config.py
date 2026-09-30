@@ -41,3 +41,7 @@ PLATFORM_ADMIN_CLERK_USER_IDS = {
     for user_id in os.getenv("PLATFORM_ADMIN_CLERK_USER_IDS", "").split(",")
     if user_id.strip()
 }
+
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_FORMAT = os.getenv("LOG_FORMAT", "json").lower()
+

@@ -13,6 +13,7 @@ from config import (
     PLATFORM_ADMIN_CLERK_USER_IDS,
 )
 from database import get_db
+from logging_config import current_user_id
 from models import User
 from schemas import UserResponse
 
@@ -20,18 +21,16 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _request_id(request: Request) -> str:
-    return getattr(request.state, "request_id", "unknown")
-
-
 def _authenticate(request: Request) -> str:
     if not CLERK_SECRET_KEY and not CLERK_JWT_KEY:
         logger.error(
-            "auth.configuration_missing request_id=%s method=%s path=%s "
-            "clerk_secret_key_configured=false clerk_jwt_key_configured=false",
-            _request_id(request),
-            request.method,
-            request.url.path,
+            "auth.configuration_missing",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "clerk_secret_key_configured": False,
+                "clerk_jwt_key_configured": False,
+            },
         )
         raise HTTPException(status_code=503, detail="Clerk is not configured")
     try:
@@ -46,29 +45,29 @@ def _authenticate(request: Request) -> str:
         )
     except Exception as exc:
         logger.warning(
-            "auth.token_verification_failed request_id=%s method=%s path=%s "
-            "error_type=%s error=%s",
-            _request_id(request),
-            request.method,
-            request.url.path,
-            type(exc).__name__,
-            exc,
+            "auth.token_verification_failed",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
         )
         raise HTTPException(status_code=401, detail="Invalid authentication token") from exc
     if not state.is_signed_in or not state.payload or not state.payload.get("sub"):
         logger.warning(
-            "auth.unauthenticated request_id=%s method=%s path=%s status=%s reason=%s",
-            _request_id(request),
-            request.method,
-            request.url.path,
-            state.status,
-            state.reason,
+            "auth.unauthenticated",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status": state.status,
+                "reason": state.reason,
+            },
         )
         raise HTTPException(status_code=401, detail="Authentication required")
     logger.debug(
-        "auth.verified request_id=%s clerk_user_id=%s",
-        _request_id(request),
-        state.payload["sub"],
+        "auth.verified",
+        extra={"clerk_user_id": state.payload["sub"]},
     )
     return str(state.payload["sub"])
 
@@ -117,9 +116,8 @@ def _local_user(clerk_user_id: str, db: Session) -> User:
             db.commit()
         if user.status != "active":
             logger.warning(
-                "auth.local_user_inactive clerk_user_id=%s local_user_id=%s",
-                clerk_user_id,
-                user.id,
+                "auth.local_user_inactive",
+                extra={"clerk_user_id": clerk_user_id, "local_user_id": str(user.id)},
             )
             raise HTTPException(status_code=403, detail="Account is not active")
         return user
@@ -133,9 +131,8 @@ def _local_user(clerk_user_id: str, db: Session) -> User:
         user.display_name = display_name
         user.avatar_url = avatar_url
         logger.info(
-            "auth.local_user_linked clerk_user_id=%s local_user_id=%s",
-            clerk_user_id,
-            user.id,
+            "auth.local_user_linked",
+            extra={"clerk_user_id": clerk_user_id, "local_user_id": str(user.id)},
         )
     else:
         user = User(
@@ -151,10 +148,12 @@ def _local_user(clerk_user_id: str, db: Session) -> User:
         )
         db.add(user)
         logger.info(
-            "auth.local_user_created clerk_user_id=%s local_user_id=%s is_platform_admin=%s",
-            clerk_user_id,
-            user.id,
-            user.is_platform_admin,
+            "auth.local_user_created",
+            extra={
+                "clerk_user_id": clerk_user_id,
+                "local_user_id": str(user.id),
+                "is_platform_admin": user.is_platform_admin,
+            },
         )
     if clerk_user_id in PLATFORM_ADMIN_CLERK_USER_IDS:
         user.is_platform_admin = True
@@ -163,9 +162,8 @@ def _local_user(clerk_user_id: str, db: Session) -> User:
     except IntegrityError as exc:
         db.rollback()
         logger.exception(
-            "auth.local_user_link_failed clerk_user_id=%s error_type=%s",
-            clerk_user_id,
-            type(exc).__name__,
+            "auth.local_user_link_failed",
+            extra={"clerk_user_id": clerk_user_id, "error_type": type(exc).__name__},
         )
         raise HTTPException(status_code=409, detail="Could not link the Clerk account") from exc
     db.refresh(user)
@@ -177,11 +175,10 @@ def _local_user(clerk_user_id: str, db: Session) -> User:
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     clerk_user_id = _authenticate(request)
     user = _local_user(clerk_user_id, db)
+    current_user_id.set(str(user.id))
     logger.info(
-        "auth.authenticated request_id=%s clerk_user_id=%s local_user_id=%s",
-        _request_id(request),
-        clerk_user_id,
-        user.id,
+        "auth.authenticated",
+        extra={"clerk_user_id": clerk_user_id, "local_user_id": str(user.id)},
     )
     return user
 
@@ -192,11 +189,10 @@ def get_optional_user(request: Request, db: Session = Depends(get_db)) -> User |
         return None
     clerk_user_id = _authenticate(request)
     user = _local_user(clerk_user_id, db)
+    current_user_id.set(str(user.id))
     logger.info(
-        "auth.optional_identity_linked request_id=%s clerk_user_id=%s local_user_id=%s",
-        _request_id(request),
-        clerk_user_id,
-        user.id,
+        "auth.optional_identity_linked",
+        extra={"clerk_user_id": clerk_user_id, "local_user_id": str(user.id)},
     )
     return user
 

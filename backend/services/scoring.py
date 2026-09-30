@@ -1,8 +1,11 @@
+import logging
 from sqlalchemy.orm import Session
 
 from annotation_types import get_type
 from config import SCORE_WINDOW_SIZE
 from models import Annotation, Annotator, AnnotatorScore, DataUnit, Experiment, ItemAgreement
+
+logger = logging.getLogger(__name__)
 
 
 def _score_row(db: Session, annotator_id):
@@ -62,12 +65,37 @@ def recompute_annotator_score(db: Session, annotator: Annotator) -> None:
         sum(agreement_scores) / len(agreement_scores) if agreement_scores else None
     )
 
+    logger.info(
+        "scoring.annotator_score_updated",
+        extra={
+            "annotator_id": str(annotator.id),
+            "items_completed": row.items_completed,
+            "gold_items_seen": row.gold_items_seen,
+            "rolling_gold_accuracy": round(row.rolling_gold_accuracy, 4)
+            if row.rolling_gold_accuracy is not None
+            else None,
+            "rolling_agreement_score": round(row.rolling_agreement_score, 4)
+            if row.rolling_agreement_score is not None
+            else None,
+        },
+    )
+
 
 def recompute_after_annotation(
     db: Session, experiment: Experiment, data_unit: DataUnit
 ) -> None:
     annotations = (
         db.query(Annotation).filter(Annotation.data_unit_id == data_unit.id).all()
+    )
+
+    logger.debug(
+        "scoring.recompute_started",
+        extra={
+            "data_unit_id": str(data_unit.id),
+            "is_gold": data_unit.is_gold,
+            "n_annotations": len(annotations),
+            "overlap_n": experiment.overlap_n,
+        },
     )
 
     if len(annotations) >= experiment.overlap_n:
@@ -82,6 +110,17 @@ def recompute_after_annotation(
 
         # Make the newly computed item score visible to the annotator score queries below.
         db.flush()
+
+        logger.info(
+            "scoring.item_agreement_computed",
+            extra={
+                "data_unit_id": str(data_unit.id),
+                "n_annotations": len(annotations),
+                "agreement_score": round(item_score.agreement_score, 4)
+                if item_score.agreement_score is not None
+                else None,
+            },
+        )
 
     involved_ids = {annotation.annotator_id for annotation in annotations}
     for annotator in db.query(Annotator).filter(Annotator.id.in_(involved_ids)).all():
@@ -102,6 +141,12 @@ def rebuild_experiment_scores(db: Session, experiment: Experiment) -> None:
 
     units = db.query(DataUnit).filter_by(experiment_id=experiment.id).all()
     spec = get_type(experiment.label_schema["annotation_type"])
+
+    logger.info(
+        "scoring.rebuild_started",
+        extra={"experiment_id": str(experiment.id), "total_units": len(units)},
+    )
+
     for unit in units:
         annotations = db.query(Annotation).filter_by(data_unit_id=unit.id).all()
         if len(annotations) >= experiment.overlap_n:
@@ -115,5 +160,12 @@ def rebuild_experiment_scores(db: Session, experiment: Experiment) -> None:
             ))
     db.flush()
 
-    for annotator in db.query(Annotator).filter_by(experiment_id=experiment.id).all():
+    annotators = db.query(Annotator).filter_by(experiment_id=experiment.id).all()
+    for annotator in annotators:
         recompute_annotator_score(db, annotator)
+
+    logger.info(
+        "scoring.rebuild_completed",
+        extra={"experiment_id": str(experiment.id), "annotators_updated": len(annotators)},
+    )
+

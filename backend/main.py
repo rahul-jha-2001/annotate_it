@@ -25,9 +25,16 @@ from annotation_types import REGISTRY, get_compatible_modalities, get_type, get_
 from auth import get_current_user, get_optional_user, router as auth_router
 from config import (
     AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
-    CORS_ORIGINS, PRESIGNED_URL_EXPIRY_SECONDS, S3_BUCKET, S3_ENDPOINT_URL,
+    CORS_ORIGINS, LOG_FORMAT, LOG_LEVEL, PRESIGNED_URL_EXPIRY_SECONDS, S3_BUCKET, S3_ENDPOINT_URL,
 )
 from database import get_db
+from logging_config import (
+    current_annotator_id,
+    current_experiment_id,
+    reset_logging_context,
+    set_logging_context,
+    setup_logging,
+)
 from modalities import REGISTRY as MODALITY_REGISTRY
 from models import Annotation, Annotator, DataUnit, Experiment, ItemAgreement, User
 from schemas import (
@@ -45,9 +52,17 @@ from services.allocation import allocate_next_item, has_pending_unseen_items
 from services.scoring import recompute_after_annotation
 from services.qualifications import validate_qualification_answers, validate_sample_metadata
 
-logging.basicConfig(level=logging.INFO)
+setup_logging(log_level=LOG_LEVEL, log_format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
-logging.getLogger("uvicorn.access").disabled = True
+
+
+def extract_trace_id(request: Request) -> str | None:
+    """Extract distributed tracing ID from common cloud headers."""
+    for header in ("x-amzn-trace-id", "x-cloud-trace-context", "traceparent"):
+        val = request.headers.get(header)
+        if val and val.strip():
+            return val.strip()
+    return None
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -70,63 +85,79 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Annotate It API", lifespan=lifespan)
 
 
-def request_context(request: Request) -> str:
-    client = (
-        f"{request.client.host}:{request.client.port}"
-        if request.client else "unknown"
-    )
-    query_keys = sorted(set(request.query_params.keys()))
-    return (
-        f"request_id={request.state.request_id} method={request.method} "
-        f"path={request.url.path} query_keys={query_keys} client={client} "
-        f"origin={request.headers.get('origin', '-')} "
-        f"content_type={request.headers.get('content-type', '-')} "
-        f"content_length={request.headers.get('content-length', '-')}"
-    )
-
-
 @app.middleware("http")
 async def log_request_lifecycle(request: Request, call_next):
     supplied_request_id = request.headers.get("X-Request-ID", "")
-    request.state.request_id = (
+    request_id = (
         supplied_request_id
         if 1 <= len(supplied_request_id) <= 64
         and all(character.isalnum() or character in "-_" for character in supplied_request_id)
         else uuid.uuid4().hex
     )
+    request.state.request_id = request_id
+    trace_id = extract_trace_id(request)
+    request.state.trace_id = trace_id
+
+    tokens = set_logging_context(request_id=request_id, trace_id=trace_id)
+
+    client_ip = (
+        f"{request.client.host}:{request.client.port}"
+        if request.client else "unknown"
+    )
+    query_keys = sorted(set(request.query_params.keys()))
+
+    req_meta = {
+        "method": request.method,
+        "path": request.url.path,
+        "query_keys": query_keys,
+        "client": client_ip,
+        "origin": request.headers.get("origin", "-"),
+        "content_type": request.headers.get("content-type", "-"),
+        "content_length": request.headers.get("content-length", "-"),
+    }
+
     started_at = time.perf_counter()
-    logger.info("request.started %s", request_context(request))
+    logger.info("request.started", extra=req_meta)
     try:
         response = await call_next(request)
     except Exception:
         duration_ms = (time.perf_counter() - started_at) * 1000
         logger.exception(
-            "request.crashed %s duration_ms=%.2f",
-            request_context(request),
-            duration_ms,
+            "request.crashed",
+            extra={**req_meta, "duration_ms": round(duration_ms, 2)},
         )
         raise
+    finally:
+        reset_logging_context(tokens)
 
     duration_ms = (time.perf_counter() - started_at) * 1000
     log_level = logging.WARNING if response.status_code >= 400 else logging.INFO
     logger.log(
         log_level,
-        "request.completed %s status=%s duration_ms=%.2f",
-        request_context(request),
-        response.status_code,
-        duration_ms,
+        "request.completed",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": round(duration_ms, 2),
+        },
     )
-    response.headers["X-Request-ID"] = request.state.request_id
+    response.headers["X-Request-ID"] = request_id
+    if trace_id:
+        response.headers["X-Trace-ID"] = trace_id
     return response
 
 
 @app.exception_handler(StarletteHTTPException)
 async def log_http_error(request: Request, exc: StarletteHTTPException):
     logger.warning(
-        "request.rejected %s status=%s detail=%r",
-        request_context(request),
-        exc.status_code,
-        exc.detail,
+        "request.rejected",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": exc.status_code,
+            "detail": exc.detail,
+        },
     )
     return await http_exception_handler(request, exc)
 
@@ -142,9 +173,12 @@ async def log_validation_error(request: Request, exc: RequestValidationError):
         for error in exc.errors()
     ]
     logger.warning(
-        "request.validation_failed %s errors=%s",
-        request_context(request),
-        safe_errors,
+        "request.validation_failed",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "errors": safe_errors,
+        },
     )
     return await request_validation_exception_handler(request, exc)
 
@@ -184,23 +218,25 @@ def get_owned_experiment(
     db: Session,
     user: User,
 ) -> Experiment:
+    current_experiment_id.set(str(experiment_id))
     experiment = db.query(Experiment).filter(
         Experiment.id == experiment_id,
         Experiment.status != "deleted",
     ).first()
     if experiment is None:
         logger.info(
-            "authorization.resource_missing local_user_id=%s experiment_id=%s",
-            user.id,
-            experiment_id,
+            "authorization.resource_missing",
+            extra={"local_user_id": str(user.id), "experiment_id": str(experiment_id)},
         )
         raise HTTPException(status_code=404, detail="Experiment not found")
     if not user.is_platform_admin and experiment.owner_id != user.id:
         logger.warning(
-            "authorization.experiment_denied local_user_id=%s experiment_id=%s owner_id=%s",
-            user.id,
-            experiment_id,
-            experiment.owner_id,
+            "authorization.experiment_denied",
+            extra={
+                "local_user_id": str(user.id),
+                "experiment_id": str(experiment_id),
+                "owner_id": str(experiment.owner_id),
+            },
         )
         raise HTTPException(status_code=404, detail="Experiment not found")
     return experiment
@@ -346,6 +382,19 @@ def create_experiment(
     db.add(experiment)
     db.commit()
     db.refresh(experiment)
+    current_experiment_id.set(str(experiment.id))
+    logger.info(
+        "experiment.created",
+        extra={
+            "experiment_id": str(experiment.id),
+            "name": experiment.name,
+            "modality": experiment.modality,
+            "annotation_type": annotation_type,
+            "access_mode": experiment.access_mode,
+            "owner_id": str(experiment.owner_id),
+            "status": experiment.status,
+        },
+    )
     return experiment
 
 
@@ -440,6 +489,14 @@ def update_experiment_settings(
         setattr(experiment, field, value)
     db.commit()
     db.refresh(experiment)
+    logger.info(
+        "experiment.settings_updated",
+        extra={
+            "experiment_id": str(experiment.id),
+            "updated_fields": sorted(list(changes.keys())),
+            "protected_changes": sorted(list(protected_changes)),
+        },
+    )
     return experiment_settings_response(experiment, has_annotations)
 
 
@@ -467,10 +524,12 @@ def delete_experiment(
     experiment.deleted_at = datetime.now(timezone.utc)
     db.commit()
     logger.info(
-        "experiment.soft_deleted experiment_id=%s owner_id=%s retained_annotations=%s",
-        experiment.id,
-        experiment.owner_id,
-        annotation_count,
+        "experiment.soft_deleted",
+        extra={
+            "experiment_id": str(experiment.id),
+            "owner_id": str(experiment.owner_id),
+            "retained_annotations": annotation_count,
+        },
     )
     return {
         "id": experiment.id,
@@ -506,6 +565,10 @@ def presign_urls(
             media_url=media_url,
             s3_uri=s3_uri,
         ))
+    logger.info(
+        "uploads.presign_generated",
+        extra={"file_count": len(request.filenames)},
+    )
     return PresignResponse(urls=urls)
 
 
@@ -520,6 +583,14 @@ def deploy_experiment(
         raise HTTPException(status_code=409, detail="Upload at least one sample before deployment")
     experiment.status = "active"
     db.commit()
+    logger.info(
+        "experiment.deployed",
+        extra={
+            "experiment_id": str(experiment.id),
+            "share_token": experiment.share_token,
+            "status": experiment.status,
+        },
+    )
     return {"id": experiment.id, "status": experiment.status}
 
 
@@ -555,6 +626,14 @@ def create_data_units(
     db.commit()
     for unit in created_units:
         db.refresh(unit)
+    logger.info(
+        "data_units.registered",
+        extra={
+            "experiment_id": str(experiment.id),
+            "total_count": len(created_units),
+            "gold_count": sum(1 for u in created_units if u.is_gold),
+        },
+    )
     return {
         "message": f"Successfully created {len(created_units)} data units.",
         "data_units": [
@@ -652,6 +731,14 @@ def process_gold_manifest(
         matches[0].gold_answer = answer
         results["applied"].append(entry.filename)
     db.commit()
+    logger.info(
+        "gold_manifest.processed",
+        extra={
+            "experiment_id": str(experiment.id),
+            "applied_count": len(results["applied"]),
+            "errors_count": len(results["errors"]),
+        },
+    )
     return results
 
 
@@ -749,6 +836,19 @@ def get_session(
     if user and annotator.user_id is None and experiment.access_mode != "anonymous":
         annotator.user_id = user.id
         db.commit()
+
+    current_experiment_id.set(str(experiment.id))
+    current_annotator_id.set(str(annotator.id))
+    logger.info(
+        "annotator.session_resolved",
+        extra={
+            "experiment_id": str(experiment.id),
+            "annotator_id": str(annotator.id),
+            "access_mode": experiment.access_mode,
+            "has_user": annotator.user_id is not None,
+        },
+    )
+
     return SessionResponse(
         session_token=session_token, experiment_id=experiment.id,
         modality=experiment.modality, instructions=experiment.instructions,
@@ -809,6 +909,17 @@ def submit_qualifications(
     annotator.qualification_answers = answers
     annotator.qualified_at = datetime.now(timezone.utc)
     db.commit()
+
+    current_experiment_id.set(str(experiment.id))
+    current_annotator_id.set(str(annotator.id))
+    logger.info(
+        "annotator.qualifications_submitted",
+        extra={
+            "experiment_id": str(experiment.id),
+            "annotator_id": str(annotator.id),
+            "answer_count": len(answers),
+        },
+    )
     return {"status": "qualified"}
 
 
@@ -832,6 +943,10 @@ def get_next_item(
         raise HTTPException(status_code=401, detail="Invalid or inactive session")
     if experiment.qualification_form and annotator.qualified_at is None:
         raise HTTPException(status_code=403, detail="Qualification form is incomplete")
+
+    current_experiment_id.set(str(experiment.id))
+    current_annotator_id.set(str(annotator.id))
+
     next_unit = allocate_next_item(db, experiment, annotator)
     if next_unit is None:
         if experiment.routing_rules and has_pending_unseen_items(db, experiment, annotator):
@@ -860,6 +975,10 @@ def submit_annotation(
     ).first()
     if annotator is None:
         raise HTTPException(status_code=401, detail="Invalid or inactive session")
+
+    current_experiment_id.set(str(experiment.id))
+    current_annotator_id.set(str(annotator.id))
+
     data_unit = (
         db.query(DataUnit)
         .filter_by(id=data_unit_id, experiment_id=experiment.id)
@@ -882,8 +1001,25 @@ def submit_annotation(
         db.flush()
         recompute_after_annotation(db, experiment, data_unit)
         db.commit()
+        logger.info(
+            "annotation.submitted",
+            extra={
+                "experiment_id": str(experiment.id),
+                "annotator_id": str(annotator.id),
+                "data_unit_id": str(data_unit.id),
+                "is_gold": data_unit.is_gold,
+            },
+        )
     except IntegrityError as exc:
         db.rollback()
+        logger.warning(
+            "annotation.duplicate_submission_blocked",
+            extra={
+                "experiment_id": str(experiment.id),
+                "annotator_id": str(annotator.id),
+                "data_unit_id": str(data_unit.id),
+            },
+        )
         raise HTTPException(status_code=409, detail="This item was already submitted") from exc
     return {"status": "success"}
 
@@ -1163,6 +1299,10 @@ def export_experiment(
     experiment = get_owned_experiment(experiment_id, db, user)
     ensure_current_schema(experiment)
     units = db.query(DataUnit).filter_by(experiment_id=experiment.id).all()
+    logger.info(
+        "experiment.exported",
+        extra={"experiment_id": str(experiment.id), "total_units": len(units)},
+    )
     return {
         "experiment": {
             "id": experiment.id, "name": experiment.name,
