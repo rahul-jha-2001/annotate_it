@@ -21,7 +21,7 @@ export function buildLandingMarkup(actions: LandingActions, task: LandingTask): 
   let markup = body;
   markup = markup.replace(
     `<a class="nav-action" href="#overview">View example</a>`,
-    `<a href="#overview">View example</a>${actionLink("nav-action", actions.account.href, actions.account.label)}`,
+    `<a href="${actions.catalog.href}">Catalog</a><a href="#overview">View example</a>${actionLink("nav-action", actions.account.href, actions.account.label)}`,
   );
   markup = markup.replace(
     /<div class="button-row">[\s\S]*?<\/div><p class="note">/,

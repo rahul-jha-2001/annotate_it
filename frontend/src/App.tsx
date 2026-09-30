@@ -37,7 +37,7 @@ function App() {
       {showAppHeader(location) && <header className="app-header">
         <Link href={isSignedIn ? "/dashboard" : "/"} className="app-logo">
           <Activity className="app-logo-icon" size={28} />
-          Annotate It
+          TaskGlass
         </Link>
         <nav className="app-nav" aria-label="Main navigation">
           {isSignedIn ? <>
@@ -64,7 +64,7 @@ function App() {
           <Route path="/experiments/new">
             <Protected><div className="container animate-fade-in">
               <div className="flex-col" style={{ alignItems: "center", textAlign: "center", marginBottom: "40px" }}>
-                <h1>Annotation Experiment Platform</h1>
+                <h1>TaskGlass</h1>
                 <p style={{ maxWidth: "600px", fontSize: "1.1rem" }}>
                   Design tasks, get them annotated, and track quality live via gold-standard items.
                 </p>

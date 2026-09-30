@@ -9,6 +9,7 @@ describe("landing markup", () => {
     expect(markup).toContain(`href="/signup">Get started</a>`);
     expect(markup).toContain(`href="/login">Sign in</a>`);
     expect(markup).toContain(`href="/catalog">Explore annotation types</a>`);
+    expect(markup).toContain(`<a href="/catalog">Catalog</a>`);
     expect(markup).not.toContain("<script");
     expect(markup).not.toContain("<style");
   });
