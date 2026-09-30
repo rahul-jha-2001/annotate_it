@@ -56,9 +56,9 @@ function App() {
           <Route path="/signup"><Login signup /></Route>
           <Route path="/profile"><Protected><Profile /></Protected></Route>
           <Route path="/catalog/:presetSlug">
-            {(params) => <Protected><AnnotationCatalogDetail presetSlug={params.presetSlug!} /></Protected>}
+            {(params) => <AnnotationCatalogDetail presetSlug={params.presetSlug!} />}
           </Route>
-          <Route path="/catalog"><Protected><AnnotationCatalog /></Protected></Route>
+          <Route path="/catalog"><AnnotationCatalog /></Route>
           <Route path="/"><LandingPage isSignedIn={Boolean(isSignedIn)} /></Route>
           <Route path="/dashboard"><Protected><Dashboard /></Protected></Route>
           <Route path="/experiments/new">
