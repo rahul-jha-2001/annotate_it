@@ -19,7 +19,31 @@ class ApiIntegrationTests(unittest.TestCase):
         cls.client_context = TestClient(app)
         cls.client = cls.client_context.__enter__()
         cls.experiment_ids = []
+
+        # Proactively clean up any stale test users/experiments from prior aborted test runs
         with SessionLocal() as db:
+            from models import Experiment, MediaUpload, User
+            stale_users = db.query(User).filter(
+                (User.email.like("integration-%@example.test")) |
+                (User.clerk_user_id.like("user_integration_%")) |
+                (User.email.like("media-outsider-%@example.test")) |
+                (User.clerk_user_id.like("media_outsider_%")) |
+                (User.email.like("outsider-%@example.test")) |
+                (User.clerk_user_id.like("user_outsider_%"))
+            ).all()
+            for u in stale_users:
+                exps = db.query(Experiment).filter_by(owner_id=u.id).all()
+                for exp in exps:
+                    db.delete(exp)
+                db.commit()
+                db.query(MediaUpload).filter_by(user_id=u.id).delete(synchronize_session=False)
+                db.delete(u)
+                db.commit()
+
+            for exp in db.query(Experiment).filter((Experiment.share_token.like("legacy-%")) | (Experiment.name == "Legacy integration test")).all():
+                db.delete(exp)
+            db.commit()
+
             cls.owner = User(
                 clerk_user_id=f"user_integration_{uuid.uuid4().hex}",
                 email=f"integration-{uuid.uuid4()}@example.test",
@@ -46,16 +70,45 @@ class ApiIntegrationTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         from database import SessionLocal
-        from models import Experiment, User
+        from models import Experiment, MediaUpload, User
 
         with SessionLocal() as db:
-            db.query(Experiment).filter(Experiment.id.in_(cls.experiment_ids)).delete(
-                synchronize_session=False
-            )
-            db.query(User).filter_by(id=cls.owner_id).delete()
+            exp_uuids = [uuid.UUID(eid) if isinstance(eid, str) else eid for eid in cls.experiment_ids]
+            exps = db.query(Experiment).filter(
+                (Experiment.id.in_(exp_uuids)) | (Experiment.owner_id == cls.owner_id)
+            ).all()
+            for exp in exps:
+                db.delete(exp)
             db.commit()
+
+            for exp in db.query(Experiment).filter((Experiment.share_token.like("legacy-%")) | (Experiment.name == "Legacy integration test")).all():
+                db.delete(exp)
+            db.commit()
+
+            db.query(MediaUpload).filter_by(user_id=cls.owner_id).delete(synchronize_session=False)
+            user = db.query(User).filter_by(id=cls.owner_id).first()
+            if user:
+                db.delete(user)
+            db.commit()
+
+            remaining_test_users = db.query(User).filter(
+                (User.email.like("integration-%@example.test")) |
+                (User.clerk_user_id.like("user_integration_%")) |
+                (User.email.like("media-outsider-%@example.test")) |
+                (User.clerk_user_id.like("media_outsider_%")) |
+                (User.email.like("outsider-%@example.test")) |
+                (User.clerk_user_id.like("user_outsider_%"))
+            ).all()
+            for u in remaining_test_users:
+                for exp in db.query(Experiment).filter_by(owner_id=u.id).all():
+                    db.delete(exp)
+                db.commit()
+                db.query(MediaUpload).filter_by(user_id=u.id).delete(synchronize_session=False)
+                db.delete(u)
+                db.commit()
         cls.app.dependency_overrides.clear()
         cls.client_context.__exit__(None, None, None)
+
 
     def create_experiment(self, name, gold_ratio=0, access_mode="anonymous"):
         response = self.client.post(
@@ -624,8 +677,10 @@ class ApiIntegrationTests(unittest.TestCase):
         from database import SessionLocal
         from models import Experiment
 
+        token = f"legacy-{uuid.uuid4().hex[:10]}"
         with SessionLocal() as db:
             experiment = Experiment(
+                owner_id=self.__class__.owner_id,
                 name="Legacy integration test",
                 modality="audio",
                 instructions="Legacy schema",
@@ -635,14 +690,14 @@ class ApiIntegrationTests(unittest.TestCase):
                 ],
                 overlap_n=1,
                 gold_ratio=0,
-                share_token="legacy-test-token",
+                share_token=token,
             )
             db.add(experiment)
             db.commit()
             db.refresh(experiment)
             self.experiment_ids.append(str(experiment.id))
 
-        response = self.client.get("/annotate/legacy-test-token/session")
+        response = self.client.get(f"/annotate/{token}/session")
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(
             response.json()["label_schema"],

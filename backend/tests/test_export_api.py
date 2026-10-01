@@ -7,6 +7,17 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 
+def _clean_s3_exports(experiment_id):
+    try:
+        from export_worker import s3_client, S3_BUCKET
+        prefix = f"exports/{experiment_id}/"
+        resp = s3_client.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix)
+        for obj in resp.get("Contents", []):
+            s3_client.delete_object(Bucket=S3_BUCKET, Key=obj["Key"])
+    except Exception:
+        pass
+
+
 @unittest.skipUnless(os.getenv("RUN_INTEGRATION") == "1", "requires local PostgreSQL and S3/MinIO")
 class ExportApiIntegrationTests(unittest.TestCase):
     @classmethod
@@ -17,10 +28,27 @@ class ExportApiIntegrationTests(unittest.TestCase):
         from database import SessionLocal
         from models import User
 
+        cls.experiment_ids = []
         cls.client_context = TestClient(app)
         cls.client = cls.client_context.__enter__()
 
+        # Proactively clean up any stale test users/experiments from prior aborted test runs
         with SessionLocal() as db:
+            from models import Experiment, MediaUpload
+            stale_users = db.query(User).filter(
+                (User.email.like("export-%@example.test")) |
+                (User.clerk_user_id.like("user_export_%"))
+            ).all()
+            for u in stale_users:
+                exps = db.query(Experiment).filter_by(owner_id=u.id).all()
+                for exp in exps:
+                    _clean_s3_exports(exp.id)
+                    db.delete(exp)
+                db.commit()
+                db.query(MediaUpload).filter_by(user_id=u.id).delete(synchronize_session=False)
+                db.delete(u)
+                db.commit()
+
             cls.owner = User(
                 clerk_user_id=f"user_export_{uuid.uuid4().hex}",
                 email=f"export-{uuid.uuid4()}@example.test",
@@ -46,15 +74,38 @@ class ExportApiIntegrationTests(unittest.TestCase):
         from main import app
         from auth import get_current_user
         from database import SessionLocal
-        from models import User
+        from models import Experiment, MediaUpload, User
 
         app.dependency_overrides.pop(get_current_user, None)
         cls.client_context.__exit__(None, None, None)
         with SessionLocal() as db:
-            from models import Experiment
-            db.query(Experiment).filter_by(owner_id=cls.owner_id).delete(synchronize_session=False)
-            db.query(User).filter_by(id=cls.owner_id).delete(synchronize_session=False)
+            exp_uuids = [uuid.UUID(eid) if isinstance(eid, str) else eid for eid in cls.experiment_ids]
+            exps = db.query(Experiment).filter(
+                (Experiment.id.in_(exp_uuids)) | (Experiment.owner_id == cls.owner_id)
+            ).all()
+            for exp in exps:
+                _clean_s3_exports(exp.id)
+                db.delete(exp)
             db.commit()
+
+            db.query(MediaUpload).filter_by(user_id=cls.owner_id).delete(synchronize_session=False)
+            user = db.query(User).filter_by(id=cls.owner_id).first()
+            if user:
+                db.delete(user)
+            db.commit()
+
+            remaining = db.query(User).filter(
+                (User.email.like("export-%@example.test")) |
+                (User.clerk_user_id.like("user_export_%"))
+            ).all()
+            for u in remaining:
+                for exp in db.query(Experiment).filter_by(owner_id=u.id).all():
+                    _clean_s3_exports(exp.id)
+                    db.delete(exp)
+                db.commit()
+                db.query(MediaUpload).filter_by(user_id=u.id).delete(synchronize_session=False)
+                db.delete(u)
+                db.commit()
 
     def test_export_lifecycle_preflight_and_worker(self):
         from export_worker import process_export_job
@@ -78,6 +129,7 @@ class ExportApiIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(exp_resp.status_code, 200)
         exp_id = exp_resp.json()["id"]
+        self.experiment_ids.append(exp_id)
 
         # Upload 2 data units
         units_resp = self.client.post(
