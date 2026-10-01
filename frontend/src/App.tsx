@@ -63,12 +63,12 @@ function App() {
           <Route path="/dashboard"><Protected><Dashboard /></Protected></Route>
           <Route path="/experiments/new">
             <Protected><div className="container animate-fade-in">
-              <div className="flex-col" style={{ alignItems: "center", textAlign: "center", marginBottom: "40px" }}>
+              {/* <div className="flex-col" style={{ alignItems: "center", textAlign: "center", marginBottom: "40px" }}>
                 <h1>TaskGlass</h1>
                 <p style={{ maxWidth: "600px", fontSize: "1.1rem" }}>
                   Design tasks, get them annotated, and track quality live via gold-standard items.
                 </p>
-              </div>
+              </div> */}
               <CreateExperiment />
             </div></Protected>
           </Route>

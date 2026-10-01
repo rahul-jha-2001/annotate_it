@@ -172,6 +172,119 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+export function isFieldVeryPermissive(
+  field: keyof ExportPolicy,
+  value: number | boolean
+): boolean {
+  if (typeof value !== "number") return false;
+  switch (field) {
+    case "min_annotations_for_consensus":
+      return value === 1;
+    case "min_gold_items":
+      return value <= 1;
+    case "min_gold_score":
+      return value <= 0.3;
+    case "min_agreement":
+      return value <= 0.3;
+    case "prior_strength":
+      return value === 0;
+    default:
+      return false;
+  }
+}
+
+export function PermissiveBadge() {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "4px",
+        fontSize: "0.70rem",
+        fontWeight: 600,
+        padding: "1px 6px",
+        borderRadius: "4px",
+        backgroundColor: "var(--gold-soft)",
+        color: "var(--gold-primary)",
+        border: "1px solid rgba(255, 179, 0, 0.35)",
+        lineHeight: "1.2",
+      }}
+      title="This threshold is set to an aggressively permissive level"
+    >
+      <span
+        style={{
+          width: "5px",
+          height: "5px",
+          borderRadius: "50%",
+          backgroundColor: "var(--gold-primary)",
+        }}
+      />
+      very permissive
+    </span>
+  );
+}
+
+export function HelpTag({ content }: { content: string }) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <div
+      style={{ position: "relative", display: "inline-flex", alignItems: "center" }}
+      onMouseEnter={() => setIsOpen(true)}
+      onMouseLeave={() => setIsOpen(false)}
+    >
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          setIsOpen((prev) => !prev);
+        }}
+        aria-label="More information"
+        title={content}
+        style={{
+          background: "none",
+          border: "none",
+          padding: "2px",
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          cursor: "pointer",
+          color: isOpen ? "var(--accent-strong)" : "var(--text-secondary)",
+          borderRadius: "50%",
+          lineHeight: 1,
+        }}
+      >
+        <Info size={13} />
+      </button>
+
+      {isOpen && (
+        <div
+          role="tooltip"
+          style={{
+            position: "absolute",
+            bottom: "calc(100% + 6px)",
+            left: 0,
+            backgroundColor: "var(--bg-primary)",
+            border: "1px solid var(--border-color)",
+            boxShadow: "0 4px 16px rgba(0, 0, 0, 0.3)",
+            borderRadius: "6px",
+            padding: "8px 12px",
+            width: "max-content",
+            maxWidth: "280px",
+            fontSize: "0.78rem",
+            lineHeight: "1.4",
+            color: "var(--text-primary)",
+            zIndex: 100,
+            whiteSpace: "normal",
+          }}
+        >
+          {content}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ExportDatasetModal({
   experimentId,
   experimentName,
@@ -557,6 +670,9 @@ export default function ExportDatasetModal({
                     <p style={{ margin: 0, fontSize: "0.82rem", color: "var(--text-secondary)" }}>
                       Tune consensus and reliability criteria for this export. Adjusting thresholds recalculates the live preview below without altering raw annotations or previous exports.
                     </p>
+                    <p style={{ margin: "6px 0 0 0", fontSize: "0.80rem", color: "var(--text-primary)" }}>
+                      <strong>Lower thresholds accept more data with less certainty it's correct. Higher thresholds are stricter and flag more items for manual review.</strong>
+                    </p>
                   </div>
                   <button
                     type="button"
@@ -578,14 +694,42 @@ export default function ExportDatasetModal({
                 </div>
 
                 {/* Primary Thresholds Grid */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "14px" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "14px" }}>
                   {/* 1. min_annotations_for_consensus */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <label htmlFor="min_annotations_for_consensus" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
-                        Min annotations for consensus
-                      </label>
-                      <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 2</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                        <label htmlFor="min_annotations_for_consensus" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                          Min annotations for consensus
+                        </label>
+                        <HelpTag content="The minimum number of people who must have labeled an item before the system will attempt to produce a single answer for it. Items with fewer submissions than this are automatically sent to manual review." />
+                        {isFieldVeryPermissive("min_annotations_for_consensus", policy.min_annotations_for_consensus) && (
+                          <PermissiveBadge />
+                        )}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 2</span>
+                        <button
+                          type="button"
+                          onClick={() => setPolicy({ ...policy, min_annotations_for_consensus: DEFAULT_POLICY.min_annotations_for_consensus })}
+                          disabled={policy.min_annotations_for_consensus === DEFAULT_POLICY.min_annotations_for_consensus}
+                          aria-label="Reset min_annotations_for_consensus to default"
+                          title="Reset to default (2)"
+                          style={{
+                            background: "none",
+                            border: "none",
+                            padding: "2px",
+                            cursor: policy.min_annotations_for_consensus === DEFAULT_POLICY.min_annotations_for_consensus ? "default" : "pointer",
+                            opacity: policy.min_annotations_for_consensus === DEFAULT_POLICY.min_annotations_for_consensus ? 0.3 : 1,
+                            color: "var(--text-secondary)",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            borderRadius: "4px",
+                          }}
+                        >
+                          <RotateCcw size={11} />
+                        </button>
+                      </div>
                     </div>
                     <input
                       id="min_annotations_for_consensus"
@@ -619,10 +763,35 @@ export default function ExportDatasetModal({
                   {/* 2. low_evidence_threshold */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <label htmlFor="low_evidence_threshold" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
-                        Low evidence threshold
-                      </label>
-                      <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 3</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                        <label htmlFor="low_evidence_threshold" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                          Low evidence threshold
+                        </label>
+                        <HelpTag content="Even if an item is accepted, it's still marked 'low evidence' if fewer than this many people annotated it. Use the 'Include low evidence items' toggle below to decide whether these count as training-ready." />
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 3</span>
+                        <button
+                          type="button"
+                          onClick={() => setPolicy({ ...policy, low_evidence_threshold: DEFAULT_POLICY.low_evidence_threshold })}
+                          disabled={policy.low_evidence_threshold === DEFAULT_POLICY.low_evidence_threshold}
+                          aria-label="Reset low_evidence_threshold to default"
+                          title="Reset to default (3)"
+                          style={{
+                            background: "none",
+                            border: "none",
+                            padding: "2px",
+                            cursor: policy.low_evidence_threshold === DEFAULT_POLICY.low_evidence_threshold ? "default" : "pointer",
+                            opacity: policy.low_evidence_threshold === DEFAULT_POLICY.low_evidence_threshold ? 0.3 : 1,
+                            color: "var(--text-secondary)",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            borderRadius: "4px",
+                          }}
+                        >
+                          <RotateCcw size={11} />
+                        </button>
+                      </div>
                     </div>
                     <input
                       id="low_evidence_threshold"
@@ -656,10 +825,38 @@ export default function ExportDatasetModal({
                   {/* 3. min_gold_items */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <label htmlFor="min_gold_items" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
-                        Min gold items before exclusion
-                      </label>
-                      <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 5</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                        <label htmlFor="min_gold_items" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                          Min gold items before exclusion
+                        </label>
+                        <HelpTag content="How many gold (known-correct) items an annotator needs to have completed before their accuracy score is trusted. Someone who's only seen one or two gold items might just be lucky or unlucky — this sets how much evidence you need before judging them." />
+                        {isFieldVeryPermissive("min_gold_items", policy.min_gold_items) && (
+                          <PermissiveBadge />
+                        )}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 5</span>
+                        <button
+                          type="button"
+                          onClick={() => setPolicy({ ...policy, min_gold_items: DEFAULT_POLICY.min_gold_items })}
+                          disabled={policy.min_gold_items === DEFAULT_POLICY.min_gold_items}
+                          aria-label="Reset min_gold_items to default"
+                          title="Reset to default (5)"
+                          style={{
+                            background: "none",
+                            border: "none",
+                            padding: "2px",
+                            cursor: policy.min_gold_items === DEFAULT_POLICY.min_gold_items ? "default" : "pointer",
+                            opacity: policy.min_gold_items === DEFAULT_POLICY.min_gold_items ? 0.3 : 1,
+                            color: "var(--text-secondary)",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            borderRadius: "4px",
+                          }}
+                        >
+                          <RotateCcw size={11} />
+                        </button>
+                      </div>
                     </div>
                     <input
                       id="min_gold_items"
@@ -693,10 +890,38 @@ export default function ExportDatasetModal({
                   {/* 4. min_gold_score */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <label htmlFor="min_gold_score" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
-                        Min gold score threshold
-                      </label>
-                      <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 0.70</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                        <label htmlFor="min_gold_score" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                          Min gold score threshold
+                        </label>
+                        <HelpTag content="The minimum accuracy (compared to the correct answer) an annotator needs on gold items to stay eligible. Annotators below this score are excluded from consensus, even if they submitted a lot of work." />
+                        {isFieldVeryPermissive("min_gold_score", policy.min_gold_score) && (
+                          <PermissiveBadge />
+                        )}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 0.70</span>
+                        <button
+                          type="button"
+                          onClick={() => setPolicy({ ...policy, min_gold_score: DEFAULT_POLICY.min_gold_score })}
+                          disabled={policy.min_gold_score === DEFAULT_POLICY.min_gold_score}
+                          aria-label="Reset min_gold_score to default"
+                          title="Reset to default (0.7)"
+                          style={{
+                            background: "none",
+                            border: "none",
+                            padding: "2px",
+                            cursor: policy.min_gold_score === DEFAULT_POLICY.min_gold_score ? "default" : "pointer",
+                            opacity: policy.min_gold_score === DEFAULT_POLICY.min_gold_score ? 0.3 : 1,
+                            color: "var(--text-secondary)",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            borderRadius: "4px",
+                          }}
+                        >
+                          <RotateCcw size={11} />
+                        </button>
+                      </div>
                     </div>
                     <input
                       id="min_gold_score"
@@ -731,10 +956,38 @@ export default function ExportDatasetModal({
                   {/* 5. min_agreement */}
                   <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <label htmlFor="min_agreement" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
-                        Min item agreement
-                      </label>
-                      <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 0.60</span>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                        <label htmlFor="min_agreement" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                          Min item agreement
+                        </label>
+                        <HelpTag content="How much independent annotators need to agree with each other before their answer is accepted automatically. Below this, the item is flagged for manual review instead of being resolved automatically." />
+                        {isFieldVeryPermissive("min_agreement", policy.min_agreement) && (
+                          <PermissiveBadge />
+                        )}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 0.60</span>
+                        <button
+                          type="button"
+                          onClick={() => setPolicy({ ...policy, min_agreement: DEFAULT_POLICY.min_agreement })}
+                          disabled={policy.min_agreement === DEFAULT_POLICY.min_agreement}
+                          aria-label="Reset min_agreement to default"
+                          title="Reset to default (0.6)"
+                          style={{
+                            background: "none",
+                            border: "none",
+                            padding: "2px",
+                            cursor: policy.min_agreement === DEFAULT_POLICY.min_agreement ? "default" : "pointer",
+                            opacity: policy.min_agreement === DEFAULT_POLICY.min_agreement ? 0.3 : 1,
+                            color: "var(--text-secondary)",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            borderRadius: "4px",
+                          }}
+                        >
+                          <RotateCcw size={11} />
+                        </button>
+                      </div>
                     </div>
                     <input
                       id="min_agreement"
@@ -768,17 +1021,43 @@ export default function ExportDatasetModal({
 
                   {/* 6. include_low_evidence */}
                   <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: "6px", paddingTop: "8px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <input
-                        type="checkbox"
-                        id="include_low_evidence"
-                        checked={policy.include_low_evidence}
-                        onChange={(e) => setPolicy({ ...policy, include_low_evidence: e.target.checked })}
-                        style={{ width: "16px", height: "16px", cursor: "pointer" }}
-                      />
-                      <label htmlFor="include_low_evidence" style={{ fontSize: "0.85rem", fontWeight: 600, cursor: "pointer", color: "var(--text-primary)" }}>
-                        Include low evidence items in final dataset
-                      </label>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                        <input
+                          type="checkbox"
+                          id="include_low_evidence"
+                          checked={policy.include_low_evidence}
+                          onChange={(e) => setPolicy({ ...policy, include_low_evidence: e.target.checked })}
+                          style={{ width: "16px", height: "16px", cursor: "pointer" }}
+                        />
+                        <label htmlFor="include_low_evidence" style={{ fontSize: "0.85rem", fontWeight: 600, cursor: "pointer", color: "var(--text-primary)" }}>
+                          Include low evidence items in final dataset
+                        </label>
+                        <HelpTag content="Items marked 'low evidence' (see above) still have an answer — this toggle decides whether that answer is included in your final training-ready export, or left out until you've collected more annotations." />
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: No</span>
+                        <button
+                          type="button"
+                          onClick={() => setPolicy({ ...policy, include_low_evidence: DEFAULT_POLICY.include_low_evidence })}
+                          disabled={policy.include_low_evidence === DEFAULT_POLICY.include_low_evidence}
+                          aria-label="Reset include_low_evidence to default"
+                          title="Reset to default (No)"
+                          style={{
+                            background: "none",
+                            border: "none",
+                            padding: "2px",
+                            cursor: policy.include_low_evidence === DEFAULT_POLICY.include_low_evidence ? "default" : "pointer",
+                            opacity: policy.include_low_evidence === DEFAULT_POLICY.include_low_evidence ? 0.3 : 1,
+                            color: "var(--text-secondary)",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            borderRadius: "4px",
+                          }}
+                        >
+                          <RotateCcw size={11} />
+                        </button>
+                      </div>
                     </div>
                     <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)", paddingLeft: "24px" }}>
                       Whether low-evidence accepted items are included in the training-ready set
@@ -809,12 +1088,40 @@ export default function ExportDatasetModal({
                   </button>
 
                   {showAdvancedPrior && (
-                    <div style={{ marginTop: "10px", maxWidth: "300px" }}>
+                    <div style={{ marginTop: "10px", maxWidth: "420px" }}>
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
-                        <label htmlFor="prior_strength" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
-                          Prior Strength
-                        </label>
-                        <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 2.0</span>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                          <label htmlFor="prior_strength" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                            Prior Strength
+                          </label>
+                          <HelpTag content="This controls how much the system leans on a general assumption of 'average' reliability versus an individual annotator's own gold-item track record. A higher number means more annotators need to prove themselves wrong before their score drops — useful when gold items are few. A lower number reacts faster to each individual's actual performance, but is noisier with limited data." />
+                          {isFieldVeryPermissive("prior_strength", policy.prior_strength) && (
+                            <PermissiveBadge />
+                          )}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                          <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 2.0</span>
+                          <button
+                            type="button"
+                            onClick={() => setPolicy({ ...policy, prior_strength: DEFAULT_POLICY.prior_strength })}
+                            disabled={policy.prior_strength === DEFAULT_POLICY.prior_strength}
+                            aria-label="Reset prior_strength to default"
+                            title="Reset to default (2.0)"
+                            style={{
+                              background: "none",
+                              border: "none",
+                              padding: "2px",
+                              cursor: policy.prior_strength === DEFAULT_POLICY.prior_strength ? "default" : "pointer",
+                              opacity: policy.prior_strength === DEFAULT_POLICY.prior_strength ? 0.3 : 1,
+                              color: "var(--text-secondary)",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              borderRadius: "4px",
+                            }}
+                          >
+                            <RotateCcw size={11} />
+                          </button>
+                        </div>
                       </div>
                       <input
                         id="prior_strength"
@@ -844,6 +1151,28 @@ export default function ExportDatasetModal({
                       {policyErrors.prior_strength && (
                         <span style={{ fontSize: "0.75rem", color: "var(--danger)" }}>{policyErrors.prior_strength}</span>
                       )}
+
+                      {/* Persistent Risk Note (Spec Section 3) */}
+                      <div
+                        style={{
+                          marginTop: "8px",
+                          padding: "8px 10px",
+                          borderRadius: "6px",
+                          backgroundColor: policy.prior_strength === 0 ? "var(--gold-soft)" : "rgba(255, 179, 0, 0.08)",
+                          border: "1px solid var(--gold-primary)",
+                          fontSize: "0.75rem",
+                          lineHeight: "1.4",
+                          color: "var(--text-primary)",
+                          display: "flex",
+                          gap: "6px",
+                          alignItems: "flex-start",
+                        }}
+                      >
+                        <AlertTriangle size={14} style={{ color: "var(--gold-primary)", flexShrink: 0, marginTop: "2px" }} />
+                        <span>
+                          <strong>At 0, an annotator's reliability is based purely on the gold items they've personally seen — risky if most annotators have seen only one or two. Higher values protect against judging someone too early; the default (2.0) is a reasonable balance for most experiments.</strong>
+                        </span>
+                      </div>
                     </div>
                   )}
                 </div>

@@ -13,10 +13,10 @@ import ExportDatasetModal, {
   parseIntegerThreshold,
   parseFloatThreshold,
   validatePolicy,
+  isFieldVeryPermissive,
   DEFAULT_POLICY,
   ExportJobItem,
   PreflightResponse,
-  ExportPolicy,
 } from "./ExportDatasetModal";
 
 describe("ExportDatasetModal", () => {
@@ -97,6 +97,41 @@ describe("ExportDatasetModal", () => {
     it("rejects negative prior_strength", () => {
       expect(validatePolicy({ ...DEFAULT_POLICY, prior_strength: 0.0 })).not.toHaveProperty("prior_strength");
       expect(validatePolicy({ ...DEFAULT_POLICY, prior_strength: -0.5 })).toHaveProperty("prior_strength");
+    });
+  });
+
+  describe("isFieldVeryPermissive (Spec Section 4)", () => {
+    it("flags min_annotations_for_consensus only at floor 1", () => {
+      expect(isFieldVeryPermissive("min_annotations_for_consensus", 1)).toBe(true);
+      expect(isFieldVeryPermissive("min_annotations_for_consensus", 2)).toBe(false);
+      expect(isFieldVeryPermissive("min_annotations_for_consensus", 3)).toBe(false);
+    });
+
+    it("flags min_gold_items when <= 1", () => {
+      expect(isFieldVeryPermissive("min_gold_items", 0)).toBe(true);
+      expect(isFieldVeryPermissive("min_gold_items", 1)).toBe(true);
+      expect(isFieldVeryPermissive("min_gold_items", 2)).toBe(false);
+      expect(isFieldVeryPermissive("min_gold_items", 5)).toBe(false);
+    });
+
+    it("flags min_gold_score when <= 0.3", () => {
+      expect(isFieldVeryPermissive("min_gold_score", 0.0)).toBe(true);
+      expect(isFieldVeryPermissive("min_gold_score", 0.3)).toBe(true);
+      expect(isFieldVeryPermissive("min_gold_score", 0.35)).toBe(false);
+      expect(isFieldVeryPermissive("min_gold_score", 0.7)).toBe(false);
+    });
+
+    it("flags min_agreement when <= 0.3", () => {
+      expect(isFieldVeryPermissive("min_agreement", 0.1)).toBe(true);
+      expect(isFieldVeryPermissive("min_agreement", 0.3)).toBe(true);
+      expect(isFieldVeryPermissive("min_agreement", 0.4)).toBe(false);
+      expect(isFieldVeryPermissive("min_agreement", 0.6)).toBe(false);
+    });
+
+    it("flags prior_strength when 0", () => {
+      expect(isFieldVeryPermissive("prior_strength", 0)).toBe(true);
+      expect(isFieldVeryPermissive("prior_strength", 0.5)).toBe(false);
+      expect(isFieldVeryPermissive("prior_strength", 2.0)).toBe(false);
     });
   });
 
@@ -668,5 +703,155 @@ describe("ExportDatasetModal interactions", () => {
     // Expect validation error message and disabled submit button
     expect(await screen.findByText("Must be an integer ≥ 1")).toBeTruthy();
     expect((submitBtn as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("renders persistent directional framing and help tags for fields in consensus mode", async () => {
+    apiMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/exports/preflight")) return jsonResponse(preflightResponse("fp-help"));
+      if (url.endsWith("/exports")) return jsonResponse([]);
+      throw new Error(`Unexpected API call: ${url}`);
+    });
+
+    render(
+      <ExportDatasetModal experimentId="exp-1" experimentName="Test experiment" onClose={() => {}} />
+    );
+    await screen.findByText("Preflight Summary");
+    await userEvent.click(screen.getByText("Consensus Dataset"));
+    expect(await screen.findByText("Consensus Guardrail Thresholds")).toBeTruthy();
+
+    // Section 1: Persistent directional framing
+    expect(
+      screen.getByText(
+        "Lower thresholds accept more data with less certainty it's correct. Higher thresholds are stricter and flag more items for manual review."
+      )
+    ).toBeTruthy();
+
+    // Section 2: Help tag icons with descriptive text
+    expect(
+      screen.getByTitle(
+        /The minimum number of people who must have labeled an item before the system will attempt to produce a single answer for it/
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle(
+        /Even if an item is accepted, it's still marked 'low evidence' if fewer than this many people annotated it/
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle(
+        /How many gold \(known-correct\) items an annotator needs to have completed before their accuracy score is trusted/
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle(
+        /The minimum accuracy \(compared to the correct answer\) an annotator needs on gold items to stay eligible/
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle(
+        /How much independent annotators need to agree with each other before their answer is accepted automatically/
+      )
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle(
+        /Items marked 'low evidence' \(see above\) still have an answer — this toggle decides whether that answer is included/
+      )
+    ).toBeTruthy();
+  });
+
+  it("renders persistent risk note and help tag for prior_strength in advanced settings", async () => {
+    apiMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/exports/preflight")) return jsonResponse(preflightResponse("fp-risk"));
+      if (url.endsWith("/exports")) return jsonResponse([]);
+      throw new Error(`Unexpected API call: ${url}`);
+    });
+
+    render(
+      <ExportDatasetModal experimentId="exp-1" experimentName="Test experiment" onClose={() => {}} />
+    );
+    await screen.findByText("Preflight Summary");
+    await userEvent.click(screen.getByText("Consensus Dataset"));
+    expect(await screen.findByText("Consensus Guardrail Thresholds")).toBeTruthy();
+
+    // Expand advanced settings
+    await userEvent.click(screen.getByText(/Advanced Settings/));
+
+    // Section 3: Persistent risk note
+    expect(
+      screen.getByText(
+        /At 0, an annotator's reliability is based purely on the gold items they've personally seen — risky if most annotators have seen only one or two/
+      )
+    ).toBeTruthy();
+
+    // Help tag for prior strength
+    expect(
+      screen.getByTitle(
+        /This controls how much the system leans on a general assumption of 'average' reliability versus an individual annotator's own gold-item track record/
+      )
+    ).toBeTruthy();
+  });
+
+  it("displays 'very permissive' visual indicator when fields are aggressively loosened", async () => {
+    apiMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/exports/preflight")) return jsonResponse(preflightResponse("fp-permissive"));
+      if (url.endsWith("/exports")) return jsonResponse([]);
+      throw new Error(`Unexpected API call: ${url}`);
+    });
+
+    render(
+      <ExportDatasetModal experimentId="exp-1" experimentName="Test experiment" onClose={() => {}} />
+    );
+    await screen.findByText("Preflight Summary");
+    await userEvent.click(screen.getByText("Consensus Dataset"));
+    expect(await screen.findByText("Consensus Guardrail Thresholds")).toBeTruthy();
+
+    // Initially at defaults: no very permissive badge
+    expect(screen.queryByText("very permissive")).toBeNull();
+
+    // Set min_annotations_for_consensus = 1 (floor)
+    const minAnnotationsInput = screen.getByLabelText("Min annotations for consensus");
+    fireEvent.change(minAnnotationsInput, { target: { value: "1" } });
+    expect(screen.getAllByText("very permissive").length).toBe(1);
+
+    // Set min_agreement = 0.25 (<= 0.3)
+    const minAgreementInput = screen.getByLabelText("Min item agreement");
+    fireEvent.change(minAgreementInput, { target: { value: "0.25" } });
+    expect(screen.getAllByText("very permissive").length).toBe(2);
+  });
+
+  it("supports per-field reset buttons to revert individual fields to defaults", async () => {
+    apiMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/exports/preflight")) return jsonResponse(preflightResponse("fp-reset"));
+      if (url.endsWith("/exports")) return jsonResponse([]);
+      throw new Error(`Unexpected API call: ${url}`);
+    });
+
+    render(
+      <ExportDatasetModal experimentId="exp-1" experimentName="Test experiment" onClose={() => {}} />
+    );
+    await screen.findByText("Preflight Summary");
+    await userEvent.click(screen.getByText("Consensus Dataset"));
+    expect(await screen.findByText("Consensus Guardrail Thresholds")).toBeTruthy();
+
+    const minGoldItemsInput = screen.getByLabelText("Min gold items before exclusion") as HTMLInputElement;
+    const minAgreementInput = screen.getByLabelText("Min item agreement") as HTMLInputElement;
+
+    // Modify both fields
+    fireEvent.change(minGoldItemsInput, { target: { value: "2" } });
+    fireEvent.change(minAgreementInput, { target: { value: "0.45" } });
+    expect(minGoldItemsInput.value).toBe("2");
+    expect(minAgreementInput.value).toBe("0.45");
+
+    // Click per-field reset for min_gold_items only
+    const resetGoldBtn = screen.getByRole("button", { name: "Reset min_gold_items to default" });
+    await userEvent.click(resetGoldBtn);
+
+    // min_gold_items is restored to 5, min_agreement remains 0.45
+    expect(minGoldItemsInput.value).toBe("5");
+    expect(minAgreementInput.value).toBe("0.45");
   });
 });
