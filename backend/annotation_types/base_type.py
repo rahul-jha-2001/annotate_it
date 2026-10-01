@@ -6,6 +6,8 @@ from typing import Any, ClassVar, Dict, Generic, List, Type, TypeVar, final
 
 from pydantic import BaseModel
 
+from .base import ConsensusDetails, ConsensusResult, WeightedAnswer
+
 
 ConfigT = TypeVar("ConfigT", bound=BaseModel)
 AnswerT = TypeVar("AnswerT", bound=BaseModel)
@@ -32,6 +34,7 @@ class BaseAnnotationType(ABC, Generic[ConfigT, AnswerT]):
             "validate_gold_answer",
             "gold_match",
             "agreement",
+            "consensus",
             "catalog_entry",
         }
     )
@@ -133,6 +136,93 @@ class BaseAnnotationType(ABC, Generic[ConfigT, AnswerT]):
         )
 
     @final
+    def consensus(
+        self,
+        answers: List[WeightedAnswer | Dict[str, Any]],
+        config: Dict[str, Any],
+    ) -> ConsensusResult:
+        parsed_config = self.config_model.model_validate(
+            self._normalize_config_version(config)
+        )
+        normalized_answers: List[WeightedAnswer] = []
+        parsed_answer_models: List[AnswerT] = []
+
+        for item in answers:
+            wa = item if isinstance(item, WeightedAnswer) else WeightedAnswer.model_validate(item)
+            w = float(wa.weight)
+            if not math.isfinite(w) or w < 0.0:
+                raise ValueError(
+                    f"Invalid weight {wa.weight}: weight must be a finite, non-negative number"
+                )
+            parsed_ans = self._parse_answer(wa.answer, parsed_config)
+            normalized_answers.append(wa)
+            parsed_answer_models.append(parsed_ans)
+
+        if not normalized_answers:
+            return ConsensusResult(
+                answer=None,
+                consensus=ConsensusDetails(
+                    method="quality_weighted_medoid",
+                    algorithm_version=1,
+                    confidence=0.0,
+                    agreement=0.0,
+                    votes_total=0,
+                    votes_used=0,
+                    source_annotation_ids=[],
+                    excluded_annotation_ids=[],
+                    status="needs_review_no_eligible_annotations",
+                    warnings=["No eligible annotations"],
+                ),
+            )
+
+        if len(normalized_answers) == 1:
+            winner_wa = normalized_answers[0]
+            validated_winner = self.validate_answer(winner_wa.answer, config)
+            return ConsensusResult(
+                answer=validated_winner,
+                consensus=ConsensusDetails(
+                    method="quality_weighted_medoid",
+                    algorithm_version=1,
+                    confidence=1.0,
+                    agreement=1.0,
+                    votes_total=1,
+                    votes_used=1,
+                    source_annotation_ids=[winner_wa.annotation_id],
+                    excluded_annotation_ids=[],
+                    status="accepted",
+                    warnings=[],
+                ),
+            )
+
+        overall_agreement = self._checked_score(
+            self._aggregate_agreement(parsed_answer_models, parsed_config)
+        )
+
+        winner_wa, confidence, status, source_ids, warnings = self._select_consensus_candidate(
+            normalized_answers, parsed_answer_models, parsed_config
+        )
+
+        validated_winner = None
+        if winner_wa is not None:
+            validated_winner = self.validate_answer(winner_wa.answer, config)
+
+        return ConsensusResult(
+            answer=validated_winner,
+            consensus=ConsensusDetails(
+                method="quality_weighted_medoid",
+                algorithm_version=1,
+                confidence=round(confidence, 4),
+                agreement=round(overall_agreement, 4),
+                votes_total=len(normalized_answers),
+                votes_used=len(normalized_answers),
+                source_annotation_ids=source_ids,
+                excluded_annotation_ids=[],
+                status=status,
+                warnings=warnings,
+            ),
+        )
+
+    @final
     def catalog_entry(self) -> Dict[str, Any]:
         return {
             "key": self.key,
@@ -165,6 +255,77 @@ class BaseAnnotationType(ABC, Generic[ConfigT, AnswerT]):
             for j in range(i + 1, len(answers))
         ]
         return sum(scores) / len(scores)
+
+    def _select_consensus_candidate(
+        self,
+        answers: List[WeightedAnswer],
+        parsed_answers: List[AnswerT],
+        config: ConfigT,
+    ) -> tuple[Optional[WeightedAnswer], float, str, List[str], List[str]]:
+        n = len(answers)
+        sim_matrix = [[0.0] * n for _ in range(n)]
+        for i in range(n):
+            sim_matrix[i][i] = 1.0
+            for j in range(i + 1, n):
+                s = self._checked_score(
+                    self._score_pair(parsed_answers[i], parsed_answers[j], config)
+                )
+                sim_matrix[i][j] = s
+                sim_matrix[j][i] = s
+
+        scores: List[float] = []
+        for i in range(n):
+            other_weight_sum = sum(answers[j].weight for j in range(n) if j != i)
+            if other_weight_sum > 0:
+                weighted_sim = sum(
+                    answers[j].weight * sim_matrix[i][j]
+                    for j in range(n)
+                    if j != i
+                )
+                s_i = weighted_sim / other_weight_sum
+            else:
+                s_i = sum(sim_matrix[i][j] for j in range(n) if j != i) / (n - 1)
+            scores.append(s_i)
+
+        max_score = max(scores)
+        top_indices = [idx for idx, s in enumerate(scores) if abs(s - max_score) <= 1e-7]
+
+        # Check if all top candidates are identical (pairwise similarity == 1.0)
+        all_identical = True
+        for a_idx in range(len(top_indices)):
+            for b_idx in range(a_idx + 1, len(top_indices)):
+                if abs(sim_matrix[top_indices[a_idx]][top_indices[b_idx]] - 1.0) > 1e-7:
+                    all_identical = False
+                    break
+            if not all_identical:
+                break
+
+        if not all_identical:
+            tied_candidates = sorted(
+                [answers[idx] for idx in top_indices],
+                key=lambda c: (
+                    c.submitted_at.isoformat() if c.submitted_at else "",
+                    str(c.annotation_id),
+                ),
+            )
+            return (
+                None,
+                max_score,
+                "needs_review_tie",
+                [c.annotation_id for c in tied_candidates],
+                ["Tie between non-identical candidates with equal score"],
+            )
+
+        top_candidates = [answers[idx] for idx in top_indices]
+        top_candidates.sort(
+            key=lambda c: (
+                c.submitted_at.isoformat() if c.submitted_at else "",
+                str(c.annotation_id),
+            )
+        )
+        winner = top_candidates[0]
+        all_ids = [a.annotation_id for a in answers]
+        return (winner, max_score, "accepted", all_ids, [])
 
     @abstractmethod
     def _score_pair(

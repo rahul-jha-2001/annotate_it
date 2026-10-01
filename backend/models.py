@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Float, Integer, Boolean, ForeignKey, DateTime, UniqueConstraint
+from sqlalchemy import Column, String, Float, Integer, BigInteger, Boolean, ForeignKey, DateTime, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.sql import func
@@ -22,6 +22,7 @@ class User(Base):
 
     experiments = relationship("Experiment", back_populates="owner")
     annotator_profiles = relationship("Annotator", back_populates="user")
+    export_jobs = relationship("ExportJob", back_populates="requested_by_user")
 
 class Experiment(Base):
     __tablename__ = 'experiment'
@@ -46,6 +47,7 @@ class Experiment(Base):
     data_units = relationship("DataUnit", back_populates="experiment", cascade="all, delete-orphan")
     annotators = relationship("Annotator", back_populates="experiment", cascade="all, delete-orphan")
     owner = relationship("User", back_populates="experiments")
+    export_jobs = relationship("ExportJob", back_populates="experiment", cascade="all, delete-orphan")
 
 class DataUnit(Base):
     __tablename__ = 'data_unit'
@@ -116,3 +118,47 @@ class ItemAgreement(Base):
     computed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 
     data_unit = relationship("DataUnit", back_populates="agreement")
+
+
+class ExportJob(Base):
+    __tablename__ = 'export_job'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    experiment_id = Column(UUID(as_uuid=True), ForeignKey('experiment.id', ondelete='CASCADE'), nullable=False, index=True)
+    requested_by_user_id = Column(UUID(as_uuid=True), ForeignKey('app_user.id', ondelete='SET NULL'), nullable=True, index=True)
+    mode = Column(String, nullable=False)  # 'complete' | 'consensus'
+    status = Column(String, nullable=False, default='queued', index=True)  # 'queued' | 'running' | 'ready' | 'failed' | 'expired'
+    policy = Column(JSONB, nullable=False, default=dict)
+    source_cutoff_at = Column(DateTime(timezone=True), nullable=False)
+    source_counts = Column(JSONB, nullable=False, default=dict)
+    source_fingerprint = Column(String, nullable=False)
+    preflight_summary = Column(JSONB, nullable=False, default=dict)
+    warnings = Column(JSONB, nullable=False, default=list)
+    object_uri = Column(String)
+    size_bytes = Column(BigInteger)
+    sha256 = Column(String)
+    error_code = Column(String)
+    error_message = Column(String)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    started_at = Column(DateTime(timezone=True))
+    completed_at = Column(DateTime(timezone=True))
+    expires_at = Column(DateTime(timezone=True))
+    worker_id = Column(String, nullable=True, index=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    experiment = relationship("Experiment", back_populates="export_jobs")
+    requested_by_user = relationship("User", back_populates="export_jobs")
+
+
+class MediaUpload(Base):
+    __tablename__ = 'media_upload'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('app_user.id', ondelete='CASCADE'), nullable=False, index=True)
+    experiment_id = Column(UUID(as_uuid=True), ForeignKey('experiment.id', ondelete='SET NULL'), nullable=True, index=True)
+    bucket = Column(String, nullable=False)
+    key = Column(String, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    user = relationship("User")
+    experiment = relationship("Experiment")

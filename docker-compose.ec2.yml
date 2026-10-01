@@ -47,6 +47,27 @@ services:
     #   db:
     #     condition: service_healthy
 
+  export-worker:
+    image: annotate-it-backend:latest
+    restart: unless-stopped
+    command: ["python", "export_worker.py"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-annotate_user}:${POSTGRES_PASSWORD:-annotate_password}@db:5432/${POSTGRES_DB:-annotate_db}}
+      S3_BUCKET: ${S3_BUCKET:-taskglass-annotation-data}
+      AWS_REGION: ${AWS_REGION:-ap-south-1}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      SKIP_MIGRATIONS: "1"
+    logging:
+      driver: "awslogs"
+      options:
+        awslogs-region: ${AWS_REGION:-ap-south-1}
+        awslogs-group: ${AWSLOGS_GROUP:-/taskglass/production}
+        awslogs-stream: "export-worker"
+        awslogs-create-group: "true"
+    depends_on:
+      - backend
+
   frontend:
     build:
       context: ./frontend

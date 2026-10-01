@@ -172,6 +172,8 @@ class ExperimentListResponse(BaseModel):
 
 class PresignRequest(BaseModel):
     filenames: List[str]
+    experiment_id: Optional[UUID] = None
+
 
 class PresignResponseItem(BaseModel):
     filename: str
@@ -187,6 +189,23 @@ class DataUnitCreate(BaseModel):
     is_gold: bool = False
     gold_answer: Optional[Dict[str, Any]] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("raw_uri")
+    @classmethod
+    def validate_raw_uri(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("raw_uri cannot be empty")
+        if ".." in v or "\x00" in v:
+            raise ValueError("raw_uri cannot contain path traversal sequences or null bytes")
+        if v.startswith("/") or v.startswith("file://") or v.startswith("\\"):
+            raise ValueError("Local filesystem paths and file:// schemes are not permitted for raw_uri")
+        if v.startswith("s3://"):
+            remainder = v[5:]
+            if "/" not in remainder or not remainder.split("/", 1)[1]:
+                raise ValueError("s3:// URI must include both bucket and key")
+        return v
+
 
 class DataUnitBatchCreate(BaseModel):
     items: List[DataUnitCreate]
@@ -229,3 +248,66 @@ class QualificationSubmission(BaseModel):
 class AnnotatorConfigurationResponse(BaseModel):
     experiment_name: str
     access_mode: Literal["sign_in_required", "guest_name", "anonymous"]
+
+
+class ConsensusPolicySchema(BaseModel):
+    min_annotations_for_consensus: int = Field(default=2, ge=1)
+    low_evidence_threshold: int = Field(default=3, ge=1)
+    min_gold_items: int = Field(default=5, ge=0)
+    min_gold_score: float = Field(default=0.70, ge=0.0, le=1.0)
+    min_agreement: float = Field(default=0.60, ge=0.0, le=1.0)
+    include_low_evidence: bool = Field(default=False)
+    prior_strength: float = Field(default=2.0, ge=0.0)
+
+
+class ExportPreflightRequest(BaseModel):
+    mode: Literal["complete", "consensus"] = "complete"
+    policy: Optional[ConsensusPolicySchema] = None
+
+
+class ExportPreflightResponse(BaseModel):
+    mode: Literal["complete", "consensus"]
+    policy: ConsensusPolicySchema
+    source_fingerprint: str
+    source_cutoff_at: str
+    counts: Dict[str, int]
+    annotator_summary: Dict[str, int]
+    estimated_size_bytes: int
+    training_ready: bool
+    warnings: List[str]
+
+
+class ExportJobCreateRequest(BaseModel):
+    mode: Literal["complete", "consensus"] = "complete"
+    policy: Optional[ConsensusPolicySchema] = None
+    source_fingerprint: str
+    acknowledge_warnings: bool = False
+
+
+class ExportJobResponse(BaseModel):
+    id: UUID
+    experiment_id: UUID
+    mode: Literal["complete", "consensus"]
+    status: str
+    policy: Dict[str, Any]
+    source_cutoff_at: Any
+    source_fingerprint: str
+    preflight_summary: Dict[str, Any]
+    warnings: List[str]
+    size_bytes: Optional[int] = None
+    sha256: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: Any
+    started_at: Optional[Any] = None
+    completed_at: Optional[Any] = None
+    expires_at: Optional[Any] = None
+
+
+class ExportDownloadResponse(BaseModel):
+    job_id: UUID
+    download_url: str
+    expires_in_seconds: int
+    filename: str
+    size_bytes: Optional[int] = None
+    sha256: Optional[str] = None

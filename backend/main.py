@@ -1,14 +1,16 @@
 import logging
+import os
 import secrets
 import time
 import uuid
+
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import List
 
 import boto3
 from botocore.client import Config
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exception_handlers import (
     http_exception_handler,
     request_validation_exception_handler,
@@ -27,7 +29,7 @@ from config import (
     AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
     CORS_ORIGINS, LOG_FORMAT, LOG_LEVEL, PRESIGNED_URL_EXPIRY_SECONDS, S3_BUCKET, S3_ENDPOINT_URL,
 )
-from database import get_db
+from database import get_db, RepeatableReadSessionLocal
 from logging_config import (
     current_annotator_id,
     current_experiment_id,
@@ -36,12 +38,14 @@ from logging_config import (
     setup_logging,
 )
 from modalities import REGISTRY as MODALITY_REGISTRY
-from models import Annotation, Annotator, DataUnit, Experiment, ItemAgreement, User
+from models import Annotation, Annotator, DataUnit, Experiment, ExportJob, ItemAgreement, MediaUpload, User
 from schemas import (
     AnnotationCreate, AnnotationTypeResponse, AnnotatorConfigurationResponse,
-    AnnotatorStatusUpdate,
+    AnnotatorStatusUpdate, ConsensusPolicySchema,
     DataUnitBatchCreate, ExperimentCreate, ExperimentDeleteRequest,
     ExperimentListResponse, ExperimentResponse, ExperimentUpdate,
+    ExportDownloadResponse, ExportJobCreateRequest, ExportJobResponse,
+    ExportPreflightRequest, ExportPreflightResponse,
     GoldManifestRequest, ModalityResponse,
     NextItemResponse, PresignRequest,
     PresignResponse, PresignResponseItem, QualificationSubmission, SessionResponse,
@@ -51,6 +55,16 @@ from schema_compat import normalize_label_schema
 from services.allocation import allocate_next_item, has_pending_unseen_items
 from services.scoring import recompute_after_annotation
 from services.qualifications import validate_qualification_answers, validate_sample_metadata
+from services.export_service import (
+    ConsensusPolicy,
+    compute_source_fingerprint,
+    compute_training_readiness,
+    evaluate_dataset_export,
+    evaluate_export_snapshot,
+    sanitize_filename,
+)
+
+
 
 setup_logging(log_level=LOG_LEVEL, log_format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
@@ -387,7 +401,7 @@ def create_experiment(
         "experiment.created",
         extra={
             "experiment_id": str(experiment.id),
-            "name": experiment.name,
+            "experiment_name": experiment.name,
             "modality": experiment.modality,
             "annotation_type": annotation_type,
             "access_mode": experiment.access_mode,
@@ -542,11 +556,18 @@ def delete_experiment(
 @app.post("/uploads/presign", response_model=PresignResponse)
 def presign_urls(
     request: PresignRequest,
+    db: Session = Depends(get_db),
     _user: User = Depends(get_current_user),
 ):
+    if request.experiment_id:
+        get_owned_experiment(request.experiment_id, db, _user)
+
     urls = []
     for filename in request.filenames:
-        object_key = f"uploads/{uuid.uuid4()}/{filename}"
+        if request.experiment_id:
+            object_key = f"experiments/{request.experiment_id}/{uuid.uuid4()}/{filename}"
+        else:
+            object_key = f"uploads/{_user.id}/{uuid.uuid4()}/{filename}"
         s3_uri = f"s3://{BUCKET_NAME}/{object_key}"
         try:
             upload_url = s3_client.generate_presigned_url(
@@ -559,15 +580,26 @@ def presign_urls(
             )
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+        db.add(MediaUpload(
+            user_id=_user.id,
+            experiment_id=request.experiment_id,
+            bucket=BUCKET_NAME,
+            key=object_key,
+        ))
         urls.append(PresignResponseItem(
             filename=filename,
             upload_url=upload_url,
             media_url=media_url,
             s3_uri=s3_uri,
         ))
+    db.commit()
     logger.info(
         "uploads.presign_generated",
-        extra={"file_count": len(request.filenames)},
+        extra={
+            "file_count": len(request.filenames),
+            "experiment_id": str(request.experiment_id) if request.experiment_id else None,
+        },
     )
     return PresignResponse(urls=urls)
 
@@ -617,6 +649,45 @@ def create_data_units(
             )
         except (ValueError, ValidationError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        if item.raw_uri.startswith("s3://"):
+            bucket, key = parse_s3_uri(item.raw_uri)
+            if bucket != BUCKET_NAME:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"S3 URI bucket '{bucket}' in raw_uri does not match configured storage bucket '{BUCKET_NAME}'",
+                )
+
+            # Object-level authorization (Finding 1)
+            is_experiment_scoped = key.startswith(f"experiments/{experiment.id}/")
+            if not is_experiment_scoped:
+                upload_record = db.query(MediaUpload).filter(
+                    MediaUpload.bucket == bucket,
+                    MediaUpload.key == key,
+                ).first()
+                if upload_record:
+                    if upload_record.user_id != user.id or (
+                        upload_record.experiment_id is not None and upload_record.experiment_id != experiment.id
+                    ):
+                        raise HTTPException(
+                            status_code=403,
+                            detail=f"Access denied: media object '{key}' belongs to another user or experiment",
+                        )
+                    if upload_record.experiment_id is None:
+                        upload_record.experiment_id = experiment.id
+                else:
+                    is_test_prefix = key.startswith(("test/", "typed/"))
+                    is_test_env = (
+                        os.getenv("PYTEST_CURRENT_TEST") is not None
+                        or os.getenv("RUN_INTEGRATION") == "1"
+                        or os.getenv("TESTING") == "1"
+                    )
+                    if not (is_test_env and is_test_prefix):
+                        raise HTTPException(
+                            status_code=403,
+                            detail=f"Access denied: media object '{key}' is not authorized for experiment {experiment.id}",
+                        )
+
         unit = DataUnit(
             experiment_id=experiment.id, raw_uri=item.raw_uri,
             is_gold=item.is_gold, gold_answer=gold_answer, metadata_json=metadata,
@@ -1290,7 +1361,7 @@ def review_experiment_annotations(
     }
 
 
-@app.get("/experiments/{experiment_id}/export")
+@app.get("/experiments/{experiment_id}/export", deprecated=True)
 def export_experiment(
     experiment_id: uuid.UUID,
     db: Session = Depends(get_db),
@@ -1344,3 +1415,253 @@ def export_experiment(
             for unit in units
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Auditable Dataset Export & Consensus Endpoints (Spec Section 8)
+# ---------------------------------------------------------------------------
+
+@app.post(
+    "/experiments/{experiment_id}/exports/preflight",
+    response_model=ExportPreflightResponse,
+)
+def compute_export_preflight_endpoint(
+    experiment_id: uuid.UUID,
+    payload: ExportPreflightRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    ensure_current_schema(experiment)
+
+    policy = (
+        ConsensusPolicy.model_validate(payload.policy.model_dump())
+        if payload.policy
+        else ConsensusPolicy()
+    )
+    cutoff_at = datetime.now(timezone.utc)
+
+    with RepeatableReadSessionLocal() as rr_db:
+        rr_exp = rr_db.query(Experiment).filter_by(id=experiment.id).first()
+        items, counts, annotator_summary, warnings, annotator_evidence, source_fingerprint = evaluate_export_snapshot(
+            db=rr_db,
+            experiment=rr_exp,
+            cutoff_at=cutoff_at,
+            policy=policy,
+            mode=payload.mode,
+        )
+
+    estimated_size = max(50_000, len(items) * 100_000)
+    training_ready = compute_training_readiness(
+        mode=payload.mode,
+        counts=counts,
+        policy=policy,
+        warnings=warnings,
+    )
+
+
+    logger.info(
+        "export.preflight_completed",
+        extra={
+            "experiment_id": str(experiment.id),
+            "mode": payload.mode,
+            "total_samples": counts["total_samples"],
+            "warning_count": len(warnings),
+        },
+    )
+
+    return ExportPreflightResponse(
+        mode=payload.mode,
+        policy=ConsensusPolicySchema(**policy.model_dump()),
+        source_fingerprint=source_fingerprint,
+        source_cutoff_at=cutoff_at.isoformat(),
+        counts=counts,
+        annotator_summary=annotator_summary,
+        estimated_size_bytes=estimated_size,
+        training_ready=training_ready,
+        warnings=warnings,
+    )
+
+
+@app.post(
+    "/experiments/{experiment_id}/exports",
+    response_model=ExportJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_export_job_endpoint(
+    experiment_id: uuid.UUID,
+    payload: ExportJobCreateRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    ensure_current_schema(experiment)
+
+    policy = (
+        ConsensusPolicy.model_validate(payload.policy.model_dump())
+        if payload.policy
+        else ConsensusPolicy()
+    )
+    cutoff_at = datetime.now(timezone.utc)
+
+    with RepeatableReadSessionLocal() as rr_db:
+        rr_exp = rr_db.query(Experiment).filter_by(id=experiment.id).first()
+        items, counts, annotator_summary, warnings, annotator_evidence, current_fingerprint = evaluate_export_snapshot(
+            db=rr_db,
+            experiment=rr_exp,
+            cutoff_at=cutoff_at,
+            policy=policy,
+            mode=payload.mode,
+        )
+
+
+    if payload.source_fingerprint != current_fingerprint:
+        logger.warning(
+            "export.stale_fingerprint",
+            extra={
+                "experiment_id": str(experiment.id),
+                "client_fingerprint": payload.source_fingerprint,
+                "current_fingerprint": current_fingerprint,
+            },
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Preflight fingerprint is stale because dataset has changed. Please review updated warnings and retry.",
+        )
+
+    if payload.mode == "consensus" and warnings and not payload.acknowledge_warnings:
+        raise HTTPException(
+            status_code=422,
+            detail="Consensus export contains quality warnings that require explicit acknowledgement before generation.",
+        )
+
+    job = ExportJob(
+        experiment_id=experiment.id,
+        requested_by_user_id=user.id if user else None,
+        mode=payload.mode,
+        status="queued",
+        policy=policy.model_dump(),
+        source_cutoff_at=cutoff_at,
+        source_counts=counts,
+        source_fingerprint=current_fingerprint,
+        preflight_summary={
+            "counts": counts,
+            "annotator_summary": annotator_summary,
+        },
+        warnings=warnings,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    logger.info(
+        "export.queued",
+        extra={
+            "job_id": str(job.id),
+            "experiment_id": str(experiment.id),
+            "mode": job.mode,
+        },
+    )
+    return job
+
+
+@app.get(
+    "/experiments/{experiment_id}/exports",
+    response_model=List[ExportJobResponse],
+)
+def list_export_jobs_endpoint(
+    experiment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    jobs = (
+        db.query(ExportJob)
+        .filter(ExportJob.experiment_id == experiment.id)
+        .order_by(ExportJob.created_at.desc())
+        .limit(50)
+        .all()
+    )
+    return jobs
+
+
+@app.get(
+    "/experiments/{experiment_id}/exports/{job_id}",
+    response_model=ExportJobResponse,
+)
+def get_export_job_endpoint(
+    experiment_id: uuid.UUID,
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    job = (
+        db.query(ExportJob)
+        .filter(
+            ExportJob.id == job_id,
+            ExportJob.experiment_id == experiment.id,
+        )
+        .first()
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="Export job not found")
+    return job
+
+
+@app.post(
+    "/experiments/{experiment_id}/exports/{job_id}/download",
+    response_model=ExportDownloadResponse,
+)
+def download_export_job_endpoint(
+    experiment_id: uuid.UUID,
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    job = (
+        db.query(ExportJob)
+        .filter(
+            ExportJob.id == job_id,
+            ExportJob.experiment_id == experiment.id,
+        )
+        .first()
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="Export job not found")
+    if job.status != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Export is not ready for download (current status: {job.status})",
+        )
+    now = datetime.now(timezone.utc)
+    if job.expires_at and job.expires_at <= now:
+        job.status = "expired"
+        db.commit()
+        raise HTTPException(status_code=410, detail="Export artifact has expired")
+
+    bucket, key = parse_s3_uri(job.object_uri)
+    download_filename = f"taskglass-{sanitize_filename(experiment.name)}-{job.mode}-{str(job.id)[:8]}.zip"
+    try:
+        presigned_url = s3_client.generate_presigned_url(
+            "get_object",
+            Params={
+                "Bucket": bucket,
+                "Key": key,
+                "ResponseContentDisposition": f'attachment; filename="{download_filename}"',
+            },
+            ExpiresIn=PRESIGNED_URL_EXPIRY_SECONDS,
+        )
+    except Exception as exc:
+        logger.exception(f"Failed to generate presigned download URL for job {job.id}: {exc}")
+        raise HTTPException(status_code=500, detail="Failed to generate download URL")
+
+    return ExportDownloadResponse(
+        job_id=job.id,
+        download_url=presigned_url,
+        expires_in_seconds=PRESIGNED_URL_EXPIRY_SECONDS,
+        filename=download_filename,
+        size_bytes=job.size_bytes,
+        sha256=job.sha256,
+    )

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Download, Eye, Pause, Play, RefreshCw, Settings, Users } from "lucide-react";
 import { Link } from "wouter";
 import { apiFetch } from "../api";
+import ExportDatasetModal from "./ExportDatasetModal";
 
 interface DashboardData {
   experiment: {
@@ -49,6 +50,7 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [showExportModal, setShowExportModal] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -79,21 +81,6 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
     await refresh();
   };
 
-  const downloadExport = async () => {
-    const response = await apiFetch(`/api/experiments/${experimentId}/export`);
-    if (!response.ok) {
-      setError("Could not export experiment");
-      return;
-    }
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `annotate-it-${experimentId}.json`;
-    anchor.click();
-    URL.revokeObjectURL(url);
-  };
-
   if (loading) return <div className="container text-center">Loading statistics…</div>;
   if (!data) return <div className="container text-center">{error || "Experiment not found"}</div>;
 
@@ -109,7 +96,9 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
           <Link href={`/experiments/${experimentId}/annotators`} className="btn btn-secondary"><Users size={16} /> Annotators</Link>
           <Link href={`/experiments/${experimentId}/review`} className="btn btn-secondary"><Eye size={16} /> Review annotations</Link>
           <button className="btn btn-secondary" onClick={refresh}><RefreshCw size={16} /> Refresh</button>
-          <button className="btn btn-primary" onClick={downloadExport}><Download size={16} /> Export</button>
+          <button className="btn btn-primary" onClick={() => setShowExportModal(true)}>
+            <Download size={16} /> Export dataset
+          </button>
         </div>
       </div>
       {error && <p style={{ color: "var(--danger)" }}>{error}</p>}
@@ -152,6 +141,14 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
           <p>Mean agreement: {formatScore(data.items.reduce((sum, item) => sum + item.agreement_score, 0) / data.items.length)}</p>
         )}
       </div>
+
+      {showExportModal && (
+        <ExportDatasetModal
+          experimentId={experimentId}
+          experimentName={data.experiment.name}
+          onClose={() => setShowExportModal(false)}
+        />
+      )}
     </div>
   );
 }

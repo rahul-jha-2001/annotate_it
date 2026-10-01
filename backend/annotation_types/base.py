@@ -1,6 +1,34 @@
-from typing import Any, Dict, List, Type
-from pydantic import BaseModel
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Type
+from pydantic import BaseModel, Field
 from typing import Protocol
+
+
+class WeightedAnswer(BaseModel):
+    annotation_id: str
+    annotator_id: str
+    answer: Dict[str, Any]
+    weight: float = 1.0
+    submitted_at: Optional[datetime] = None
+
+
+class ConsensusDetails(BaseModel):
+    method: str = "quality_weighted_medoid"
+    algorithm_version: int = 1
+    confidence: float
+    agreement: float
+    votes_total: int
+    votes_used: int
+    source_annotation_ids: List[str] = Field(default_factory=list)
+    excluded_annotation_ids: List[str] = Field(default_factory=list)
+    status: str = "accepted"
+    warnings: List[str] = Field(default_factory=list)
+
+
+class ConsensusResult(BaseModel):
+    answer: Optional[Dict[str, Any]] = None
+    consensus: ConsensusDetails
+
 
 class AnnotationTypeSpec(Protocol):
     key: str
@@ -49,4 +77,10 @@ class AnnotationTypeSpec(Protocol):
         self, answers: List[Dict[str, Any]], config: Dict[str, Any]
     ) -> float:
         """Returns 0.0 to 1.0 inter-annotator agreement score."""
+        ...
+
+    def consensus(
+        self, answers: List[WeightedAnswer | Dict[str, Any]], config: Dict[str, Any]
+    ) -> ConsensusResult:
+        """Computes quality-weighted-medoid consensus over submitted answers."""
         ...

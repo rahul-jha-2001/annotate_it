@@ -1,6 +1,7 @@
 import os
 import unittest
 import uuid
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -456,6 +457,72 @@ class ApiIntegrationTests(unittest.TestCase):
             json={"answer": {"value": "Good"}},
         )
         self.assertEqual(cross_experiment.status_code, 401)
+
+    def test_media_uploads_are_scoped_to_owner_and_experiment(self):
+        first = self.create_experiment("Media authorization source")
+        second = self.create_experiment("Media authorization target")
+        presigned = self.client.post(
+            "/uploads/presign",
+            json={"experiment_id": first["id"], "filenames": ["owned.wav"]},
+        )
+        self.assertEqual(presigned.status_code, 200, presigned.text)
+        raw_uri = presigned.json()["urls"][0]["s3_uri"]
+
+        accepted = self.client.post(
+            f"/experiments/{first['id']}/data-units",
+            json={"items": [{"raw_uri": raw_uri}]},
+        )
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        wrong_experiment = self.client.post(
+            f"/experiments/{second['id']}/data-units",
+            json={"items": [{"raw_uri": raw_uri}]},
+        )
+        self.assertEqual(wrong_experiment.status_code, 403, wrong_experiment.text)
+
+        from database import SessionLocal
+        from models import User
+        with SessionLocal() as db:
+            outsider = User(
+                clerk_user_id=f"media_outsider_{uuid.uuid4().hex}",
+                email=f"media-outsider-{uuid.uuid4()}@example.test",
+                display_name="Media Outsider",
+            )
+            db.add(outsider)
+            db.commit()
+            db.refresh(outsider)
+            outsider_id = outsider.id
+
+        try:
+            self.__class__.auth_user = outsider
+            outsider_experiment = self.create_experiment("Media authorization outsider")
+            wrong_owner = self.client.post(
+                f"/experiments/{outsider_experiment['id']}/data-units",
+                json={"items": [{"raw_uri": raw_uri}]},
+            )
+            self.assertEqual(wrong_owner.status_code, 403, wrong_owner.text)
+        finally:
+            self.__class__.auth_user = self.owner
+            with SessionLocal() as db:
+                from models import Experiment
+                db.query(Experiment).filter_by(
+                    id=uuid.UUID(outsider_experiment["id"])
+                ).delete()
+                db.query(User).filter_by(id=outsider_id).delete()
+                db.commit()
+
+    def test_unregistered_same_bucket_media_is_rejected_outside_test_mode(self):
+        experiment = self.create_experiment("Reject unregistered media")
+        runtime_environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"PYTEST_CURRENT_TEST", "RUN_INTEGRATION", "TESTING"}
+        }
+        with patch.dict(os.environ, runtime_environment, clear=True):
+            response = self.client.post(
+                f"/experiments/{experiment['id']}/data-units",
+                json={"items": [{"raw_uri": "s3://annotate-it-data/unregistered/audio.wav"}]},
+            )
+        self.assertEqual(response.status_code, 403, response.text)
 
     def test_gold_allocation_and_scoring(self):
         from database import SessionLocal

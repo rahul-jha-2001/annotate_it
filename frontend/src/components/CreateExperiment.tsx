@@ -284,8 +284,9 @@ export default function CreateExperiment() {
 
       const presignResponse = await apiFetch("/api/uploads/presign", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filenames: files.map(file => file.name) }),
+        body: JSON.stringify({ filenames: files.map(file => file.name), experiment_id: experimentBody.id }),
       });
+
       if (!presignResponse.ok) throw new Error("Could not prepare file uploads");
       const presigned = (await presignResponse.json()).urls;
       const dataUnits = await Promise.all(files.map(async file => {
