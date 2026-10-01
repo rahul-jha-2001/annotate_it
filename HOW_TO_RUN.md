@@ -2,11 +2,23 @@
 
 Open three terminals in the repository root.
 
-## 1. Start PostgreSQL and MinIO (Local Development)
+## 1. Start PostgreSQL, MinIO, and Redis (Local Development)
 
 ```bash
 POSTGRES_PORT=5433 docker compose -f docker-compose.dev.yml up -d
 ```
+
+Redis stores the shared backend rate-limit counters. The backend defaults to
+`redis://localhost:6379/0`; override `REDIS_URL` when Redis runs elsewhere.
+Client addresses are normalized and HMAC-hashed before they are used in Redis
+or request logs, so raw IP addresses are not retained by the application.
+
+The default limits are 120 requests/minute globally, 10 session creations/minute,
+30 upload-presign requests/minute, and 20 export/preflight requests/minute. They
+can be changed with `RATE_LIMIT_GLOBAL_PER_MINUTE`,
+`RATE_LIMIT_SESSION_PER_MINUTE`, `RATE_LIMIT_UPLOAD_PER_MINUTE`, and
+`RATE_LIMIT_EXPORT_PER_MINUTE`. Set a stable private `RATE_LIMIT_SECRET` in
+production; if omitted, the backend falls back to `CLERK_SECRET_KEY`.
 
 ## 2. Configure Clerk
 

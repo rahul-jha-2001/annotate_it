@@ -22,8 +22,8 @@ services:
       dockerfile: Dockerfile
     image: annotate-it-backend:latest
     restart: unless-stopped
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://${POSTGRES_USER:-annotate_user}:${POSTGRES_PASSWORD:-annotate_password}@db:5432/${POSTGRES_DB:-annotate_db}}
       S3_BUCKET: ${S3_BUCKET:-taskglass-annotation-data}
@@ -36,6 +36,14 @@ services:
       PRESIGNED_URL_EXPIRY_SECONDS: ${PRESIGNED_URL_EXPIRY_SECONDS:-3600}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      REDIS_URL: redis://redis:6379/0
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-1}
+      RATE_LIMIT_SECRET: ${RATE_LIMIT_SECRET:-}
+      RATE_LIMIT_TRUSTED_PROXY_CIDRS: ${RATE_LIMIT_TRUSTED_PROXY_CIDRS:-172.16.0.0/12}
+      RATE_LIMIT_GLOBAL_PER_MINUTE: ${RATE_LIMIT_GLOBAL_PER_MINUTE:-120}
+      RATE_LIMIT_SESSION_PER_MINUTE: ${RATE_LIMIT_SESSION_PER_MINUTE:-10}
+      RATE_LIMIT_UPLOAD_PER_MINUTE: ${RATE_LIMIT_UPLOAD_PER_MINUTE:-30}
+      RATE_LIMIT_EXPORT_PER_MINUTE: ${RATE_LIMIT_EXPORT_PER_MINUTE:-20}
     logging:
       driver: "awslogs"
       options:
@@ -43,9 +51,28 @@ services:
         awslogs-group: ${AWSLOGS_GROUP:-/taskglass/production}
         awslogs-stream: "backend"
         awslogs-create-group: "true"
-    # depends_on:
-    #   db:
-    #     condition: service_healthy
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru"]
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: "awslogs"
+      options:
+        awslogs-region: ${AWS_REGION:-ap-south-1}
+        awslogs-group: ${AWSLOGS_GROUP:-/taskglass/production}
+        awslogs-stream: "redis"
+        awslogs-create-group: "true"
 
   export-worker:
     image: annotate-it-backend:latest
@@ -57,6 +84,9 @@ services:
       AWS_REGION: ${AWS_REGION:-ap-south-1}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-json}
+      EXPORT_MAX_ARCHIVE_BYTES: ${EXPORT_MAX_ARCHIVE_BYTES:-10737418240}
+      EXPORT_MAX_UNCOMPRESSED_BYTES: ${EXPORT_MAX_UNCOMPRESSED_BYTES:-21474836480}
+      EXPORT_RETENTION_SECONDS: ${EXPORT_RETENTION_SECONDS:-604800}
       SKIP_MIGRATIONS: "1"
     logging:
       driver: "awslogs"

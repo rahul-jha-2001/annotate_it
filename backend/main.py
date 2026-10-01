@@ -18,6 +18,7 @@ from fastapi.exception_handlers import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from redis.asyncio import Redis
 from pydantic import ValidationError
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -28,6 +29,7 @@ from auth import get_current_user, get_optional_user, router as auth_router
 from config import (
     AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
     CORS_ORIGINS, LOG_FORMAT, LOG_LEVEL, PRESIGNED_URL_EXPIRY_SECONDS, S3_BUCKET, S3_ENDPOINT_URL,
+    RATE_LIMIT_ENABLED, RATE_LIMIT_SECRET, RATE_LIMIT_TRUSTED_PROXY_CIDRS, REDIS_URL,
 )
 from database import get_db, RepeatableReadSessionLocal
 from logging_config import (
@@ -39,6 +41,12 @@ from logging_config import (
 )
 from modalities import REGISTRY as MODALITY_REGISTRY
 from models import Annotation, Annotator, DataUnit, Experiment, ExportJob, ItemAgreement, MediaUpload, User
+from rate_limiting import (
+    RateLimitMiddleware,
+    RedisRateLimiter,
+    anonymize_ip,
+    extract_client_ip,
+)
 from schemas import (
     AnnotationCreate, AnnotationTypeResponse, AnnotatorConfigurationResponse,
     AnnotatorStatusUpdate, ConsensusPolicySchema,
@@ -61,6 +69,7 @@ from services.export_service import (
     compute_training_readiness,
     evaluate_dataset_export,
     evaluate_export_snapshot,
+    estimate_media_size_bytes,
     sanitize_filename,
 )
 
@@ -68,6 +77,14 @@ from services.export_service import (
 
 setup_logging(log_level=LOG_LEVEL, log_format=LOG_FORMAT)
 logger = logging.getLogger(__name__)
+
+rate_limit_redis = Redis.from_url(
+    REDIS_URL,
+    decode_responses=True,
+    socket_connect_timeout=0.25,
+    socket_timeout=0.25,
+)
+rate_limiter = RedisRateLimiter(rate_limit_redis)
 
 
 def extract_trace_id(request: Request) -> str | None:
@@ -93,7 +110,10 @@ async def lifespan(_: FastAPI):
             logger.info("Created S3 storage bucket '%s'.", BUCKET_NAME)
         except Exception as exc:
             logger.warning("Could not auto-create S3 bucket '%s' (ensure it exists in AWS S3): %s", BUCKET_NAME, exc)
-    yield
+    try:
+        yield
+    finally:
+        await rate_limit_redis.aclose()
 
 
 app = FastAPI(title="Annotate It API", lifespan=lifespan)
@@ -114,17 +134,20 @@ async def log_request_lifecycle(request: Request, call_next):
 
     tokens = set_logging_context(request_id=request_id, trace_id=trace_id)
 
-    client_ip = (
-        f"{request.client.host}:{request.client.port}"
-        if request.client else "unknown"
+    peer_host = request.client.host if request.client else "unknown"
+    client_ip = extract_client_ip(
+        client_host=peer_host,
+        x_real_ip=request.headers.get("x-real-ip"),
+        trusted_proxy_cidrs=RATE_LIMIT_TRUSTED_PROXY_CIDRS,
     )
+    client_id = anonymize_ip(client_ip, RATE_LIMIT_SECRET)[:12]
     query_keys = sorted(set(request.query_params.keys()))
 
     req_meta = {
         "method": request.method,
         "path": request.url.path,
         "query_keys": query_keys,
-        "client": client_ip,
+        "client_id": client_id,
         "origin": request.headers.get("origin", "-"),
         "content_type": request.headers.get("content-type", "-"),
         "content_length": request.headers.get("content-length", "-"),
@@ -203,6 +226,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+app.add_middleware(
+    RateLimitMiddleware,
+    limiter=rate_limiter,
+    enabled=RATE_LIMIT_ENABLED,
+    secret=RATE_LIMIT_SECRET,
+    trusted_proxy_cidrs=RATE_LIMIT_TRUSTED_PROXY_CIDRS,
 )
 app.include_router(auth_router)
 
@@ -1451,7 +1481,13 @@ def compute_export_preflight_endpoint(
             mode=payload.mode,
         )
 
-    estimated_size = max(50_000, len(items) * 100_000)
+    estimated_size, estimate_complete = estimate_media_size_bytes(
+        items=items,
+        s3_client=s3_client,
+        bucket_name=BUCKET_NAME,
+    )
+    if not estimate_complete:
+        warnings.append("Archive size estimate is incomplete because metadata was unavailable for one or more media objects.")
     training_ready = compute_training_readiness(
         mode=payload.mode,
         counts=counts,

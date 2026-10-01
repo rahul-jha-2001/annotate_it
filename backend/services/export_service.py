@@ -20,7 +20,12 @@ from sqlalchemy.orm import Session
 
 from annotation_types import get_type
 from annotation_types.base import WeightedAnswer
-from config import EXPORT_MAX_ARCHIVE_BYTES, PRESIGNED_URL_EXPIRY_SECONDS, S3_BUCKET
+from config import (
+    EXPORT_MAX_ARCHIVE_BYTES,
+    EXPORT_MAX_UNCOMPRESSED_BYTES,
+    PRESIGNED_URL_EXPIRY_SECONDS,
+    S3_BUCKET,
+)
 from models import Annotation, Annotator, AnnotatorScore, DataUnit, Experiment, ExportJob, ItemAgreement
 
 logger = logging.getLogger(__name__)
@@ -120,6 +125,44 @@ def extract_original_filename(raw_uri: str, default_name: str) -> str:
     remainder = raw_uri.split("?")[0].rstrip("/")
     part = remainder.split("/")[-1]
     return sanitize_filename(part, fallback=default_name)
+
+
+def estimate_media_size_bytes(
+    items: List[Any],
+    s3_client: Any,
+    bucket_name: str,
+) -> Tuple[int, bool]:
+    """Return known media bytes and whether metadata was available for every item."""
+    total_bytes = 0
+    complete = True
+
+    for item in items:
+        raw_uri = item.raw_uri
+        if not raw_uri:
+            continue
+        try:
+            if raw_uri.startswith("s3://"):
+                remainder = raw_uri[5:]
+                if "/" not in remainder:
+                    raise ValueError("invalid S3 URI")
+                item_bucket, key = remainder.split("/", 1)
+                if item_bucket != bucket_name:
+                    raise ValueError("media is outside the configured bucket")
+            elif raw_uri.startswith(("http://", "https://")):
+                raise ValueError("remote HTTP media size is unavailable")
+            else:
+                item_bucket = bucket_name
+                key = raw_uri.lstrip("/")
+
+            if not key or key.startswith("/") or ".." in key or "\x00" in key:
+                raise ValueError("unsafe object key")
+
+            metadata = s3_client.head_object(Bucket=item_bucket, Key=key)
+            total_bytes += int(metadata["ContentLength"])
+        except Exception:
+            complete = False
+
+    return total_bytes, complete
 
 
 # ---------------------------------------------------------------------------
@@ -682,6 +725,8 @@ def _copy_stream_bounded(
     dest_stream: Any,
     output_zip_path: str,
     max_archive_bytes: int,
+    max_uncompressed_bytes: Optional[int] = None,
+    initial_uncompressed_bytes: int = 0,
     cancel_event: Optional[threading.Event] = None,
     chunk_size: int = 64 * 1024,
 ) -> int:
@@ -696,6 +741,11 @@ def _copy_stream_bounded(
         chunk = source_stream.read(chunk_size)
         if not chunk:
             break
+        if (
+            max_uncompressed_bytes is not None
+            and initial_uncompressed_bytes + total_copied + len(chunk) > max_uncompressed_bytes
+        ):
+            raise ArchiveSizeExceeded(f"Generated uncompressed content exceeds limit of {max_uncompressed_bytes} bytes")
         dest_stream.write(chunk)
         dest_stream.flush()
         total_copied += len(chunk)
@@ -724,6 +774,7 @@ def build_export_archive(
         ]
     ] = None,
     max_archive_bytes: int = EXPORT_MAX_ARCHIVE_BYTES,
+    max_uncompressed_bytes: int = EXPORT_MAX_UNCOMPRESSED_BYTES,
     cancel_event: Optional[threading.Event] = None,
 ) -> Tuple[int, str]:
     """Generates the full ZIP archive on disk. Returns (size_bytes, sha256_checksum)."""
@@ -746,8 +797,19 @@ def build_export_archive(
     }
 
     missing_media_items: List[Dict[str, Any]] = []
+    uncompressed_bytes = 0
 
     with zipfile.ZipFile(output_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        def write_archive_text(path: str, content: str) -> None:
+            nonlocal uncompressed_bytes
+            encoded = content.encode("utf-8")
+            if uncompressed_bytes + len(encoded) > max_uncompressed_bytes:
+                raise ArchiveSizeExceeded(
+                    f"Generated uncompressed content exceeds limit of {max_uncompressed_bytes} bytes"
+                )
+            zf.writestr(path, encoded)
+            uncompressed_bytes += len(encoded)
+
         # 1. Media streaming into media/{data_unit_id}/{filename}
         for item in items:
             if cancel_event and cancel_event.is_set():
@@ -780,14 +842,17 @@ def build_export_archive(
                 # Stream object from S3 directly into ZIP with per-chunk bounding
                 obj_resp = s3_client.get_object(Bucket=b_name, Key=key)
                 with zf.open(item.archive_media_path, "w") as dest:
-                    _copy_stream_bounded(
+                    copied_bytes = _copy_stream_bounded(
                         source_stream=obj_resp["Body"],
                         dest_stream=dest,
                         output_zip_path=output_zip_path,
                         max_archive_bytes=max_archive_bytes,
+                        max_uncompressed_bytes=max_uncompressed_bytes,
+                        initial_uncompressed_bytes=uncompressed_bytes,
                         cancel_event=cancel_event,
                         chunk_size=64 * 1024,
                     )
+                    uncompressed_bytes += copied_bytes
 
             except (ArchiveSizeExceeded, ExportCancelled):
                 # Critical errors must not be masked as missing media
@@ -808,7 +873,7 @@ def build_export_archive(
                     "error": str(exc),
                 })
                 # Create a placeholder note in the archive so evidence is not lost
-                zf.writestr(
+                write_archive_text(
                     f"{item.archive_media_path}.missing.txt",
                     f"Original media URI: {raw_uri}\nError fetching: {str(exc)}\n",
                 )
@@ -906,12 +971,12 @@ For questions and inspection, consult `manifest.json` and `quality/methodology.j
 """
 
         # Write root documentation and manifest
-        zf.writestr("README.md", readme_content)
-        zf.writestr("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
+        write_archive_text("README.md", readme_content)
+        write_archive_text("manifest.json", json.dumps(manifest, indent=2, ensure_ascii=False))
 
         # Write quality files common to both modes
-        zf.writestr("quality/methodology.json", json.dumps(methodology, indent=2, ensure_ascii=False))
-        zf.writestr("quality/warnings.json", json.dumps(warnings_payload, indent=2, ensure_ascii=False))
+        write_archive_text("quality/methodology.json", json.dumps(methodology, indent=2, ensure_ascii=False))
+        write_archive_text("quality/warnings.json", json.dumps(warnings_payload, indent=2, ensure_ascii=False))
 
         # Annotators CSV with format_score and qualification_answers
         annotator_rows = [
@@ -943,7 +1008,7 @@ For questions and inspection, consult `manifest.json` and `quality/methodology.j
             "exclusion_reasons",
             "qualification_answers",
         ]
-        zf.writestr("quality/annotators.csv", render_csv(annotator_rows, annotator_fields))
+        write_archive_text("quality/annotators.csv", render_csv(annotator_rows, annotator_fields))
 
         # Items CSV with format_score
         items_rows = [
@@ -973,7 +1038,7 @@ For questions and inspection, consult `manifest.json` and `quality/methodology.j
             "confidence",
             "consensus_method",
         ]
-        zf.writestr("quality/items.csv", render_csv(items_rows, item_fields))
+        write_archive_text("quality/items.csv", render_csv(items_rows, item_fields))
 
         # Metadata CSV
         meta_keys: Set[str] = set()
@@ -988,7 +1053,7 @@ For questions and inspection, consult `manifest.json` and `quality/methodology.j
                 row[k] = item.metadata.get(k, "")
             metadata_rows.append(row)
 
-        zf.writestr("dataset/metadata.csv", render_csv(metadata_rows, ["data_unit_id", "filename"] + sorted_meta_keys))
+        write_archive_text("dataset/metadata.csv", render_csv(metadata_rows, ["data_unit_id", "filename"] + sorted_meta_keys))
 
         # Raw annotations (used in both Complete and Consensus)
         all_raw_annotations = []
@@ -1009,10 +1074,10 @@ For questions and inspection, consult `manifest.json` and `quality/methodology.j
                 }
                 for item in items
             ]
-            zf.writestr("dataset/samples.jsonl", render_jsonl(samples_records))
+            write_archive_text("dataset/samples.jsonl", render_jsonl(samples_records))
 
             # annotations/all_annotations.jsonl
-            zf.writestr("annotations/all_annotations.jsonl", render_jsonl(all_raw_annotations))
+            write_archive_text("annotations/all_annotations.jsonl", render_jsonl(all_raw_annotations))
 
             # annotations/gold_answers.jsonl
             gold_records = [
@@ -1025,12 +1090,12 @@ For questions and inspection, consult `manifest.json` and `quality/methodology.j
                 for item in items
                 if item.is_gold
             ]
-            zf.writestr("annotations/gold_answers.jsonl", render_jsonl(gold_records))
+            write_archive_text("annotations/gold_answers.jsonl", render_jsonl(gold_records))
 
         else:
             # Consensus Dataset mode:
             # quality/raw_annotations.jsonl
-            zf.writestr("quality/raw_annotations.jsonl", render_jsonl(all_raw_annotations))
+            write_archive_text("quality/raw_annotations.jsonl", render_jsonl(all_raw_annotations))
 
             # dataset/final_annotations.jsonl (only accepted, gold_reference, and optional low_evidence)
             final_records = []
@@ -1065,12 +1130,12 @@ For questions and inspection, consult `manifest.json` and `quality/methodology.j
                 else:
                     needs_review_records.append(rec)
 
-            zf.writestr("dataset/final_annotations.jsonl", render_jsonl(final_records))
-            zf.writestr("review/needs_review.jsonl", render_jsonl(needs_review_records))
+            write_archive_text("dataset/final_annotations.jsonl", render_jsonl(final_records))
+            write_archive_text("review/needs_review.jsonl", render_jsonl(needs_review_records))
 
             # review/excluded_annotations.jsonl
             excluded_records = [a for a in all_raw_annotations if not a["included_in_consensus"]]
-            zf.writestr("review/excluded_annotations.jsonl", render_jsonl(excluded_records))
+            write_archive_text("review/excluded_annotations.jsonl", render_jsonl(excluded_records))
 
     # Compute size and checksum of completed ZIP
     size_bytes = os.path.getsize(output_zip_path)

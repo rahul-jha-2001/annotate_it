@@ -571,3 +571,73 @@ def test_upload_archive_reader_interrupts_mid_upload(tmp_path):
 
     fake_s3.delete_object.assert_called_once_with(Bucket="exports", Key="exports/job.zip")
     assert read_after_cancel_completed is False
+
+
+def test_expired_export_remains_ready_when_s3_cleanup_fails():
+    """A transient S3 failure must leave the job eligible for the next cleanup run."""
+    from export_worker import cleanup_expired_exports
+
+    expired_job = ExportJob(
+        id=uuid.uuid4(),
+        experiment_id=uuid.uuid4(),
+        status="ready",
+        object_uri="s3://exports/exports/job.zip",
+        expires_at=datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=1),
+    )
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = [expired_job]
+    session_context = MagicMock()
+    session_context.__enter__.return_value = db
+
+    with (
+        patch("export_worker.SessionLocal", return_value=session_context),
+        patch("export_worker.s3_client.delete_object", side_effect=RuntimeError("temporary S3 outage")),
+    ):
+        cleaned = cleanup_expired_exports()
+
+    assert cleaned == 0
+    assert expired_job.status == "ready"
+
+
+def test_streaming_enforces_total_uncompressed_byte_limit():
+    """Highly compressible input must still stop at the source-byte budget."""
+    from services.export_service import _copy_stream_bounded, ArchiveSizeExceeded
+
+    with tempfile.NamedTemporaryFile(suffix=".zip") as tf:
+        source = io.BytesIO(b"0" * 128)
+        destination = io.BytesIO()
+
+        with pytest.raises(ArchiveSizeExceeded, match="uncompressed"):
+            _copy_stream_bounded(
+                source_stream=source,
+                dest_stream=destination,
+                output_zip_path=tf.name,
+                max_archive_bytes=10_000,
+                max_uncompressed_bytes=64,
+                initial_uncompressed_bytes=0,
+                chunk_size=32,
+            )
+
+
+def test_media_size_estimate_uses_s3_metadata_and_reports_missing_objects():
+    """Preflight sums real ContentLength values and identifies incomplete estimates."""
+    import services.export_service as export_service
+
+    items = [
+        MagicMock(raw_uri="s3://media-bucket/experiments/one/a.wav"),
+        MagicMock(raw_uri="s3://media-bucket/experiments/one/b.wav"),
+    ]
+    s3 = MagicMock()
+    s3.head_object.side_effect = [
+        {"ContentLength": 1_024},
+        RuntimeError("missing object"),
+    ]
+
+    estimate, complete = export_service.estimate_media_size_bytes(
+        items=items,
+        s3_client=s3,
+        bucket_name="media-bucket",
+    )
+
+    assert estimate == 1_024
+    assert complete is False

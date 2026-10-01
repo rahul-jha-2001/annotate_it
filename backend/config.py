@@ -47,4 +47,30 @@ LOG_FORMAT = os.getenv("LOG_FORMAT", "json").lower()
 
 EXPORT_RETENTION_SECONDS = int(os.getenv("EXPORT_RETENTION_SECONDS", str(7 * 24 * 3600)))
 EXPORT_MAX_ARCHIVE_BYTES = int(os.getenv("EXPORT_MAX_ARCHIVE_BYTES", str(10 * 1024 * 1024 * 1024)))
+EXPORT_MAX_UNCOMPRESSED_BYTES = int(os.getenv("EXPORT_MAX_UNCOMPRESSED_BYTES", str(20 * 1024 * 1024 * 1024)))
 EXPORT_POLL_INTERVAL_SECONDS = float(os.getenv("EXPORT_POLL_INTERVAL_SECONDS", "2.0"))
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+RATE_LIMIT_SECRET = (
+    os.getenv("RATE_LIMIT_SECRET")
+    or CLERK_SECRET_KEY
+    or "taskglass-development-rate-limit-secret"
+)
+RATE_LIMIT_TRUSTED_PROXY_CIDRS = [
+    cidr.strip()
+    for cidr in os.getenv(
+        "RATE_LIMIT_TRUSTED_PROXY_CIDRS",
+        "127.0.0.1/32,::1/128,172.16.0.0/12",
+    ).split(",")
+    if cidr.strip()
+]
+RATE_LIMIT_GLOBAL_PER_MINUTE = int(os.getenv("RATE_LIMIT_GLOBAL_PER_MINUTE", "120"))
+RATE_LIMIT_SESSION_PER_MINUTE = int(os.getenv("RATE_LIMIT_SESSION_PER_MINUTE", "10"))
+RATE_LIMIT_UPLOAD_PER_MINUTE = int(os.getenv("RATE_LIMIT_UPLOAD_PER_MINUTE", "30"))
+RATE_LIMIT_EXPORT_PER_MINUTE = int(os.getenv("RATE_LIMIT_EXPORT_PER_MINUTE", "20"))

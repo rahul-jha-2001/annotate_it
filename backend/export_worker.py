@@ -22,6 +22,7 @@ from config import (
     AWS_SECRET_ACCESS_KEY,
     AWS_SESSION_TOKEN,
     EXPORT_MAX_ARCHIVE_BYTES,
+    EXPORT_MAX_UNCOMPRESSED_BYTES,
     EXPORT_POLL_INTERVAL_SECONDS,
     EXPORT_RETENTION_SECONDS,
     LOG_FORMAT,
@@ -391,6 +392,7 @@ def process_export_job(
                 output_zip_path=zip_path,
                 snapshot_evaluation=(items, counts, annotator_summary, warnings, annotator_evidence),
                 max_archive_bytes=EXPORT_MAX_ARCHIVE_BYTES,
+                max_uncompressed_bytes=EXPORT_MAX_UNCOMPRESSED_BYTES,
                 cancel_event=cancel_event,
             )
 
@@ -539,16 +541,21 @@ def cleanup_expired_exports() -> int:
         )
 
         for job in expired_jobs:
+            cleanup_succeeded = True
             if job.object_uri and job.object_uri.startswith("s3://"):
                 remainder = job.object_uri[5:]
                 b_name, key = remainder.split("/", 1) if "/" in remainder else (S3_BUCKET, remainder)
                 try:
                     s3_client.delete_object(Bucket=b_name, Key=key)
                 except Exception as exc:
+                    cleanup_succeeded = False
                     logger.warning(
                         "export.artifact_cleanup_failed",
                         extra={"job_id": str(job.id), "error": str(exc)},
                     )
+
+            if not cleanup_succeeded:
+                continue
 
             job.status = "expired"
             expired_count += 1
