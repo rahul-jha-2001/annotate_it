@@ -14,6 +14,22 @@ describe("landing markup", () => {
     expect(markup).not.toContain("<style");
   });
 
+  it("leads with the catalog and shows auditable export evidence", () => {
+    const markup = buildLandingMarkup(landingActions(false), "audio");
+
+    expect(markup).toContain(`<a class="button" href="/catalog">Explore annotation types</a>`);
+    expect(markup).toContain("CONSENSUS DATASET");
+    expect(markup).toContain("RAW ARCHIVE");
+    expect(markup).toContain("SOURCE ANNOTATIONS");
+    expect(markup).toContain("SOURCE CUTOFF");
+    expect(markup).toContain("CONFIGURATION VERSION");
+    expect(markup).toContain("CODE VERSION");
+    expect(markup).toContain("ALGORITHM VERSION");
+    expect(markup).toContain("SNAPSHOT CHECKSUM");
+    expect(markup).toContain("87% gold accuracy · n=4 gold items");
+    expect(markup).toContain("0.94 agreement · n=3 annotators");
+  });
+
   it("renders the selected annotation specimen accessibly", () => {
     const markup = buildLandingMarkup(landingActions(true), "image");
     expect(markup).toContain(`id="tab-image" data-task="image" aria-selected="true" tabindex="0"`);

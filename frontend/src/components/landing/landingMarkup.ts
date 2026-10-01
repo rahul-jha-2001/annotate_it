@@ -23,9 +23,11 @@ export function buildLandingMarkup(actions: LandingActions, task: LandingTask): 
     `<a class="nav-action" href="#overview">View example</a>`,
     `<a href="${actions.catalog.href}">Catalog</a><a href="#overview">View example</a>${actionLink("nav-action", actions.account.href, actions.account.label)}`,
   );
+  markup = markup.replace("<span>Gold accuracy</span></div><div><b>0.94</b><span>Agreement</span>", "<span>87% gold accuracy · n=4 gold items</span></div><div><b>0.94</b><span>0.94 agreement · n=3 annotators</span>");
+  markup = markup.replace("<section class=\"closing shell\">", `<section class="section shell" id="export"><div class="section-heading"><h2>Export the evidence behind every label.</h2><p>Illustrative provenance shown for one experiment snapshot.</p></div><div class="fig-frame"><div class="fig-body"><strong>RAW ARCHIVE → CONSENSUS DATASET</strong><p>SOURCE ANNOTATIONS · 18 records &nbsp; SOURCE CUTOFF · 2026-10-01 18:00 UTC</p><p>WEIGHTS · reliability-adjusted &nbsp; CONFIGURATION VERSION · config-v4</p><p>ALGORITHM VERSION · consensus-v1 &nbsp; CODE VERSION · app-2026.10.1</p><p>CONFIDENCE · local to this experiment &nbsp; WARNINGS · 2 items need review</p><p>SNAPSHOT CHECKSUM · sha256:8f3c…d91a</p></div></div></section><section class="closing shell">`);
   markup = markup.replace(
     /<div class="button-row">[\s\S]*?<\/div><p class="note">/,
-    `<div class="button-row">${actionLink("button", actions.primary.href, actions.primary.label)}${actionLink("button light", actions.catalog.href, actions.catalog.label)}</div><p class="note">`,
+    `<div class="button-row">${actionLink("button", actions.catalog.href, actions.catalog.label)}${actionLink("button light", actions.primary.href, actions.primary.label)}</div><p class="note">`,
   );
   markup = markup.replace(
     `<a class="button" href="#setup">Explore the workflow</a></section>`,
