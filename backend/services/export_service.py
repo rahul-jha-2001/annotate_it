@@ -195,7 +195,10 @@ def evaluate_annotator_evidence(
                     s = spec.gold_match(a.answer, u.gold_answer, experiment.label_schema)
                     gold_scores.append(s)
                 except Exception as exc:
-                    logger.warning(f"Error computing gold match for annotator {ann.id}: {exc}")
+                    logger.warning(
+                        "export.gold_match_failed",
+                        extra={"annotator_id": str(ann.id), "error": str(exc)},
+                    )
 
         gold_items_seen = len(gold_scores)
         raw_mean = sum(gold_scores) / gold_items_seen if gold_items_seen > 0 else None
@@ -509,7 +512,10 @@ def _evaluate_dataset_export_core(
                     status = "accepted"
                     final_answer = consensus_result.answer
             except Exception as exc:
-                logger.exception(f"Error computing consensus for unit {unit.id}: {exc}")
+                logger.exception(
+                    "export.consensus_failed",
+                    extra={"data_unit_id": str(unit.id), "error": str(exc)},
+                )
                 status = "needs_review_tie"
                 final_answer = None
                 confidence = 0.0
@@ -788,7 +794,12 @@ def build_export_archive(
                 raise
             except Exception as exc:
                 logger.warning(
-                    f"Could not retrieve media object for unit {item.data_unit_id} ({raw_uri}): {exc}"
+                    "export.media_fetch_failed",
+                    extra={
+                        "data_unit_id": str(item.data_unit_id),
+                        "raw_uri": raw_uri,
+                        "error": str(exc),
+                    },
                 )
                 missing_media_items.append({
                     "data_unit_id": str(item.data_unit_id),

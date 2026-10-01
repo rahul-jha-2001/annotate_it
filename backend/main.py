@@ -1654,7 +1654,14 @@ def download_export_job_endpoint(
             ExpiresIn=PRESIGNED_URL_EXPIRY_SECONDS,
         )
     except Exception as exc:
-        logger.exception(f"Failed to generate presigned download URL for job {job.id}: {exc}")
+        logger.exception(
+            "export.download_url_failed",
+            extra={
+                "job_id": str(job.id),
+                "experiment_id": str(experiment.id),
+                "error": str(exc),
+            },
+        )
         raise HTTPException(status_code=500, detail="Failed to generate download URL")
 
     return ExportDownloadResponse(

@@ -232,6 +232,76 @@ class StructuredLoggingTests(unittest.TestCase):
         self.assertEqual(root.level, logging.WARNING)
         self.assertIsInstance(root.handlers[0].formatter, TextLogFormatter)
 
+    def test_export_structured_logging_records(self):
+        formatter = JSONLogFormatter()
+        record = logging.LogRecord(
+            name="export_worker",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=100,
+            msg="export.completed",
+            args=(),
+            exc_info=None,
+        )
+        record.job_id = "job-uuid-123"
+        record.experiment_id = "exp-uuid-456"
+        record.mode = "consensus"
+        record.size_bytes = 10240
+        record.sha256 = "abc123hash"
+        record.duration_s = 1.45
+
+        output = formatter.format(record)
+        parsed = json.loads(output)
+
+        self.assertEqual(parsed["logger"], "export_worker")
+        self.assertEqual(parsed["message"], "export.completed")
+        self.assertEqual(parsed["job_id"], "job-uuid-123")
+        self.assertEqual(parsed["experiment_id"], "exp-uuid-456")
+        self.assertEqual(parsed["mode"], "consensus")
+        self.assertEqual(parsed["size_bytes"], 10240)
+        self.assertEqual(parsed["sha256"], "abc123hash")
+        self.assertEqual(parsed["duration_s"], 1.45)
+
+    def test_export_worker_context_binding(self):
+        log_stream = io.StringIO()
+        handler = logging.StreamHandler(log_stream)
+        handler.addFilter(LoggingContextFilter())
+        handler.setFormatter(JSONLogFormatter())
+
+        worker_logger = logging.getLogger("test_export_worker_context")
+        worker_logger.setLevel(logging.INFO)
+        worker_logger.addHandler(handler)
+        worker_logger.propagate = False
+
+        try:
+            tokens = set_logging_context(
+                request_id="export-ab12cd34",
+                experiment_id="exp-5678-uuid",
+            )
+            worker_logger.info(
+                "export.media_fetch_failed",
+                extra={
+                    "data_unit_id": "unit-111",
+                    "raw_uri": "s3://annotate-it-data/test.wav",
+                    "error": "NoSuchKey",
+                },
+            )
+
+            lines = log_stream.getvalue().strip().split("\n")
+            self.assertEqual(len(lines), 1)
+            parsed = json.loads(lines[0])
+
+            self.assertEqual(parsed["message"], "export.media_fetch_failed")
+            self.assertEqual(parsed["request_id"], "export-ab12cd34")
+            self.assertEqual(parsed["experiment_id"], "exp-5678-uuid")
+            self.assertEqual(parsed["data_unit_id"], "unit-111")
+            self.assertEqual(parsed["raw_uri"], "s3://annotate-it-data/test.wav")
+            self.assertEqual(parsed["error"], "NoSuchKey")
+
+            reset_logging_context(tokens)
+        finally:
+            worker_logger.removeHandler(handler)
+
 
 if __name__ == "__main__":
     unittest.main()

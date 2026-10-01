@@ -30,7 +30,11 @@ from config import (
     S3_ENDPOINT_URL,
 )
 from database import SessionLocal, RepeatableReadSessionLocal, engine
-from logging_config import setup_logging
+from logging_config import (
+    reset_logging_context,
+    set_logging_context,
+    setup_logging,
+)
 from models import Annotation, DataUnit, Experiment, ExportJob
 from services.export_service import (
     ArchiveSizeExceeded,
@@ -100,12 +104,16 @@ class JobHeartbeat(threading.Thread):
                     db.commit()
                     if rows_updated == 0:
                         logger.error(
-                            f"Worker {self.worker_id} lost lease on job {self.job_id}; stopping heartbeat."
+                            "export.heartbeat_lease_lost",
+                            extra={"worker_id": self.worker_id, "job_id": str(self.job_id)},
                         )
                         self.lost_lease = True
                         break
             except Exception as exc:
-                logger.warning(f"Failed to heartbeat job {self.job_id}: {exc}")
+                logger.warning(
+                    "export.heartbeat_failed",
+                    extra={"worker_id": self.worker_id, "job_id": str(self.job_id), "error": str(exc)},
+                )
 
     def stop(self):
         self.stop_event.set()
@@ -295,7 +303,14 @@ def process_export_job(
         if not job or job.status != "running":
             return False
         if worker_id and job.worker_id and job.worker_id != worker_id:
-            logger.warning(f"Job {job_id} is owned by worker {job.worker_id}, not {worker_id}")
+            logger.warning(
+                "export.worker_mismatch",
+                extra={
+                    "job_id": str(job_id),
+                    "assigned_worker_id": job.worker_id,
+                    "attempting_worker_id": worker_id,
+                },
+            )
             return False
         actual_worker_id = job.worker_id or worker_id or f"worker-{uuid.uuid4().hex[:8]}"
         if job.worker_id != actual_worker_id or job.lease_expires_at is None:
@@ -309,6 +324,10 @@ def process_export_job(
         job_source_cutoff_at = job.source_cutoff_at
         job_source_fingerprint = job.source_fingerprint
 
+    tokens = set_logging_context(
+        request_id=f"export-{str(job_id)[:8]}",
+        experiment_id=str(job_experiment_id),
+    )
 
     heartbeat = JobHeartbeat(job_id=job_id, worker_id=actual_worker_id)
     heartbeat.start()
@@ -409,8 +428,12 @@ def process_export_job(
             if not finalized:
                 _delete_export_object(s3_client, S3_BUCKET, s3_key)
                 logger.error(
-                    f"Worker {actual_worker_id} could not finalize job {job_id}: "
-                    "lease expired, ownership was lost, or status changed"
+                    "export.finalize_failed",
+                    extra={
+                        "job_id": str(job_id),
+                        "worker_id": actual_worker_id,
+                        "reason": "lease expired, ownership was lost, or status changed",
+                    },
                 )
                 return False
 
@@ -429,7 +452,10 @@ def process_export_job(
         return True
 
     except ArchiveSizeExceeded as exc:
-        logger.error(f"Export job {job_id} exceeded size limit: {exc}")
+        logger.error(
+            "export.size_limit_exceeded",
+            extra={"job_id": str(job_id), "error": str(exc)},
+        )
         now = datetime.datetime.now(datetime.timezone.utc)
         with SessionLocal() as db:
             db.query(ExportJob).filter(
@@ -446,7 +472,10 @@ def process_export_job(
         return False
 
     except ExportCancelled as exc:
-        logger.warning(f"Export job {job_id} cancelled or interrupted: {exc}")
+        logger.warning(
+            "export.cancelled",
+            extra={"job_id": str(job_id), "reason": str(exc)},
+        )
         now = datetime.datetime.now(datetime.timezone.utc)
         with SessionLocal() as db:
             db.query(ExportJob).filter(
@@ -463,7 +492,10 @@ def process_export_job(
         return False
 
     except Exception as exc:
-        logger.exception(f"Export job {job_id} failed: {exc}")
+        logger.exception(
+            "export.failed",
+            extra={"job_id": str(job_id), "error": str(exc)},
+        )
         try:
             s3_client.delete_object(Bucket=S3_BUCKET, Key=s3_key)
         except Exception:
@@ -488,6 +520,7 @@ def process_export_job(
         heartbeat.stop()
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
+        reset_logging_context(tokens)
 
 
 def cleanup_expired_exports() -> int:
@@ -512,7 +545,10 @@ def cleanup_expired_exports() -> int:
                 try:
                     s3_client.delete_object(Bucket=b_name, Key=key)
                 except Exception as exc:
-                    logger.warning(f"Failed to delete S3 artifact for job {job.id}: {exc}")
+                    logger.warning(
+                        "export.artifact_cleanup_failed",
+                        extra={"job_id": str(job.id), "error": str(exc)},
+                    )
 
             job.status = "expired"
             expired_count += 1
@@ -540,12 +576,18 @@ class WorkerRunner:
         signal.signal(signal.SIGTERM, self._handle_exit)
 
     def _handle_exit(self, signum, frame):
-        logger.info(f"Signal {signum} received, gracefully interrupting worker...")
+        logger.info(
+            "export.signal_received",
+            extra={"signal": signum, "worker_id": self.worker_id},
+        )
         self.running = False
         self.cancel_event.set()
 
     def run(self, run_once: bool = False):
-        logger.info(f"TaskGlass export worker initialized (worker_id={self.worker_id}).")
+        logger.info(
+            "export_worker.initialized",
+            extra={"worker_id": self.worker_id},
+        )
         while self.running:
             try:
                 cleanup_expired_exports()
@@ -573,7 +615,10 @@ class WorkerRunner:
                         break
                     time.sleep(EXPORT_POLL_INTERVAL_SECONDS)
             except Exception as exc:
-                logger.exception(f"Unexpected error in export worker loop: {exc}")
+                logger.exception(
+                    "export_worker.loop_error",
+                    extra={"error": str(exc)},
+                )
                 if run_once or not self.running:
                     break
                 time.sleep(EXPORT_POLL_INTERVAL_SECONDS)
@@ -597,7 +642,10 @@ def main():
         count = cleanup_expired_exports()
         with SessionLocal() as db:
             reclaimed = reclaim_stale_running_jobs(db)
-        logger.info(f"Cleaned up {count} expired export jobs and reclaimed {reclaimed} stale jobs.")
+        logger.info(
+            "export.cleanup_completed",
+            extra={"expired_jobs_cleaned": count, "stale_jobs_reclaimed": reclaimed},
+        )
         sys.exit(0)
 
     runner = WorkerRunner()
