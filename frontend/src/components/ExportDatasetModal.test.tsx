@@ -2,7 +2,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { apiFetch } from "../api";
 
@@ -12,8 +12,11 @@ import ExportDatasetModal, {
   calculateNeedReviewCount,
   parseIntegerThreshold,
   parseFloatThreshold,
+  validatePolicy,
+  DEFAULT_POLICY,
   ExportJobItem,
   PreflightResponse,
+  ExportPolicy,
 } from "./ExportDatasetModal";
 
 describe("ExportDatasetModal", () => {
@@ -47,7 +50,54 @@ describe("ExportDatasetModal", () => {
       expect(parseFloatThreshold("1.5", 0.7, 0, 1.0)).toBe(1.0);
       expect(parseFloatThreshold("", 0.7, 0, 1.0)).toBe(0.7);
     });
+  });
 
+  describe("validatePolicy guardrails (Spec section 4)", () => {
+    it("accepts DEFAULT_POLICY with no errors", () => {
+      const errors = validatePolicy(DEFAULT_POLICY);
+      expect(Object.keys(errors)).toHaveLength(0);
+    });
+
+    it("rejects non-positive min_annotations_for_consensus", () => {
+      expect(validatePolicy({ ...DEFAULT_POLICY, min_annotations_for_consensus: 0 })).toHaveProperty(
+        "min_annotations_for_consensus"
+      );
+      expect(validatePolicy({ ...DEFAULT_POLICY, min_annotations_for_consensus: -1 })).toHaveProperty(
+        "min_annotations_for_consensus"
+      );
+    });
+
+    it("rejects non-positive low_evidence_threshold", () => {
+      expect(validatePolicy({ ...DEFAULT_POLICY, low_evidence_threshold: 0 })).toHaveProperty(
+        "low_evidence_threshold"
+      );
+    });
+
+    it("allows min_gold_items: 0 but rejects negative values", () => {
+      expect(validatePolicy({ ...DEFAULT_POLICY, min_gold_items: 0 })).not.toHaveProperty(
+        "min_gold_items"
+      );
+      expect(validatePolicy({ ...DEFAULT_POLICY, min_gold_items: -1 })).toHaveProperty(
+        "min_gold_items"
+      );
+    });
+
+    it("constrains min_gold_score and min_agreement to [0.0, 1.0]", () => {
+      expect(validatePolicy({ ...DEFAULT_POLICY, min_gold_score: 0.0 })).not.toHaveProperty("min_gold_score");
+      expect(validatePolicy({ ...DEFAULT_POLICY, min_gold_score: 1.0 })).not.toHaveProperty("min_gold_score");
+      expect(validatePolicy({ ...DEFAULT_POLICY, min_gold_score: -0.1 })).toHaveProperty("min_gold_score");
+      expect(validatePolicy({ ...DEFAULT_POLICY, min_gold_score: 1.05 })).toHaveProperty("min_gold_score");
+
+      expect(validatePolicy({ ...DEFAULT_POLICY, min_agreement: 0.0 })).not.toHaveProperty("min_agreement");
+      expect(validatePolicy({ ...DEFAULT_POLICY, min_agreement: 1.0 })).not.toHaveProperty("min_agreement");
+      expect(validatePolicy({ ...DEFAULT_POLICY, min_agreement: -0.01 })).toHaveProperty("min_agreement");
+      expect(validatePolicy({ ...DEFAULT_POLICY, min_agreement: 1.5 })).toHaveProperty("min_agreement");
+    });
+
+    it("rejects negative prior_strength", () => {
+      expect(validatePolicy({ ...DEFAULT_POLICY, prior_strength: 0.0 })).not.toHaveProperty("prior_strength");
+      expect(validatePolicy({ ...DEFAULT_POLICY, prior_strength: -0.5 })).toHaveProperty("prior_strength");
+    });
   });
 
   describe("calculateNeedReviewCount (Finding 2 correctness)", () => {
@@ -431,5 +481,192 @@ describe("ExportDatasetModal interactions", () => {
       "/api/experiments/exp-1/exports/job-123/download",
       { method: "POST" }
     );
+  });
+
+  it("renders consensus thresholds panel and toggles advanced settings in consensus mode", async () => {
+    apiMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/exports/preflight")) return jsonResponse(preflightResponse("fingerprint-1"));
+      if (url.endsWith("/exports")) return jsonResponse([]);
+      throw new Error(`Unexpected API call: ${url}`);
+    });
+
+    render(
+      <ExportDatasetModal experimentId="exp-1" experimentName="Test experiment" onClose={() => {}} />
+    );
+    await screen.findByText("Preflight Summary");
+
+    // Initially complete mode: guardrails panel not shown
+    expect(screen.queryByText("Consensus Guardrail Thresholds")).toBeNull();
+
+    // Click consensus card
+    await userEvent.click(screen.getByText("Consensus Dataset"));
+
+    // Guardrails panel now visible with defaults
+    expect(await screen.findByText("Consensus Guardrail Thresholds")).toBeTruthy();
+    expect((screen.getByLabelText("Min annotations for consensus") as HTMLInputElement).value).toBe("2");
+    expect((screen.getByLabelText("Low evidence threshold") as HTMLInputElement).value).toBe("3");
+    expect((screen.getByLabelText("Min gold items before exclusion") as HTMLInputElement).value).toBe("5");
+    expect((screen.getByLabelText("Min gold score threshold") as HTMLInputElement).value).toBe("0.7");
+    expect((screen.getByLabelText("Min item agreement") as HTMLInputElement).value).toBe("0.6");
+    expect((screen.getByLabelText("Include low evidence items in final dataset") as HTMLInputElement).checked).toBe(false);
+
+    // Advanced accordion toggle
+    expect(screen.queryByLabelText("Prior Strength")).toBeNull();
+    const advancedToggle = screen.getByText(/Advanced Settings/);
+    await userEvent.click(advancedToggle);
+    expect((screen.getByLabelText("Prior Strength") as HTMLInputElement).value).toBe("2");
+
+    // Modify a value and test Reset to defaults
+    const minGoldItemsInput = screen.getByLabelText("Min gold items before exclusion") as HTMLInputElement;
+    fireEvent.change(minGoldItemsInput, { target: { value: "2" } });
+    expect(minGoldItemsInput.value).toBe("2");
+
+    const resetButton = screen.getByRole("button", { name: /Reset to defaults/ });
+    await userEvent.click(resetButton);
+    expect((screen.getByLabelText("Min gold items before exclusion") as HTMLInputElement).value).toBe("5");
+  });
+
+  it("renders live preview 'At these settings:' breakdown in consensus mode", async () => {
+    const customPreflight: PreflightResponse = {
+      ...preflightResponse("fingerprint-breakdown"),
+      counts: {
+        total_samples: 10,
+        annotated_samples: 8,
+        unannotated_samples: 1,
+        gold_samples: 1,
+        consensus_accepted_samples: 7,
+        accepted_samples: 7,
+        low_evidence_samples: 0,
+        insufficient_overlap_samples: 1,
+        low_agreement_samples: 0,
+        tied_samples: 2,
+        no_eligible_annotations_samples: 0,
+      },
+      annotator_summary: {
+        total_annotators: 8,
+        eligible_annotators: 5,
+        excluded_annotators: 3,
+        insufficient_gold_annotators: 3,
+      },
+    };
+
+    apiMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/exports/preflight")) return jsonResponse(customPreflight);
+      if (url.endsWith("/exports")) return jsonResponse([]);
+      throw new Error(`Unexpected API call: ${url}`);
+    });
+
+    render(
+      <ExportDatasetModal experimentId="exp-1" experimentName="Test experiment" onClose={() => {}} />
+    );
+    await screen.findByText("Preflight Summary");
+    await userEvent.click(screen.getByText("Consensus Dataset"));
+
+    // Verify live preview card matches spec breakdown format
+    expect(await screen.findByText("At these settings:")).toBeTruthy();
+    expect(screen.getAllByText("7").length).toBeGreaterThan(0);
+    expect(screen.getByText("training-ready")).toBeTruthy();
+    expect(screen.getByText("needs review (tie)")).toBeTruthy();
+    expect(screen.getByText("needs review (insufficient overlap)")).toBeTruthy();
+    expect(screen.getByText("excluded (insufficient gold evidence)")).toBeTruthy();
+
+    // Verify audit immutability notice is visible
+    expect(
+      screen.getByText(
+        /Each generated export is a new, independently fingerprinted and timestamped snapshot. Prior exports are never modified./
+      )
+    ).toBeTruthy();
+  });
+
+  it("submits configured consensus policy to export endpoint", async () => {
+    let capturedBody: any = null;
+    apiMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/exports/preflight")) return jsonResponse(preflightResponse("fp-consensus"));
+      if (url.endsWith("/exports") && init?.method === "POST") {
+        capturedBody = JSON.parse(String(init.body));
+        return jsonResponse(
+          {
+            id: "job-cons-1",
+            experiment_id: "exp-1",
+            mode: "consensus",
+            status: "queued",
+            policy: capturedBody.policy,
+            source_cutoff_at: "2026-10-01T00:00:00Z",
+            source_fingerprint: "fp-consensus",
+            warnings: [],
+            size_bytes: null,
+            sha256: null,
+            error_code: null,
+            error_message: null,
+            created_at: "2026-10-01T00:00:00Z",
+            started_at: null,
+            completed_at: null,
+            expires_at: null,
+          },
+          202
+        );
+      }
+      if (url.endsWith("/exports/job-cons-1")) {
+        return jsonResponse({
+          id: "job-cons-1",
+          status: "queued",
+          mode: "consensus",
+          experiment_id: "exp-1",
+          created_at: "2026-10-01T00:00:00Z",
+        });
+      }
+      if (url.endsWith("/exports")) return jsonResponse([]);
+      throw new Error(`Unexpected API call: ${url}`);
+    });
+
+    render(
+      <ExportDatasetModal experimentId="exp-1" experimentName="Test experiment" onClose={() => {}} />
+    );
+    await screen.findByText("Preflight Summary");
+    await userEvent.click(screen.getByText("Consensus Dataset"));
+    expect(await screen.findByText("Consensus Guardrail Thresholds")).toBeTruthy();
+
+    const minGoldItemsInput = screen.getByLabelText("Min gold items before exclusion");
+    fireEvent.change(minGoldItemsInput, { target: { value: "3" } });
+
+    // Click submit
+    const submitBtn = await screen.findByRole("button", { name: /Generate Consensus ZIP/ });
+    await userEvent.click(submitBtn);
+
+    await waitFor(() => expect(capturedBody).not.toBeNull());
+    expect(capturedBody.mode).toBe("consensus");
+    expect(capturedBody.policy.min_gold_items).toBe(3);
+    expect(capturedBody.policy.min_annotations_for_consensus).toBe(2);
+    expect(capturedBody.policy.low_evidence_threshold).toBe(3);
+  });
+
+  it("disables export button when thresholds violate guardrails", async () => {
+    apiMock.mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/exports/preflight")) return jsonResponse(preflightResponse("fp-guardrail"));
+      if (url.endsWith("/exports")) return jsonResponse([]);
+      throw new Error(`Unexpected API call: ${url}`);
+    });
+
+    render(
+      <ExportDatasetModal experimentId="exp-1" experimentName="Test experiment" onClose={() => {}} />
+    );
+    await screen.findByText("Preflight Summary");
+    await userEvent.click(screen.getByText("Consensus Dataset"));
+    expect(await screen.findByText("Consensus Guardrail Thresholds")).toBeTruthy();
+
+    const submitBtn = screen.getByRole("button", { name: /Generate Consensus ZIP/ });
+    expect((submitBtn as HTMLButtonElement).disabled).toBe(false);
+
+    // Set invalid threshold (min_annotations_for_consensus = 0)
+    const minAnnotationsInput = screen.getByLabelText("Min annotations for consensus");
+    fireEvent.change(minAnnotationsInput, { target: { value: "0" } });
+
+    // Expect validation error message and disabled submit button
+    expect(await screen.findByText("Must be an integer ≥ 1")).toBeTruthy();
+    expect((submitBtn as HTMLButtonElement).disabled).toBe(true);
   });
 });

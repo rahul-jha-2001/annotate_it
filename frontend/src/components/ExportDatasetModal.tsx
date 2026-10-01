@@ -2,13 +2,17 @@ import { useCallback, useEffect, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Download,
   FileArchive,
+  Info,
   Layers,
   RefreshCw,
-  Settings2,
+  RotateCcw,
   ShieldAlert,
+  Sliders,
   X,
 } from "lucide-react";
 import { apiFetch } from "../api";
@@ -77,7 +81,7 @@ interface ExportDatasetModalProps {
   onClose: () => void;
 }
 
-const DEFAULT_POLICY: ExportPolicy = {
+export const DEFAULT_POLICY: ExportPolicy = {
   min_annotations_for_consensus: 2,
   low_evidence_threshold: 3,
   min_gold_items: 5,
@@ -87,16 +91,66 @@ const DEFAULT_POLICY: ExportPolicy = {
   prior_strength: 2.0,
 };
 
-export function parseIntegerThreshold(value: string, defaultValue: number = 0, min: number = 0): number {
+export interface PolicyValidationErrors {
+  min_annotations_for_consensus?: string;
+  low_evidence_threshold?: string;
+  min_gold_items?: string;
+  min_gold_score?: string;
+  min_agreement?: string;
+  prior_strength?: string;
+}
+
+export function validatePolicy(policy: ExportPolicy): PolicyValidationErrors {
+  const errors: PolicyValidationErrors = {};
+  if (!Number.isInteger(policy.min_annotations_for_consensus) || policy.min_annotations_for_consensus < 1) {
+    errors.min_annotations_for_consensus = "Must be an integer ≥ 1";
+  }
+  if (!Number.isInteger(policy.low_evidence_threshold) || policy.low_evidence_threshold < 1) {
+    errors.low_evidence_threshold = "Must be an integer ≥ 1";
+  }
+  if (!Number.isInteger(policy.min_gold_items) || policy.min_gold_items < 0) {
+    errors.min_gold_items = "Must be an integer ≥ 0";
+  }
+  if (
+    typeof policy.min_gold_score !== "number" ||
+    Number.isNaN(policy.min_gold_score) ||
+    policy.min_gold_score < 0 ||
+    policy.min_gold_score > 1
+  ) {
+    errors.min_gold_score = "Must be between 0.0 and 1.0";
+  }
+  if (
+    typeof policy.min_agreement !== "number" ||
+    Number.isNaN(policy.min_agreement) ||
+    policy.min_agreement < 0 ||
+    policy.min_agreement > 1
+  ) {
+    errors.min_agreement = "Must be between 0.0 and 1.0";
+  }
+  if (
+    typeof policy.prior_strength !== "number" ||
+    Number.isNaN(policy.prior_strength) ||
+    policy.prior_strength < 0
+  ) {
+    errors.prior_strength = "Must be ≥ 0.0";
+  }
+  return errors;
+}
+
+export function parseIntegerThreshold(value: string, defaultValue: number = 0, min?: number): number {
   const val = parseInt(value, 10);
-  return Number.isNaN(val) ? defaultValue : Math.max(min, val);
+  if (Number.isNaN(val)) return defaultValue;
+  return typeof min === "number" ? Math.max(min, val) : val;
 }
 
-export function parseFloatThreshold(value: string, defaultValue: number = 0, min: number = 0, max: number = 1): number {
+export function parseFloatThreshold(value: string, defaultValue: number = 0, min?: number, max?: number): number {
   const val = parseFloat(value);
-  return Number.isNaN(val) ? defaultValue : Math.max(min, Math.min(max, val));
+  if (Number.isNaN(val)) return defaultValue;
+  let res = val;
+  if (typeof min === "number") res = Math.max(min, res);
+  if (typeof max === "number") res = Math.min(max, res);
+  return res;
 }
-
 
 export function calculateNeedReviewCount(
   counts: PreflightResponse["counts"],
@@ -118,7 +172,6 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-
 export default function ExportDatasetModal({
   experimentId,
   experimentName,
@@ -126,7 +179,7 @@ export default function ExportDatasetModal({
 }: ExportDatasetModalProps) {
   const [mode, setMode] = useState<"complete" | "consensus">("complete");
   const [policy, setPolicy] = useState<ExportPolicy>(DEFAULT_POLICY);
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showAdvancedPrior, setShowAdvancedPrior] = useState(false);
   const [preflight, setPreflight] = useState<PreflightResponse | null>(null);
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [acknowledgeWarnings, setAcknowledgeWarnings] = useState(false);
@@ -136,29 +189,35 @@ export default function ExportDatasetModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchPreflight = useCallback(async () => {
-    setPreflightLoading(true);
-    setError(null);
-    try {
-      const response = await apiFetch(`/api/experiments/${experimentId}/exports/preflight`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, policy }),
-      });
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.detail || "Failed to load export preflight");
+  const policyErrors = validatePolicy(policy);
+  const isPolicyValid = Object.keys(policyErrors).length === 0;
+
+  const fetchPreflight = useCallback(
+    async (targetPolicy: ExportPolicy = policy) => {
+      setPreflightLoading(true);
+      setError(null);
+      try {
+        const response = await apiFetch(`/api/experiments/${experimentId}/exports/preflight`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode, policy: targetPolicy }),
+        });
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.detail || "Failed to load export preflight");
+        }
+        const data: PreflightResponse = await response.json();
+        setPreflight(data);
+        // Reset acknowledgement if fingerprint/warnings change
+        setAcknowledgeWarnings(false);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Error loading preflight");
+      } finally {
+        setPreflightLoading(false);
       }
-      const data: PreflightResponse = await response.json();
-      setPreflight(data);
-      // Reset acknowledgement if fingerprint/warnings change
-      setAcknowledgeWarnings(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Error loading preflight");
-    } finally {
-      setPreflightLoading(false);
-    }
-  }, [experimentId, mode, policy]);
+    },
+    [experimentId, mode, policy]
+  );
 
   const fetchRecentJobs = useCallback(async () => {
     try {
@@ -173,9 +232,25 @@ export default function ExportDatasetModal({
   }, [experimentId]);
 
   useEffect(() => {
-    fetchPreflight();
     fetchRecentJobs();
-  }, [fetchPreflight, fetchRecentJobs]);
+  }, [fetchRecentJobs]);
+
+  useEffect(() => {
+    if (!isPolicyValid) return;
+
+    if (mode === "complete") {
+      fetchPreflight(policy);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      fetchPreflight(policy);
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [experimentId, mode, policy, isPolicyValid, fetchPreflight]);
 
   // Poll active job status
   useEffect(() => {
@@ -266,6 +341,7 @@ export default function ExportDatasetModal({
     !submitting &&
     !preflightLoading &&
     preflight !== null &&
+    (mode === "complete" || isPolicyValid) &&
     (mode === "complete" || !hasWarnings || acknowledgeWarnings);
 
   return (
@@ -456,110 +532,336 @@ export default function ExportDatasetModal({
               </div>
             </div>
 
-            {/* Guardrails / Policy Settings (Visible for Consensus mode) */}
+            {/* Consensus Thresholds & Policy Panel (Visible for Consensus mode) */}
             {mode === "consensus" && (
-              <div style={{ border: "1px solid var(--border-color)", borderRadius: "10px", padding: "16px", backgroundColor: "var(--bg-secondary)" }}>
-                <div
-                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}
-                  onClick={() => setShowAdvanced(!showAdvanced)}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <Settings2 size={16} />
-                    <span style={{ fontSize: "0.95rem", fontWeight: 600 }}>Consensus Guardrails Policy</span>
+              <div
+                style={{
+                  border: "1px solid var(--border-color)",
+                  borderRadius: "10px",
+                  padding: "16px",
+                  backgroundColor: "var(--bg-secondary)",
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "14px",
+                }}
+              >
+                {/* Panel Header */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "10px" }}>
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                      <Sliders size={18} style={{ color: "var(--accent-strong)" }} />
+                      <h3 style={{ fontSize: "1rem", fontWeight: 600, margin: 0 }}>
+                        Consensus Guardrail Thresholds
+                      </h3>
+                    </div>
+                    <p style={{ margin: 0, fontSize: "0.82rem", color: "var(--text-secondary)" }}>
+                      Tune consensus and reliability criteria for this export. Adjusting thresholds recalculates the live preview below without altering raw annotations or previous exports.
+                    </p>
                   </div>
-                  <button className="btn btn-secondary" style={{ padding: "4px 8px", fontSize: "0.8rem" }}>
-                    {showAdvanced ? "Hide settings" : "Configure guardrails"}
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={() => setPolicy(DEFAULT_POLICY)}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "6px",
+                      padding: "4px 8px",
+                      fontSize: "0.75rem",
+                      whiteSpace: "nowrap",
+                    }}
+                    title="Reset all thresholds to system defaults"
+                  >
+                    <RotateCcw size={12} />
+                    Reset to defaults
                   </button>
                 </div>
 
-                {showAdvanced && (
-                  <div style={{ marginTop: "16px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                    <div>
-                      <label style={{ fontSize: "0.8rem", display: "block", marginBottom: "4px" }}>
+                {/* Primary Thresholds Grid */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "14px" }}>
+                  {/* 1. min_annotations_for_consensus */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <label htmlFor="min_annotations_for_consensus" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
                         Min annotations for consensus
                       </label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={policy.min_annotations_for_consensus}
-                        onChange={(e) => setPolicy({ ...policy, min_annotations_for_consensus: parseInt(e.target.value) || 2 })}
-                        style={{ width: "100%", padding: "6px 8px", borderRadius: "6px", border: "1px solid var(--border-color)" }}
-                      />
+                      <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 2</span>
                     </div>
-                    <div>
-                      <label style={{ fontSize: "0.8rem", display: "block", marginBottom: "4px" }}>
+                    <input
+                      id="min_annotations_for_consensus"
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={policy.min_annotations_for_consensus}
+                      onChange={(e) =>
+                        setPolicy({
+                          ...policy,
+                          min_annotations_for_consensus: parseIntegerThreshold(e.target.value, 2),
+                        })
+                      }
+                      style={{
+                        padding: "7px 10px",
+                        borderRadius: "6px",
+                        border: policyErrors.min_annotations_for_consensus ? "1px solid var(--danger)" : "1px solid var(--border-color)",
+                        backgroundColor: "var(--bg-primary)",
+                        color: "var(--text-primary)",
+                        fontSize: "0.9rem",
+                      }}
+                    />
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                      Floor for attempting consensus at all on an item
+                    </span>
+                    {policyErrors.min_annotations_for_consensus && (
+                      <span style={{ fontSize: "0.75rem", color: "var(--danger)" }}>{policyErrors.min_annotations_for_consensus}</span>
+                    )}
+                  </div>
+
+                  {/* 2. low_evidence_threshold */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <label htmlFor="low_evidence_threshold" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
                         Low evidence threshold
                       </label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={policy.low_evidence_threshold}
-                        onChange={(e) => setPolicy({ ...policy, low_evidence_threshold: parseInt(e.target.value) || 3 })}
-                        style={{ width: "100%", padding: "6px 8px", borderRadius: "6px", border: "1px solid var(--border-color)" }}
-                      />
+                      <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 3</span>
                     </div>
-                    <div>
-                      <label style={{ fontSize: "0.8rem", display: "block", marginBottom: "4px" }}>
+                    <input
+                      id="low_evidence_threshold"
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={policy.low_evidence_threshold}
+                      onChange={(e) =>
+                        setPolicy({
+                          ...policy,
+                          low_evidence_threshold: parseIntegerThreshold(e.target.value, 3),
+                        })
+                      }
+                      style={{
+                        padding: "7px 10px",
+                        borderRadius: "6px",
+                        border: policyErrors.low_evidence_threshold ? "1px solid var(--danger)" : "1px solid var(--border-color)",
+                        backgroundColor: "var(--bg-primary)",
+                        color: "var(--text-primary)",
+                        fontSize: "0.9rem",
+                      }}
+                    />
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                      Below this count, item is marked low-evidence even if accepted
+                    </span>
+                    {policyErrors.low_evidence_threshold && (
+                      <span style={{ fontSize: "0.75rem", color: "var(--danger)" }}>{policyErrors.low_evidence_threshold}</span>
+                    )}
+                  </div>
+
+                  {/* 3. min_gold_items */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <label htmlFor="min_gold_items" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
                         Min gold items before exclusion
                       </label>
-                      <input
-                        type="number"
-                        min="0"
-                        value={policy.min_gold_items}
-                        onChange={(e) => setPolicy({ ...policy, min_gold_items: parseIntegerThreshold(e.target.value, 5, 0) })}
-                        style={{ width: "100%", padding: "6px 8px", borderRadius: "6px", border: "1px solid var(--border-color)" }}
-                      />
+                      <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 5</span>
                     </div>
-                    <div>
-                      <label style={{ fontSize: "0.8rem", display: "block", marginBottom: "4px" }}>
+                    <input
+                      id="min_gold_items"
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={policy.min_gold_items}
+                      onChange={(e) =>
+                        setPolicy({
+                          ...policy,
+                          min_gold_items: parseIntegerThreshold(e.target.value, 5),
+                        })
+                      }
+                      style={{
+                        padding: "7px 10px",
+                        borderRadius: "6px",
+                        border: policyErrors.min_gold_items ? "1px solid var(--danger)" : "1px solid var(--border-color)",
+                        backgroundColor: "var(--bg-primary)",
+                        color: "var(--text-primary)",
+                        fontSize: "0.9rem",
+                      }}
+                    />
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                      Minimum gold exposures before an annotator's reliability weight is trusted
+                    </span>
+                    {policyErrors.min_gold_items && (
+                      <span style={{ fontSize: "0.75rem", color: "var(--danger)" }}>{policyErrors.min_gold_items}</span>
+                    )}
+                  </div>
+
+                  {/* 4. min_gold_score */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <label htmlFor="min_gold_score" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
                         Min gold score threshold
                       </label>
-                      <input
-                        type="number"
-                        step="0.05"
-                        min="0"
-                        max="1"
-                        value={policy.min_gold_score}
-                        onChange={(e) => setPolicy({ ...policy, min_gold_score: parseFloatThreshold(e.target.value, 0.7, 0, 1) })}
-                        style={{ width: "100%", padding: "6px 8px", borderRadius: "6px", border: "1px solid var(--border-color)" }}
-                      />
+                      <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 0.70</span>
                     </div>
-                    <div>
-                      <label style={{ fontSize: "0.8rem", display: "block", marginBottom: "4px" }}>
+                    <input
+                      id="min_gold_score"
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={policy.min_gold_score}
+                      onChange={(e) =>
+                        setPolicy({
+                          ...policy,
+                          min_gold_score: parseFloatThreshold(e.target.value, 0.7),
+                        })
+                      }
+                      style={{
+                        padding: "7px 10px",
+                        borderRadius: "6px",
+                        border: policyErrors.min_gold_score ? "1px solid var(--danger)" : "1px solid var(--border-color)",
+                        backgroundColor: "var(--bg-primary)",
+                        color: "var(--text-primary)",
+                        fontSize: "0.9rem",
+                      }}
+                    />
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                      Minimum gold accuracy for an annotator to be export-eligible
+                    </span>
+                    {policyErrors.min_gold_score && (
+                      <span style={{ fontSize: "0.75rem", color: "var(--danger)" }}>{policyErrors.min_gold_score}</span>
+                    )}
+                  </div>
+
+                  {/* 5. min_agreement */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <label htmlFor="min_agreement" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
                         Min item agreement
                       </label>
-                      <input
-                        type="number"
-                        step="0.05"
-                        min="0"
-                        max="1"
-                        value={policy.min_agreement}
-                        onChange={(e) => setPolicy({ ...policy, min_agreement: parseFloatThreshold(e.target.value, 0.6, 0, 1) })}
-                        style={{ width: "100%", padding: "6px 8px", borderRadius: "6px", border: "1px solid var(--border-color)" }}
-                      />
-
+                      <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 0.60</span>
                     </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "20px" }}>
+                    <input
+                      id="min_agreement"
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={policy.min_agreement}
+                      onChange={(e) =>
+                        setPolicy({
+                          ...policy,
+                          min_agreement: parseFloatThreshold(e.target.value, 0.6),
+                        })
+                      }
+                      style={{
+                        padding: "7px 10px",
+                        borderRadius: "6px",
+                        border: policyErrors.min_agreement ? "1px solid var(--danger)" : "1px solid var(--border-color)",
+                        backgroundColor: "var(--bg-primary)",
+                        color: "var(--text-primary)",
+                        fontSize: "0.9rem",
+                      }}
+                    />
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                      Minimum item agreement score to accept a consensus answer outright
+                    </span>
+                    {policyErrors.min_agreement && (
+                      <span style={{ fontSize: "0.75rem", color: "var(--danger)" }}>{policyErrors.min_agreement}</span>
+                    )}
+                  </div>
+
+                  {/* 6. include_low_evidence */}
+                  <div style={{ display: "flex", flexDirection: "column", justifyContent: "center", gap: "6px", paddingTop: "8px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                       <input
                         type="checkbox"
                         id="include_low_evidence"
                         checked={policy.include_low_evidence}
                         onChange={(e) => setPolicy({ ...policy, include_low_evidence: e.target.checked })}
+                        style={{ width: "16px", height: "16px", cursor: "pointer" }}
                       />
-                      <label htmlFor="include_low_evidence" style={{ fontSize: "0.85rem", cursor: "pointer" }}>
+                      <label htmlFor="include_low_evidence" style={{ fontSize: "0.85rem", fontWeight: 600, cursor: "pointer", color: "var(--text-primary)" }}>
                         Include low evidence items in final dataset
                       </label>
                     </div>
+                    <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)", paddingLeft: "24px" }}>
+                      Whether low-evidence accepted items are included in the training-ready set
+                    </span>
                   </div>
-                )}
+                </div>
+
+                {/* Collapsible Advanced Toggle */}
+                <div style={{ borderTop: "1px dashed var(--border-color)", paddingTop: "10px" }}>
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvancedPrior(!showAdvancedPrior)}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      padding: 0,
+                      color: "var(--accent-strong)",
+                      fontSize: "0.82rem",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                    }}
+                  >
+                    {showAdvancedPrior ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    {showAdvancedPrior ? "Hide Advanced Settings" : "Advanced Settings (Bayesian Prior Strength)"}
+                  </button>
+
+                  {showAdvancedPrior && (
+                    <div style={{ marginTop: "10px", maxWidth: "300px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                        <label htmlFor="prior_strength" style={{ fontSize: "0.82rem", fontWeight: 600, color: "var(--text-primary)" }}>
+                          Prior Strength
+                        </label>
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Default: 2.0</span>
+                      </div>
+                      <input
+                        id="prior_strength"
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        value={policy.prior_strength}
+                        onChange={(e) =>
+                          setPolicy({
+                            ...policy,
+                            prior_strength: parseFloatThreshold(e.target.value, 2.0),
+                          })
+                        }
+                        style={{
+                          width: "100%",
+                          padding: "7px 10px",
+                          borderRadius: "6px",
+                          border: policyErrors.prior_strength ? "1px solid var(--danger)" : "1px solid var(--border-color)",
+                          backgroundColor: "var(--bg-primary)",
+                          color: "var(--text-primary)",
+                          fontSize: "0.9rem",
+                        }}
+                      />
+                      <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)", display: "block", marginTop: "4px" }}>
+                        Bayesian shrinkage weight toward the prior for reliability estimation
+                      </span>
+                      {policyErrors.prior_strength && (
+                        <span style={{ fontSize: "0.75rem", color: "var(--danger)" }}>{policyErrors.prior_strength}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
-            {/* Preflight Statistics */}
+            {/* Preflight Statistics & Live Preview Card */}
             {preflight && (
-              <div style={{ border: "1px solid var(--border-color)", borderRadius: "10px", padding: "16px" }}>
+              <div style={{ border: "1px solid var(--border-color)", borderRadius: "10px", padding: "16px", backgroundColor: "var(--bg-card)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
-                  <strong style={{ fontSize: "0.95rem" }}>Preflight Summary</strong>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <strong style={{ fontSize: "0.95rem" }}>Preflight Summary</strong>
+                    {preflightLoading && (
+                      <span style={{ fontSize: "0.78rem", color: "var(--accent-strong)", display: "flex", alignItems: "center", gap: "4px" }}>
+                        <RefreshCw size={12} className="animate-spin" /> Recalculating...
+                      </span>
+                    )}
+                  </div>
                   <span
                     style={{
                       fontSize: "0.8rem",
@@ -570,7 +872,7 @@ export default function ExportDatasetModal({
                       fontWeight: 600,
                     }}
                   >
-                    {preflight.training_ready ? "Training Ready" : "Warnings Present"}
+                    {preflight.training_ready ? "Training Ready" : "Quality Warnings Present"}
                   </span>
                 </div>
 
@@ -591,13 +893,105 @@ export default function ExportDatasetModal({
                       {calculateNeedReviewCount(preflight.counts, policy.include_low_evidence)}
                     </div>
                   </div>
-
-
                   <div style={{ padding: "8px", backgroundColor: "var(--bg-primary)", borderRadius: "6px" }}>
                     <div style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>Est. Archive Size</div>
                     <div style={{ fontSize: "1.2rem", fontWeight: 700 }}>{formatBytes(preflight.estimated_size_bytes)}</div>
                   </div>
                 </div>
+
+                {/* At these settings breakdown (Spec section 2) */}
+                {mode === "consensus" && (
+                  <div
+                    style={{
+                      marginTop: "14px",
+                      padding: "12px 14px",
+                      borderRadius: "8px",
+                      backgroundColor: "var(--bg-secondary)",
+                      border: "1px solid var(--border-color)",
+                    }}
+                  >
+                    <div style={{ fontSize: "0.8rem", fontWeight: 600, color: "var(--text-secondary)", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                      At these settings:
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "6px", fontSize: "0.88rem" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ color: "var(--mint-strong)", fontWeight: 700 }}>•</span>
+                        <span>
+                          <strong>{preflight.counts.consensus_accepted_samples}</strong> {preflight.counts.consensus_accepted_samples === 1 ? "sample" : "samples"} →{" "}
+                          <span style={{ color: "var(--mint-strong)", fontWeight: 600 }}>training-ready</span>
+                        </span>
+                      </div>
+
+                      {preflight.counts.tied_samples > 0 && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <span style={{ color: "var(--gold-primary)", fontWeight: 700 }}>•</span>
+                          <span>
+                            <strong>{preflight.counts.tied_samples}</strong> {preflight.counts.tied_samples === 1 ? "sample" : "samples"} →{" "}
+                            <span style={{ color: "var(--gold-primary)" }}>needs review (tie)</span>
+                          </span>
+                        </div>
+                      )}
+
+                      {preflight.counts.insufficient_overlap_samples > 0 && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <span style={{ color: "var(--gold-primary)", fontWeight: 700 }}>•</span>
+                          <span>
+                            <strong>{preflight.counts.insufficient_overlap_samples}</strong> {preflight.counts.insufficient_overlap_samples === 1 ? "sample" : "samples"} →{" "}
+                            <span style={{ color: "var(--gold-primary)" }}>needs review (insufficient overlap)</span>
+                          </span>
+                        </div>
+                      )}
+
+                      {preflight.counts.low_agreement_samples > 0 && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <span style={{ color: "var(--gold-primary)", fontWeight: 700 }}>•</span>
+                          <span>
+                            <strong>{preflight.counts.low_agreement_samples}</strong> {preflight.counts.low_agreement_samples === 1 ? "sample" : "samples"} →{" "}
+                            <span style={{ color: "var(--gold-primary)" }}>needs review (low agreement)</span>
+                          </span>
+                        </div>
+                      )}
+
+                      {!policy.include_low_evidence && preflight.counts.low_evidence_samples > 0 && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <span style={{ color: "var(--text-secondary)", fontWeight: 700 }}>•</span>
+                          <span>
+                            <strong>{preflight.counts.low_evidence_samples}</strong> {preflight.counts.low_evidence_samples === 1 ? "sample" : "samples"} →{" "}
+                            <span style={{ color: "var(--text-secondary)" }}>needs review (low evidence)</span>
+                          </span>
+                        </div>
+                      )}
+
+                      {preflight.counts.unannotated_samples > 0 && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <span style={{ color: "var(--text-secondary)", fontWeight: 700 }}>•</span>
+                          <span>
+                            <strong>{preflight.counts.unannotated_samples}</strong> {preflight.counts.unannotated_samples === 1 ? "sample" : "samples"} →{" "}
+                            <span style={{ color: "var(--text-secondary)" }}>unannotated</span>
+                          </span>
+                        </div>
+                      )}
+
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ color: preflight.annotator_summary.insufficient_gold_annotators > 0 ? "var(--gold-primary)" : "var(--text-secondary)", fontWeight: 700 }}>•</span>
+                        <span>
+                          <strong>{preflight.annotator_summary.insufficient_gold_annotators}</strong> {preflight.annotator_summary.insufficient_gold_annotators === 1 ? "annotator" : "annotators"} →{" "}
+                          <span>excluded (insufficient gold evidence)</span>
+                        </span>
+                      </div>
+
+                      {Math.max(0, preflight.annotator_summary.excluded_annotators - preflight.annotator_summary.insufficient_gold_annotators) > 0 && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                          <span style={{ color: "var(--danger)", fontWeight: 700 }}>•</span>
+                          <span>
+                            <strong>{Math.max(0, preflight.annotator_summary.excluded_annotators - preflight.annotator_summary.insufficient_gold_annotators)}</strong> annotators →{" "}
+                            <span style={{ color: "var(--danger)" }}>excluded (low gold accuracy)</span>
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Warnings Section */}
                 {hasWarnings && (
@@ -640,6 +1034,24 @@ export default function ExportDatasetModal({
                 )}
               </div>
             )}
+
+            {/* Audit & Immutability Notice (Spec section 4) */}
+            <div
+              style={{
+                fontSize: "0.78rem",
+                color: "var(--text-secondary)",
+                display: "flex",
+                alignItems: "center",
+                gap: "6px",
+                marginTop: "4px",
+              }}
+            >
+              <Info size={14} style={{ flexShrink: 0 }} />
+              <span>
+                Each generated export is a new, independently fingerprinted and timestamped snapshot. Prior exports are never modified.
+              </span>
+            </div>
+
 
             {/* Action Buttons */}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: "10px", marginTop: "10px" }}>
