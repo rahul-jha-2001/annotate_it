@@ -1891,6 +1891,21 @@ summary {
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes fadeInReduced {
+  from { opacity: 0.96; }
+  to { opacity: 1; }
+}
+
+@keyframes toastInReduced {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-in { animation: fadeInReduced 0.15s ease-out forwards; }
+  .warning-toast { animation: toastInReduced 0.15s ease-out; }
+}
+
 @media (max-width: 900px) {
   .annotator-metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
