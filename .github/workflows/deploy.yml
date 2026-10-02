@@ -8,7 +8,7 @@ on:
       - 'frontend/**'
       - 'gateway/**'
       - 'docker-compose.ec2.yml'
-
+  workflow_dispatch:
 jobs:
   deploy:
     runs-on: ubuntu-latest
