@@ -2332,3 +2332,224 @@ summary {
   border-left-color: #475569 !important;
 }
 
+/* --- Bundle Upload & Large Dataset UX --- */
+
+.upload-mode-selector {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.upload-mode-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 20px;
+  border-radius: 12px;
+  border: 2px solid var(--border-color);
+  background: var(--bg-card);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: left;
+}
+
+.upload-mode-card:hover {
+  border-color: var(--accent-primary);
+  background: var(--bg-secondary);
+}
+
+.upload-mode-card.active {
+  border-color: var(--accent-strong);
+  background: rgba(48, 175, 255, 0.08);
+  box-shadow: 0 0 0 1px var(--accent-strong);
+}
+
+.upload-mode-card strong {
+  font-size: 1rem;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.upload-mode-card span {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.bundle-status-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+  animation: fadeIn 0.3s ease;
+  backdrop-filter: blur(8px);
+}
+
+.bundle-status-banner.processing,
+.bundle-status-banner.queued {
+  background: rgba(48, 175, 255, 0.12);
+  border: 1px solid rgba(48, 175, 255, 0.35);
+  color: #034b61;
+}
+
+.bundle-status-banner.completed {
+  background: rgba(196, 247, 202, 0.3);
+  border: 1px solid rgba(35, 116, 93, 0.35);
+  color: #175240;
+}
+
+.bundle-status-banner.failed {
+  background: rgba(255, 240, 241, 0.9);
+  border: 1px solid rgba(184, 62, 71, 0.35);
+  color: #8c262d;
+}
+
+.bundle-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.bundle-banner-icon {
+  flex-shrink: 0;
+}
+
+.bundle-banner-text strong {
+  display: block;
+  font-size: 0.92rem;
+  margin-bottom: 2px;
+}
+
+.bundle-banner-text p {
+  font-size: 0.82rem;
+  margin: 0;
+  opacity: 0.9;
+}
+
+.bundle-banner-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.bundle-upload-card {
+  padding: 20px;
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.bundle-file-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.bundle-file-info strong {
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.bundle-file-info span {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.bundle-progress-track {
+  width: 100%;
+  height: 10px;
+  background: var(--bg-secondary);
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+.bundle-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-primary), var(--accent-strong));
+  border-radius: 999px;
+  transition: width 0.25s ease-out;
+}
+
+.bundle-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.bundle-upload-controls {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.bundle-disabled-notice {
+  padding: 16px;
+  border-radius: 10px;
+  background: var(--bg-secondary);
+  border: 1px dashed var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.bundle-error-panel {
+  margin-top: 14px;
+  padding: 16px;
+  border-radius: 10px;
+  background: var(--danger-soft);
+  border: 1px solid rgba(184, 62, 71, 0.25);
+}
+
+.bundle-error-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  margin-top: 10px;
+}
+
+.bundle-error-table th {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(184, 62, 71, 0.2);
+  color: var(--danger);
+}
+
+.bundle-error-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(184, 62, 71, 0.1);
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.spin-animate {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+

@@ -184,6 +184,82 @@ class PresignResponseItem(BaseModel):
 class PresignResponse(BaseModel):
     urls: List[PresignResponseItem]
 
+
+class PresignMultipartRequest(BaseModel):
+    filename: str
+    content_type: Optional[str] = None
+    experiment_id: Optional[UUID] = None
+
+
+class PresignMultipartResponse(BaseModel):
+    upload_id: str
+    s3_key: str
+
+
+class PresignMultipartPartRequest(BaseModel):
+    s3_key: str
+    upload_id: str
+    part_number: int
+
+
+class PresignMultipartPartResponse(BaseModel):
+    presigned_url: str
+    part_number: int
+
+
+class CompletedPartItem(BaseModel):
+    PartNumber: int
+    ETag: str
+
+
+class CompleteMultipartRequest(BaseModel):
+    s3_key: str
+    upload_id: str
+    parts: List[CompletedPartItem]
+
+
+class CompleteMultipartResponse(BaseModel):
+    s3_key: str
+    s3_uri: str
+
+
+class BundleUploadCreateRequest(BaseModel):
+    s3_key: str
+
+
+class BundleUploadCreateResponse(BaseModel):
+    job_id: UUID
+    status: str
+
+
+class BundleUploadProgress(BaseModel):
+    files_processed: int
+    files_total: int
+
+
+class BundleUploadErrorItem(BaseModel):
+    filename: str
+    error: str
+
+
+class BundleUploadResult(BaseModel):
+    applied: List[str] = Field(default_factory=list)
+    errors: List[BundleUploadErrorItem] = Field(default_factory=list)
+
+
+class BundleUploadStatusResponse(BaseModel):
+    status: str
+    progress: BundleUploadProgress
+    result: BundleUploadResult
+
+
+class BundleUploadPatchRequest(BaseModel):
+    status: Optional[str] = None
+    files_processed: Optional[int] = None
+    files_total: Optional[int] = None
+    applied: Optional[List[str]] = None
+    errors: Optional[List[Dict[str, Any]]] = None
+
 class DataUnitCreate(BaseModel):
     raw_uri: str
     is_gold: bool = False

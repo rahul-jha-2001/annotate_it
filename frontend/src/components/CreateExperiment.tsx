@@ -1,11 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, Plus, Settings, Trash2, UploadCloud } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  FileArchive,
+  Loader2,
+  Pause,
+  Play,
+  Plus,
+  RefreshCw,
+  Settings,
+  Trash2,
+  UploadCloud,
+  X,
+} from "lucide-react";
 import AnnotationControl from "./annotator/AnnotationControl";
 import type { AnnotationAnswer, LabelSchema } from "./annotator/types";
 import AnnotationOverlaySelector, { buildOverlayOptions } from "./AnnotationOverlaySelector";
 import { getAnnotationPlugin, supportsAnnotationModule } from "../plugins/annotations/registry";
 import { getMediaPlugin, listMediaPlugins } from "../plugins/media/registry";
 import { apiFetch } from "../api";
+import {
+  clearUploadCache,
+  type MultipartProgress,
+  uploadMultipartFile,
+} from "../services/multipartUpload";
 import {
   parseDatasetBundle,
   validateGold,
@@ -95,6 +115,58 @@ export default function CreateExperiment() {
   const [uploadStatus, setUploadStatus] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [uploadMode, setUploadMode] = useState<"files" | "bundle">("files");
+  const [bundleFile, setBundleFile] = useState<File | null>(null);
+  const [bundleUploadStatus, setBundleUploadStatus] = useState<"idle" | "uploading" | "paused" | "completed" | "failed">("idle");
+  const [bundleProgress, setBundleProgress] = useState<MultipartProgress | null>(null);
+  const [bundleAbortController, setBundleAbortController] = useState<AbortController | null>(null);
+  const [createdExperimentId, setCreatedExperimentId] = useState<string | null>(null);
+  const [bundleJobId, setBundleJobId] = useState<string | null>(null);
+  const [bundleJobStatus, setBundleJobStatus] = useState<"queued" | "processing" | "completed" | "failed" | null>(null);
+  const [bundleJobProgress, setBundleJobProgress] = useState<{ files_processed: number; files_total: number } | null>(null);
+  const [bundleJobApplied, setBundleJobApplied] = useState<string[]>([]);
+  const [bundleJobErrors, setBundleJobErrors] = useState<Array<{ filename: string; error: string }>>([]);
+  const [showBundleErrorDetails, setShowBundleErrorDetails] = useState(false);
+
+  useEffect(() => {
+    if (!createdExperimentId || !bundleJobId) return;
+    if (bundleJobStatus !== "queued" && bundleJobStatus !== "processing") return;
+
+    let isMounted = true;
+    const interval = setInterval(async () => {
+      try {
+        const res = await apiFetch(`/api/experiments/${createdExperimentId}/bundle-upload/${bundleJobId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!isMounted) return;
+
+        setBundleJobStatus(data.status);
+        if (data.progress) {
+          setBundleJobProgress({
+            files_processed: data.progress.files_processed,
+            files_total: data.progress.files_total,
+          });
+        }
+        if (data.result?.applied) {
+          setBundleJobApplied(data.result.applied);
+          if (data.status === "completed" && data.result.applied.length > 0) {
+            setFiles(data.result.applied.map((fn: string) => new File([""], fn, { type: "application/octet-stream" })));
+          }
+        }
+        if (data.result?.errors) {
+          setBundleJobErrors(data.result.errors);
+        }
+      } catch (pollErr) {
+        console.error("Bundle status poll error:", pollErr);
+      }
+    }, 2500);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [createdExperimentId, bundleJobId, bundleJobStatus]);
 
   useEffect(() => {
     apiFetch("/api/annotation-types").then(response => response.json()).then(setAnnotationTypes)
@@ -322,11 +394,115 @@ export default function CreateExperiment() {
     setTeachingExamples(current => current.filter((_, pos) => pos !== index));
   };
 
+  const startBundleUpload = async (fileToUpload: File) => {
+    setError(null);
+    setBundleFile(fileToUpload);
+
+    let expId = createdExperimentId;
+    if (!expId) {
+      try {
+        const expRes = await apiFetch("/api/experiments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...form,
+            name: form.name.trim() || `Experiment ${new Date().toLocaleDateString()}`,
+            instructions: form.instructions.trim() || "Instructions",
+            status: "draft",
+            label_schema: annotationSchema,
+            metadata_schema: [],
+            qualification_form: [],
+            routing_rules: [],
+          }),
+        });
+        const expData = await expRes.json();
+        if (!expRes.ok) {
+          throw new Error(typeof expData.detail === "string" ? expData.detail : "Could not create initial experiment draft");
+        }
+        expId = expData.id;
+        setCreatedExperimentId(expData.id);
+      } catch (createErr) {
+        setError(createErr instanceof Error ? createErr.message : "Failed to initialize experiment for bundle upload");
+        return;
+      }
+    }
+
+    const controller = new AbortController();
+    setBundleAbortController(controller);
+    setBundleUploadStatus("uploading");
+
+    try {
+      const uploadRes = await uploadMultipartFile({
+        file: fileToUpload,
+        experimentId: expId,
+        onProgress: setBundleProgress,
+        abortSignal: controller.signal,
+      });
+
+      setBundleUploadStatus("completed");
+
+      const jobRes = await apiFetch(`/api/experiments/${expId}/bundle-upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ s3_key: uploadRes.s3_key }),
+      });
+      const jobData = await jobRes.json();
+      if (!jobRes.ok) {
+        throw new Error(jobData.detail || "Failed to queue bundle extraction job");
+      }
+
+      setBundleJobId(jobData.job_id);
+      setBundleJobStatus("queued");
+    } catch (uploadErr) {
+      if (controller.signal.aborted) {
+        setBundleUploadStatus("paused");
+      } else {
+        setBundleUploadStatus("failed");
+        setError(uploadErr instanceof Error ? uploadErr.message : "Multipart upload failed");
+      }
+    }
+  };
+
+  const pauseBundleUpload = () => {
+    bundleAbortController?.abort();
+    setBundleUploadStatus("paused");
+  };
+
+  const resumeBundleUpload = () => {
+    if (bundleFile) {
+      startBundleUpload(bundleFile);
+    }
+  };
+
+  const cancelBundleUpload = () => {
+    bundleAbortController?.abort();
+    if (bundleFile) {
+      clearUploadCache(bundleFile);
+    }
+    setBundleFile(null);
+    setBundleProgress(null);
+    setBundleUploadStatus("idle");
+    setBundleJobId(null);
+    setBundleJobStatus(null);
+    setBundleJobProgress(null);
+    setBundleJobErrors([]);
+  };
+
   const canContinue = (() => {
     if (step === 0) return Boolean(form.name.trim() && form.instructions.trim());
     if (step === 1) return Boolean(annotationPlugin && currentType && annotationPlugin.validateSchema(annotationSchema).length === 0);
-    if (step === 2) return files.length > 0 && duplicateFiles.size === 0;
-    if (step === 3) return datasetAssemblyCurrent && datasetRows.length > 0 && datasetErrors.length === 0 && datasetRows.every(row => row.errors.length === 0);
+    if (step === 2) {
+      if (uploadMode === "bundle") {
+        return Boolean(bundleFile && (bundleUploadStatus === "completed" || bundleJobStatus === "completed"));
+      }
+      return files.length > 0 && duplicateFiles.size === 0;
+    }
+    if (step === 3) {
+      if (uploadMode === "bundle" && bundleJobStatus !== "completed") {
+        return true;
+      }
+      return datasetAssemblyCurrent && datasetRows.length > 0 && datasetErrors.length === 0 && datasetRows.every(row => row.errors.length === 0);
+    }
     if (step === 4) return questions.every(question => question.label.trim() && (!question.type.includes("choice") || question.options.length > 0));
     if (step === 5) {
       return teachingExamples.every(
@@ -339,7 +515,10 @@ export default function CreateExperiment() {
   const assembleDataset = () => {
     setError(null);
     try {
-      const parsed = parseDatasetBundle(files.map(file => file.name), metadataCsv, goldManifest, { schema: annotationSchema });
+      const sourceFilenames = uploadMode === "bundle" && bundleJobApplied.length > 0
+        ? bundleJobApplied
+        : files.map(file => file.name);
+      const parsed = parseDatasetBundle(sourceFilenames, metadataCsv, goldManifest, { schema: annotationSchema });
       setMetadataFields(parsed.metadataFields);
       setDatasetRows(parsed.rows);
       setDatasetErrors(parsed.errors);
@@ -387,6 +566,103 @@ export default function CreateExperiment() {
     setSubmitting(true);
     setError(null);
     try {
+      if (uploadMode === "bundle" && createdExperimentId) {
+        if (bundleJobStatus === "queued" || bundleJobStatus === "processing") {
+          throw new Error("Cannot deploy while media archive is processing");
+        }
+        if (bundleJobStatus === "failed") {
+          throw new Error("Cannot deploy when media archive processing failed");
+        }
+
+        const settingsRes = await apiFetch(`/api/experiments/${createdExperimentId}/settings`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: form.name.trim(),
+            instructions: form.instructions.trim(),
+            overlap_n: form.overlap_n,
+            gold_ratio: form.gold_ratio,
+            access_mode: form.access_mode,
+          }),
+        });
+        if (!settingsRes.ok) {
+          const errData = await settingsRes.json().catch(() => ({}));
+          throw new Error(errData.detail || "Could not update experiment settings");
+        }
+
+        const unitsRes = await apiFetch(`/api/experiments/${createdExperimentId}/data-units`);
+        const unitsJson = await unitsRes.json();
+        const registeredUnits: any[] = unitsJson.data_units || [];
+        const unitByFilename = new Map<string, string>();
+        for (const u of registeredUnits) {
+          if (u.filename) unitByFilename.set(u.filename, u.id);
+        }
+
+        const teachingMap = new Map(teachingExamples.map(te => [te.filename, te]));
+        const effectiveGoldEntries = new Map<string, AnnotationAnswer>();
+
+        for (const row of datasetRows) {
+          if (row.goldAnswer) {
+            const te = teachingMap.get(row.filename);
+            if (!te || te.keepAsGold) {
+              effectiveGoldEntries.set(row.filename, row.goldAnswer);
+            }
+          }
+        }
+        for (const te of teachingExamples) {
+          if (te.keepAsGold && te.answer) {
+            effectiveGoldEntries.set(te.filename, te.answer);
+          }
+        }
+
+        const goldEntries = Array.from(effectiveGoldEntries.entries()).map(([filename, answer]) => ({
+          filename,
+          answer,
+        }));
+
+        if (form.gold_ratio > 0 && goldEntries.length === 0) {
+          throw new Error('Add at least one scored gold answer or set quality-check frequency to "None"');
+        }
+
+        if (goldEntries.length) {
+          const goldResponse = await apiFetch(`/api/experiments/${createdExperimentId}/gold-manifest`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ manifest: goldEntries }),
+          });
+          const result = await goldResponse.json();
+          if (!goldResponse.ok || result.errors?.length) {
+            throw new Error(result.errors?.[0]?.error || "Could not apply gold answers");
+          }
+        }
+
+        if (teachingExamples.length > 0) {
+          const tePayload = teachingExamples.map(te => ({
+            data_unit_id: unitByFilename.get(te.filename),
+            displayed_answer: te.answer,
+            explanation: te.explanation.trim() || undefined,
+            keep_as_gold: Boolean(te.keepAsGold),
+          }));
+          if (tePayload.some(te => !te.data_unit_id)) {
+            throw new Error("Could not find matching uploaded file for teaching example");
+          }
+          const teResponse = await apiFetch(`/api/experiments/${createdExperimentId}/teaching-examples`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ teaching_examples: tePayload }),
+          });
+          if (!teResponse.ok) {
+            const teErr = await teResponse.json();
+            throw new Error(teErr.detail || "Could not configure teaching examples");
+          }
+        }
+
+        const deployResponse = await apiFetch(`/api/experiments/${createdExperimentId}/deploy`, { method: "POST" });
+        if (!deployResponse.ok) throw new Error((await deployResponse.json()).detail || "Could not deploy experiment");
+        window.location.assign(`/experiments/${createdExperimentId}`);
+        return;
+      }
+
       if (!datasetRows.length || datasetErrors.length || datasetRows.some(row => row.errors.length)) {
         throw new Error("Return to the dataset preview and resolve its validation errors");
       }
@@ -537,6 +813,74 @@ export default function CreateExperiment() {
           "Confirm quality settings and deploy.",
         ][step]}</p></div></div>
 
+        {/* Sticky Bundle Status Banner */}
+        {uploadMode === "bundle" && bundleJobStatus && (
+          <div className={`bundle-status-banner ${bundleJobStatus}`}>
+            <div className="bundle-banner-content">
+              <div className="bundle-banner-icon">
+                {(bundleJobStatus === "processing" || bundleJobStatus === "queued") && (
+                  <Loader2 size={24} className="spin-animate text-blue-600" />
+                )}
+                {bundleJobStatus === "completed" && (
+                  <Check size={24} className="text-emerald-600" />
+                )}
+                {bundleJobStatus === "failed" && (
+                  <AlertCircle size={24} className="text-rose-600" />
+                )}
+              </div>
+              <div className="bundle-banner-text">
+                {(bundleJobStatus === "processing" || bundleJobStatus === "queued") && (
+                  <>
+                    <strong>Dataset Archive Processing in Background</strong>
+                    <p>
+                      Extracting &amp; registering files ({bundleJobProgress?.files_processed ?? 0}/{bundleJobProgress?.files_total ?? "?"} files).
+                      You can continue configuring qualifications, teaching examples, and routing rules below.
+                    </p>
+                  </>
+                )}
+                {bundleJobStatus === "completed" && (
+                  <>
+                    <strong>Dataset Archive Ready</strong>
+                    <p>
+                      Extraction complete! {bundleJobApplied.length} files successfully registered.
+                      You can optionally upload metadata CSV or gold answers in Step 3.
+                    </p>
+                  </>
+                )}
+                {bundleJobStatus === "failed" && (
+                  <>
+                    <strong>Dataset Archive Processing Encountered Errors</strong>
+                    <p>
+                      {bundleJobErrors.length} error(s) detected. Review the error details below or retry upload.
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+            {bundleJobStatus === "failed" && (
+              <div className="bundle-banner-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => setShowBundleErrorDetails(prev => !prev)}
+                >
+                  {showBundleErrorDetails ? "Hide Errors" : "View Errors"}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={() => {
+                    cancelBundleUpload();
+                    setStep(2);
+                  }}
+                >
+                  <RefreshCw size={15} /> Retry Upload
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
         {step === 0 && <div className="flex-col">
           <div className="form-group"><label className="form-label" htmlFor="experiment-name">Experiment name</label><input id="experiment-name" className="form-input" value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="Hindi speech quality" /></div>
           <div className="form-group"><label className="form-label" htmlFor="experiment-instructions">Instructions for annotators</label><textarea id="experiment-instructions" className="form-textarea" value={form.instructions} onChange={event => setForm({ ...form, instructions: event.target.value })} placeholder="Explain what a good annotation looks like…" /></div>
@@ -598,48 +942,216 @@ export default function CreateExperiment() {
         </div>}
 
         {step === 2 && <div className="flex-col">
-          <div className="bundle-grid">
-            <label className="dropzone"><UploadCloud className="dropzone-icon" /><strong>1. {mediaPlugin?.uploadTitle ?? "Choose media files"}</strong><span>{mediaPlugin?.uploadHelp ?? "Choose supported media files"}</span><input type="file" multiple accept={mediaPlugin?.accept} hidden onChange={event => { setFiles(Array.from(event.target.files ?? [])); setDatasetRows([]); }} /></label>
-            <label className="dropzone compact"><UploadCloud className="dropzone-icon" /><strong>2. Upload metadata CSV (optional)</strong><span>{metadataCsv ? "CSV loaded — choose another to replace it" : 'Must contain a "filename" column'}</span><input type="file" accept=".csv,text/csv" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setMetadataCsv(await file.text()); setDatasetRows([]); } }} /></label>
-            <label className="dropzone compact"><UploadCloud className="dropzone-icon" /><strong>3. Upload gold answers JSON (optional)</strong><span>{goldManifest ? "JSON loaded — choose another to replace it" : "Only include samples used as quality checks"}</span><input type="file" accept=".json,application/json" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setGoldManifest(await file.text()); setDatasetRows([]); } }} /></label>
+          <div className="upload-mode-selector">
+            <button
+              type="button"
+              className={`upload-mode-card ${uploadMode === "files" ? "active" : ""}`}
+              onClick={() => {
+                setUploadMode("files");
+                setError(null);
+              }}
+            >
+              <strong>Individual Media Files</strong>
+              <span>Upload media files directly from your computer (best for small datasets &lt; 50MB)</span>
+            </button>
+            <button
+              type="button"
+              className={`upload-mode-card ${uploadMode === "bundle" ? "active" : ""}`}
+              onClick={() => {
+                setUploadMode("bundle");
+                setError(null);
+              }}
+            >
+              <strong>Single Archive (.zip) for Large Datasets</strong>
+              <span>Resumable, chunked parallel upload with background extraction (supports multi-GB)</span>
+            </button>
           </div>
-          {(metadataCsv || goldManifest) && <div className="bundle-actions">{metadataCsv && <button type="button" className="btn btn-secondary" onClick={() => { setMetadataCsv(""); setDatasetRows([]); }}>Remove metadata CSV</button>}{goldManifest && <button type="button" className="btn btn-secondary" onClick={() => { setGoldManifest(""); setDatasetRows([]); }}>Remove gold JSON</button>}</div>}
-          {files.length > 0 && <div className="file-list">{files.map(file => <div key={`${file.name}-${file.size}`}><span>{file.name}</span><span>{uploadStatus[file.name] || `${(file.size / 1024).toFixed(0)} KB`}</span></div>)}</div>}
-          {duplicateFiles.size > 0 && <p className="form-error">Duplicate filenames are not allowed: {[...duplicateFiles].join(", ")}</p>}
-          <details><summary>Input formats</summary><p className="help-text">Metadata CSV example: <code>filename,language,difficulty</code>. Gold JSON uses the format shown on the Task step; for this modality an example filename is <code>{mediaPlugin?.exampleFilename}</code>. Filenames must match the selected media exactly.</p></details>
+
+          {uploadMode === "files" ? (
+            <>
+              <div className="bundle-grid">
+                <label className="dropzone"><UploadCloud className="dropzone-icon" /><strong>1. {mediaPlugin?.uploadTitle ?? "Choose media files"}</strong><span>{mediaPlugin?.uploadHelp ?? "Choose supported media files"}</span><input type="file" multiple accept={mediaPlugin?.accept} hidden onChange={event => { setFiles(Array.from(event.target.files ?? [])); setDatasetRows([]); }} /></label>
+                <label className="dropzone compact"><UploadCloud className="dropzone-icon" /><strong>2. Upload metadata CSV (optional)</strong><span>{metadataCsv ? "CSV loaded — choose another to replace it" : 'Must contain a "filename" column'}</span><input type="file" accept=".csv,text/csv" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setMetadataCsv(await file.text()); setDatasetRows([]); } }} /></label>
+                <label className="dropzone compact"><UploadCloud className="dropzone-icon" /><strong>3. Upload gold answers JSON (optional)</strong><span>{goldManifest ? "JSON loaded — choose another to replace it" : "Only include samples used as quality checks"}</span><input type="file" accept=".json,application/json" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setGoldManifest(await file.text()); setDatasetRows([]); } }} /></label>
+              </div>
+              {(metadataCsv || goldManifest) && <div className="bundle-actions">{metadataCsv && <button type="button" className="btn btn-secondary" onClick={() => { setMetadataCsv(""); setDatasetRows([]); }}>Remove metadata CSV</button>}{goldManifest && <button type="button" className="btn btn-secondary" onClick={() => { setGoldManifest(""); setDatasetRows([]); }}>Remove gold JSON</button>}</div>}
+              {files.length > 0 && <div className="file-list">{files.map(file => <div key={`${file.name}-${file.size}`}><span>{file.name}</span><span>{uploadStatus[file.name] || `${(file.size / 1024).toFixed(0)} KB`}</span></div>)}</div>}
+              {duplicateFiles.size > 0 && <p className="form-error">Duplicate filenames are not allowed: {[...duplicateFiles].join(", ")}</p>}
+              <details><summary>Input formats</summary><p className="help-text">Metadata CSV example: <code>filename,language,difficulty</code>. Gold JSON uses the format shown on the Task step; for this modality an example filename is <code>{mediaPlugin?.exampleFilename}</code>. Filenames must match the selected media exactly.</p></details>
+            </>
+          ) : (
+            <>
+              {!bundleFile ? (
+                <label className="dropzone" style={{ padding: "40px 20px" }}>
+                  <FileArchive className="dropzone-icon" style={{ width: "48px", height: "48px", color: "var(--accent-strong)" }} />
+                  <strong>Choose a Dataset Archive (.zip)</strong>
+                  <span>Archive must contain a top-level <code>media/</code> folder. Up to several GB supported.</span>
+                  <input
+                    type="file"
+                    accept=".zip,application/zip"
+                    hidden
+                    onChange={event => {
+                      const file = event.target.files?.[0];
+                      if (file) {
+                        startBundleUpload(file);
+                      }
+                    }}
+                  />
+                </label>
+              ) : (
+                <div className="bundle-upload-card">
+                  <div className="bundle-file-info">
+                    <strong>{bundleFile.name}</strong>
+                    <span>{(bundleFile.size / (1024 * 1024)).toFixed(1)} MB</span>
+                  </div>
+
+                  <div className="bundle-progress-track">
+                    <div
+                      className="bundle-progress-fill"
+                      style={{ width: `${bundleProgress?.percent ?? 0}%` }}
+                    />
+                  </div>
+
+                  <div className="bundle-progress-meta">
+                    <span>
+                      {bundleUploadStatus === "uploading" && `Uploading: ${bundleProgress?.percent.toFixed(1) ?? "0"}%`}
+                      {bundleUploadStatus === "paused" && "Upload paused"}
+                      {bundleUploadStatus === "completed" && (bundleJobStatus === "processing" || bundleJobStatus === "queued" ? "Archive uploaded. Extracting files in background..." : "Upload completed")}
+                      {bundleUploadStatus === "failed" && "Upload encountered an error"}
+                    </span>
+                    <span>
+                      {((bundleProgress?.uploadedBytes ?? 0) / (1024 * 1024)).toFixed(1)} MB / {(bundleFile.size / (1024 * 1024)).toFixed(1)} MB
+                      {bundleProgress ? ` (${bundleProgress.completedParts}/${bundleProgress.totalParts} chunks)` : ""}
+                    </span>
+                  </div>
+
+                  <div className="bundle-upload-controls">
+                    {bundleUploadStatus === "uploading" && (
+                      <button type="button" className="btn btn-secondary" onClick={pauseBundleUpload}>
+                        <Pause size={15} /> Pause
+                      </button>
+                    )}
+                    {bundleUploadStatus === "paused" && (
+                      <button type="button" className="btn btn-primary" onClick={resumeBundleUpload}>
+                        <Play size={15} /> Resume Upload
+                      </button>
+                    )}
+                    {(bundleUploadStatus === "uploading" || bundleUploadStatus === "paused" || bundleUploadStatus === "failed") && (
+                      <button type="button" className="btn btn-secondary" onClick={cancelBundleUpload}>
+                        <X size={15} /> Cancel
+                      </button>
+                    )}
+                    {bundleUploadStatus === "completed" && bundleJobStatus === "failed" && (
+                      <button type="button" className="btn btn-primary" onClick={() => { cancelBundleUpload(); }}>
+                        <RefreshCw size={15} /> Select Another Archive
+                      </button>
+                    )}
+                  </div>
+
+                  {bundleJobErrors.length > 0 && (
+                    <div className="bundle-error-panel">
+                      <strong style={{ color: "var(--danger)", display: "block", marginBottom: "6px" }}>
+                        Archive Processing Errors ({bundleJobErrors.length})
+                      </strong>
+                      <table className="bundle-error-table">
+                        <thead>
+                          <tr>
+                            <th>File</th>
+                            <th>Error</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {bundleJobErrors.map((err, idx) => (
+                            <tr key={idx}>
+                              <td>{err.filename}</td>
+                              <td>{err.error}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {bundleJobStatus !== "completed" ? (
+                    <div className="bundle-disabled-notice">
+                      <Loader2 size={18} className="spin-animate" />
+                      <span>
+                        Metadata CSV and gold answers can be uploaded once media extraction finishes.
+                        You can continue configuring qualifications and routing in the meantime.
+                      </span>
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: "16px" }}>
+                      <p className="help-text" style={{ marginBottom: "8px" }}>
+                        <strong>Optional Follow-ups:</strong> Add metadata attributes or gold answers referencing the files in your archive.
+                      </p>
+                      <div className="bundle-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                        <label className="dropzone compact">
+                          <UploadCloud className="dropzone-icon" />
+                          <strong>Upload metadata CSV (optional)</strong>
+                          <span>{metadataCsv ? "CSV loaded — choose another to replace it" : 'Must contain a "filename" column'}</span>
+                          <input type="file" accept=".csv,text/csv" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setMetadataCsv(await file.text()); setDatasetRows([]); } }} />
+                        </label>
+                        <label className="dropzone compact">
+                          <UploadCloud className="dropzone-icon" />
+                          <strong>Upload gold answers JSON (optional)</strong>
+                          <span>{goldManifest ? "JSON loaded — choose another to replace it" : "Only include samples used as quality checks"}</span>
+                          <input type="file" accept=".json,application/json" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setGoldManifest(await file.text()); setDatasetRows([]); } }} />
+                        </label>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
           {error && <p className="form-error">{error}</p>}
         </div>}
 
         {step === 3 && <div className="flex-col">
-          {!datasetAssemblyCurrent && <p className="form-error">The annotation task changed after this dataset was assembled. Go back to “Dataset bundle” and select “Assemble &amp; preview” again to revalidate every gold answer.</p>}
-          <div className="dataset-summary">
-            <div><strong>{datasetRows.length}</strong><span>samples</span></div>
-            <div><strong>{metadataFields.length}</strong><span>metadata fields</span></div>
-            <div><strong>{goldCount}</strong><span>gold samples</span></div>
-            <div><strong>{datasetErrors.length + datasetRows.filter(row => row.errors.length).length}</strong><span>issues</span></div>
-          </div>
-          {datasetErrors.map(message => <p className="form-error" key={message}>{message}</p>)}
-          <div className="dataset-table-wrap"><table className="dataset-table"><thead><tr><th style={{ minWidth: "220px" }}>Sample</th>{metadataFields.map(field => <th key={field.key}>{field.label}</th>)}<th>Gold answer</th><th>Status</th></tr></thead><tbody>
-            {datasetRows.map(row => <tr key={row.filename} className={row.errors.length ? "invalid" : ""}>
-              <td style={{ minWidth: "220px", verticalAlign: "top" }}>
-                <strong style={{ display: "block", marginBottom: "6px", wordBreak: "break-all" }}>{row.filename}</strong>
-                <div className="sample-row-preview">
-                  {mediaPlugin ? row.goldAnswer
-                    ? <AnnotationOverlaySelector modality={form.modality} schema={annotationSchema} mediaUrl={mediaUrls[row.filename]} title={row.filename} options={buildOverlayOptions(row.goldAnswer as AnnotationAnswer, [])} />
-                    : <mediaPlugin.PreviewRenderer mediaUrl={mediaUrls[row.filename]} title={row.filename} />
-                    : <span>Unsupported media</span>}
-                </div>
-              </td>
-              {metadataFields.map(field => <td key={field.key}>
-                {field.type === "choice" ? <select className="table-input" value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value || undefined)}><option value="">—</option>{field.options.map(option => <option key={option}>{option}</option>)}</select>
-                  : field.type === "boolean" ? <select className="table-input" value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value ? event.target.value === "true" : undefined)}><option value="">—</option><option value="true">Yes</option><option value="false">No</option></select>
-                    : <input className="table-input" type={field.type === "number" ? "number" : "text"} value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value ? (field.type === "number" ? event.target.valueAsNumber : event.target.value) : undefined)} />}
-              </td>)}
-              <td><textarea className="table-input gold-cell" defaultValue={row.goldAnswer ? JSON.stringify(row.goldAnswer) : ""} placeholder="Not gold" onBlur={event => updateRowGold(row.filename, event.target.value)} /></td>
-              <td>{row.errors.length ? <span className="status-error" title={row.errors.join("; ")}>Needs attention</span> : <span className="status-ready">Ready</span>}{row.errors.map(message => <small className="row-error" key={message}>{message}</small>)}</td>
-            </tr>)}
-          </tbody></table></div>
-          <p className="help-text">Metadata cells and gold JSON can be corrected here. Use “Back” to replace any source file.</p>
+          {uploadMode === "bundle" && bundleJobStatus !== "completed" ? (
+            <div className="empty-builder" style={{ padding: "40px 20px" }}>
+              <Loader2 size={32} className="spin-animate text-blue-600" style={{ margin: "0 auto 12px" }} />
+              <strong>Media archive is processing in the background</strong>
+              <span>
+                Processed {bundleJobProgress?.files_processed ?? 0} of {bundleJobProgress?.files_total ?? "?"} files.
+                Dataset preview and metadata association will be available once extraction finishes.
+                You can continue to Qualifications and Teaching Examples now!
+              </span>
+            </div>
+          ) : (
+            <>
+              {!datasetAssemblyCurrent && <p className="form-error">The annotation task changed after this dataset was assembled. Go back to “Dataset bundle” and select “Assemble &amp; preview” again to revalidate every gold answer.</p>}
+              <div className="dataset-summary">
+                <div><strong>{datasetRows.length}</strong><span>samples</span></div>
+                <div><strong>{metadataFields.length}</strong><span>metadata fields</span></div>
+                <div><strong>{goldCount}</strong><span>gold samples</span></div>
+                <div><strong>{datasetErrors.length + datasetRows.filter(row => row.errors.length).length}</strong><span>issues</span></div>
+              </div>
+              {datasetErrors.map(message => <p className="form-error" key={message}>{message}</p>)}
+              <div className="dataset-table-wrap"><table className="dataset-table"><thead><tr><th style={{ minWidth: "220px" }}>Sample</th>{metadataFields.map(field => <th key={field.key}>{field.label}</th>)}<th>Gold answer</th><th>Status</th></tr></thead><tbody>
+                {datasetRows.map(row => <tr key={row.filename} className={row.errors.length ? "invalid" : ""}>
+                  <td style={{ minWidth: "220px", verticalAlign: "top" }}>
+                    <strong style={{ display: "block", marginBottom: "6px", wordBreak: "break-all" }}>{row.filename}</strong>
+                    <div className="sample-row-preview">
+                      {mediaPlugin ? row.goldAnswer
+                        ? <AnnotationOverlaySelector modality={form.modality} schema={annotationSchema} mediaUrl={mediaUrls[row.filename]} title={row.filename} options={buildOverlayOptions(row.goldAnswer as AnnotationAnswer, [])} />
+                        : <mediaPlugin.PreviewRenderer mediaUrl={mediaUrls[row.filename]} title={row.filename} />
+                        : <span>Unsupported media</span>}
+                    </div>
+                  </td>
+                  {metadataFields.map(field => <td key={field.key}>
+                    {field.type === "choice" ? <select className="table-input" value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value || undefined)}><option value="">—</option>{field.options.map(option => <option key={option}>{option}</option>)}</select>
+                      : field.type === "boolean" ? <select className="table-input" value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value ? event.target.value === "true" : undefined)}><option value="">—</option><option value="true">Yes</option><option value="false">No</option></select>
+                        : <input className="table-input" type={field.type === "number" ? "number" : "text"} value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value ? (field.type === "number" ? event.target.valueAsNumber : event.target.value) : undefined)} />}
+                  </td>)}
+                  <td><textarea className="table-input gold-cell" defaultValue={row.goldAnswer ? JSON.stringify(row.goldAnswer) : ""} placeholder="Not gold" onBlur={event => updateRowGold(row.filename, event.target.value)} /></td>
+                  <td>{row.errors.length ? <span className="status-error" title={row.errors.join("; ")}>Needs attention</span> : <span className="status-ready">Ready</span>}{row.errors.map(message => <small className="row-error" key={message}>{message}</small>)}</td>
+                </tr>)}
+              </tbody></table></div>
+              <p className="help-text">Metadata cells and gold JSON can be corrected here. Use “Back” to replace any source file.</p>
+            </>
+          )}
         </div>}
 
         {step === 4 && <div className="flex-col">
@@ -879,7 +1391,41 @@ export default function CreateExperiment() {
 
         <div className="wizard-actions">
           <button type="button" className="btn btn-secondary" disabled={step === 0 || submitting} onClick={() => setStep(value => value - 1)}><ArrowLeft size={17} /> Back</button>
-          {step < steps.length - 1 ? <button type="button" className="btn btn-primary" disabled={!canContinue} onClick={step === 2 ? assembleDataset : () => setStep(value => value + 1)}>{step === 2 ? "Assemble & preview" : "Continue"} <ArrowRight size={17} /></button> : <button type="button" className="btn btn-primary" disabled={submitting || (form.gold_ratio > 0 && goldCount === 0)} onClick={deploy}>{submitting ? "Creating experiment…" : "Create & deploy"} <Check size={17} /></button>}
+          {step < steps.length - 1 ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={!canContinue}
+              onClick={step === 2 ? (uploadMode === "bundle" && bundleJobStatus !== "completed" ? () => setStep(3) : assembleDataset) : () => setStep(value => value + 1)}
+            >
+              {step === 2
+                ? uploadMode === "bundle" && bundleJobStatus !== "completed"
+                  ? "Continue"
+                  : "Assemble & preview"
+                : "Continue"}{" "}
+              <ArrowRight size={17} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={
+                submitting ||
+                (form.gold_ratio > 0 && goldCount === 0) ||
+                (uploadMode === "bundle" && (bundleJobStatus === "queued" || bundleJobStatus === "processing" || bundleJobStatus === "failed"))
+              }
+              title={
+                uploadMode === "bundle" && (bundleJobStatus === "queued" || bundleJobStatus === "processing")
+                  ? "Cannot deploy while media archive is processing"
+                  : uploadMode === "bundle" && bundleJobStatus === "failed"
+                  ? "Cannot deploy when media archive processing failed"
+                  : undefined
+              }
+              onClick={deploy}
+            >
+              {submitting ? "Creating experiment…" : "Create & deploy"} <Check size={17} />
+            </button>
+          )}
         </div>
       </div>
     </div>

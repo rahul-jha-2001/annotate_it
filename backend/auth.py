@@ -1,5 +1,7 @@
+import hmac
 import logging
 import uuid
+from typing import Optional
 
 from clerk_backend_api import AuthenticateRequestOptions, Clerk, authenticate_request
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -10,6 +12,7 @@ from config import (
     CLERK_AUTHORIZED_PARTIES,
     CLERK_JWT_KEY,
     CLERK_SECRET_KEY,
+    INTERNAL_SERVICE_KEY,
     PLATFORM_ADMIN_CLERK_USER_IDS,
 )
 from database import get_db
@@ -19,6 +22,39 @@ from schemas import UserResponse
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def verify_internal_service_key(provided_key: Optional[str]) -> bool:
+    if not INTERNAL_SERVICE_KEY or not provided_key:
+        return False
+    return hmac.compare_digest(provided_key, INTERNAL_SERVICE_KEY)
+
+
+def require_internal_service_key(request: Request) -> str:
+    provided = request.headers.get("X-Internal-Service-Key")
+    if not provided or not verify_internal_service_key(provided):
+        raise HTTPException(status_code=403, detail="Invalid or missing internal service key")
+    return provided
+
+
+class DataUnitAuthCaller:
+    def __init__(self, user: Optional[User] = None, is_service: bool = False):
+        self.user = user
+        self.is_service = is_service
+
+
+def get_data_units_caller(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> DataUnitAuthCaller:
+    service_key = request.headers.get("X-Internal-Service-Key")
+    if service_key:
+        if verify_internal_service_key(service_key):
+            return DataUnitAuthCaller(user=None, is_service=True)
+        raise HTTPException(status_code=403, detail="Invalid internal service key")
+
+    user = get_current_user(request, db)
+    return DataUnitAuthCaller(user=user, is_service=False)
 
 
 def _authenticate(request: Request) -> str:

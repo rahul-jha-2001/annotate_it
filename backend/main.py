@@ -25,9 +25,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from annotation_types import REGISTRY, get_compatible_modalities, get_type, get_valid_types_for_modality, list_types
-from auth import get_current_user, get_optional_user, router as auth_router
+from auth import (
+    DataUnitAuthCaller,
+    get_current_user,
+    get_data_units_caller,
+    get_optional_user,
+    require_internal_service_key,
+    router as auth_router,
+)
 from config import (
     AWS_ACCESS_KEY_ID, AWS_REGION, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
+    BUNDLE_UPLOAD_TIMEOUT_MINUTES,
     CORS_ORIGINS, LOG_FORMAT, LOG_LEVEL, PRESIGNED_URL_EXPIRY_SECONDS, S3_BUCKET, S3_ENDPOINT_URL,
     RATE_LIMIT_ENABLED, RATE_LIMIT_SECRET, RATE_LIMIT_TRUSTED_PROXY_CIDRS, REDIS_URL,
 )
@@ -40,7 +48,7 @@ from logging_config import (
     setup_logging,
 )
 from modalities import REGISTRY as MODALITY_REGISTRY
-from models import Annotation, Annotator, DataUnit, Experiment, ExportJob, ItemAgreement, MediaUpload, User
+from models import Annotation, Annotator, BundleUploadJob, DataUnit, Experiment, ExportJob, ItemAgreement, MediaUpload, User
 from rate_limiting import (
     RateLimitMiddleware,
     RedisRateLimiter,
@@ -49,13 +57,17 @@ from rate_limiting import (
 )
 from schemas import (
     AnnotationCreate, AnnotationTypeResponse, AnnotatorConfigurationResponse,
-    AnnotatorStatusUpdate, ConsensusPolicySchema,
+    AnnotatorStatusUpdate, BundleUploadCreateRequest, BundleUploadCreateResponse,
+    BundleUploadErrorItem, BundleUploadPatchRequest,
+    BundleUploadProgress, BundleUploadResult, BundleUploadStatusResponse,
+    CompleteMultipartRequest, CompleteMultipartResponse, ConsensusPolicySchema,
     DataUnitBatchCreate, ExperimentCreate, ExperimentDeleteRequest,
     ExperimentListResponse, ExperimentResponse, ExperimentUpdate,
     ExportDownloadResponse, ExportJobCreateRequest, ExportJobResponse,
     ExportPreflightRequest, ExportPreflightResponse,
     GoldManifestRequest, ModalityResponse,
-    NextItemResponse, PresignRequest,
+    NextItemResponse, PresignMultipartPartRequest, PresignMultipartPartResponse,
+    PresignMultipartRequest, PresignMultipartResponse, PresignRequest,
     PresignResponse, PresignResponseItem, QualificationSubmission, SessionResponse,
     SessionStartRequest, TeachingExampleItem, TeachingExampleItemResponse,
     TeachingExamplesRequest, TeachingExamplesResponse,
@@ -635,6 +647,311 @@ def presign_urls(
     return PresignResponse(urls=urls)
 
 
+@app.post("/uploads/presign-multipart", response_model=PresignMultipartResponse)
+def presign_multipart(
+    request: PresignMultipartRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if request.experiment_id:
+        get_owned_experiment(request.experiment_id, db, user)
+        safe_name = sanitize_filename(request.filename)
+        object_key = f"zip-uploads/{request.experiment_id}/{uuid.uuid4()}/{safe_name}"
+    else:
+        safe_name = sanitize_filename(request.filename)
+        object_key = f"zip-uploads/{user.id}/{uuid.uuid4()}/{safe_name}"
+
+    params = {"Bucket": BUCKET_NAME, "Key": object_key}
+    if request.content_type:
+        params["ContentType"] = request.content_type
+
+    try:
+        mp_res = s3_client.create_multipart_upload(**params)
+        upload_id = mp_res["UploadId"]
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    db.add(MediaUpload(
+        user_id=user.id,
+        experiment_id=request.experiment_id,
+        bucket=BUCKET_NAME,
+        key=object_key,
+    ))
+    db.commit()
+
+    logger.info(
+        "uploads.multipart_initiated",
+        extra={
+            "upload_id": upload_id,
+            "s3_key": object_key,
+            "experiment_id": str(request.experiment_id) if request.experiment_id else None,
+        },
+    )
+    return PresignMultipartResponse(
+        upload_id=upload_id,
+        s3_key=object_key,
+    )
+
+
+@app.post("/uploads/presign-multipart-part", response_model=PresignMultipartPartResponse)
+def presign_multipart_part(
+    request: PresignMultipartPartRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    upload_record = db.query(MediaUpload).filter(
+        MediaUpload.bucket == BUCKET_NAME,
+        MediaUpload.key == request.s3_key,
+    ).first()
+    if not upload_record or upload_record.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Upload not found or not owned by user")
+
+    try:
+        url = s3_client.generate_presigned_url(
+            "upload_part",
+            Params={
+                "Bucket": BUCKET_NAME,
+                "Key": request.s3_key,
+                "UploadId": request.upload_id,
+                "PartNumber": request.part_number,
+            },
+            ExpiresIn=PRESIGNED_URL_EXPIRY_SECONDS,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return PresignMultipartPartResponse(
+        presigned_url=url,
+        part_number=request.part_number,
+    )
+
+
+@app.post("/uploads/complete-multipart", response_model=CompleteMultipartResponse)
+def complete_multipart(
+    request: CompleteMultipartRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    upload_record = db.query(MediaUpload).filter(
+        MediaUpload.bucket == BUCKET_NAME,
+        MediaUpload.key == request.s3_key,
+    ).first()
+    if not upload_record or upload_record.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Upload not found or not owned by user")
+
+    sorted_parts = sorted(
+        [{"PartNumber": p.PartNumber, "ETag": p.ETag.strip('"')} for p in request.parts],
+        key=lambda x: x["PartNumber"],
+    )
+    try:
+        s3_client.complete_multipart_upload(
+            Bucket=BUCKET_NAME,
+            Key=request.s3_key,
+            UploadId=request.upload_id,
+            MultipartUpload={"Parts": sorted_parts},
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    s3_uri = f"s3://{BUCKET_NAME}/{request.s3_key}"
+    logger.info(
+        "uploads.multipart_completed",
+        extra={
+            "upload_id": request.upload_id,
+            "s3_key": request.s3_key,
+            "parts_count": len(request.parts),
+        },
+    )
+    return CompleteMultipartResponse(
+        s3_key=request.s3_key,
+        s3_uri=s3_uri,
+    )
+
+
+@app.post("/experiments/{experiment_id}/bundle-upload", response_model=BundleUploadCreateResponse)
+def create_bundle_upload_job(
+    experiment_id: uuid.UUID,
+    payload: BundleUploadCreateRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    if experiment.status == "draft_media_processing":
+        raise HTTPException(status_code=409, detail="A bundle upload is already processing for this experiment")
+
+    upload_record = db.query(MediaUpload).filter(
+        MediaUpload.bucket == BUCKET_NAME,
+        MediaUpload.key == payload.s3_key,
+    ).first()
+    if upload_record:
+        if upload_record.user_id != user.id:
+            raise HTTPException(status_code=403, detail="Access denied for the specified upload key")
+    elif not payload.s3_key.startswith(f"zip-uploads/{experiment.id}/"):
+        raise HTTPException(status_code=403, detail="Access denied for the specified upload key")
+
+    experiment.status = "draft_media_processing"
+    job = BundleUploadJob(
+        experiment_id=experiment.id,
+        user_id=user.id,
+        s3_key=payload.s3_key,
+        status="queued",
+        files_total=0,
+        files_processed=0,
+        applied=[],
+        errors=[],
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    logger.info(
+        "bundle_upload.created",
+        extra={
+            "experiment_id": str(experiment.id),
+            "job_id": str(job.id),
+            "s3_key": job.s3_key,
+        },
+    )
+    return BundleUploadCreateResponse(
+        job_id=job.id,
+        status=job.status,
+    )
+
+
+@app.get("/experiments/{experiment_id}/bundle-upload/{job_id}", response_model=BundleUploadStatusResponse)
+def get_bundle_upload_status(
+    experiment_id: uuid.UUID,
+    job_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    job = db.query(BundleUploadJob).filter(
+        BundleUploadJob.id == job_id,
+        BundleUploadJob.experiment_id == experiment.id,
+    ).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Bundle upload job not found")
+
+    # Crash-safety watchdog: if queued or processing without heartbeat for timeout minutes, mark failed
+    if job.status in ("queued", "processing"):
+        now_utc = datetime.now(timezone.utc)
+        job_updated_at = job.updated_at
+        if job_updated_at.tzinfo is None:
+            job_updated_at = job_updated_at.replace(tzinfo=timezone.utc)
+        delta_minutes = (now_utc - job_updated_at).total_seconds() / 60.0
+        if delta_minutes >= BUNDLE_UPLOAD_TIMEOUT_MINUTES:
+            job.status = "failed"
+            timeout_err = {
+                "filename": "archive",
+                "error": f"Processing timed out after {BUNDLE_UPLOAD_TIMEOUT_MINUTES} minutes without heartbeat",
+            }
+            job.errors = list(job.errors or []) + [timeout_err]
+            job.completed_at = now_utc
+            experiment.status = "draft_media_failed"
+            db.commit()
+            db.refresh(job)
+            logger.warning(
+                "bundle_upload.watchdog_timeout",
+                extra={
+                    "experiment_id": str(experiment.id),
+                    "job_id": str(job.id),
+                    "delta_minutes": delta_minutes,
+                },
+            )
+
+    return BundleUploadStatusResponse(
+        status=job.status,
+        progress=BundleUploadProgress(
+            files_processed=job.files_processed,
+            files_total=job.files_total,
+        ),
+        result=BundleUploadResult(
+            applied=job.applied or [],
+            errors=[
+                BundleUploadErrorItem(**err) if isinstance(err, dict) else BundleUploadErrorItem(filename="unknown", error=str(err))
+                for err in (job.errors or [])
+            ],
+        ),
+    )
+
+
+@app.patch("/experiments/{experiment_id}/bundle-upload/{job_id}", response_model=BundleUploadStatusResponse)
+def patch_bundle_upload_status(
+    experiment_id: uuid.UUID,
+    job_id: uuid.UUID,
+    payload: BundleUploadPatchRequest,
+    db: Session = Depends(get_db),
+    _service_key: str = Depends(require_internal_service_key),
+):
+    job = db.query(BundleUploadJob).filter(
+        BundleUploadJob.id == job_id,
+        BundleUploadJob.experiment_id == experiment_id,
+    ).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Bundle upload job not found")
+
+    if job.status not in ("queued", "processing"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot update job with terminal status '{job.status}'",
+        )
+
+    experiment = db.query(Experiment).filter(
+        Experiment.id == experiment_id,
+        Experiment.status != "deleted",
+    ).first()
+    if not experiment or experiment.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Experiment not found")
+
+    if payload.files_total is not None:
+        job.files_total = payload.files_total
+    if payload.files_processed is not None:
+        job.files_processed = payload.files_processed
+    if payload.applied is not None:
+        job.applied = payload.applied
+    if payload.errors is not None:
+        job.errors = payload.errors
+
+    if payload.status:
+        job.status = payload.status
+        now_utc = datetime.now(timezone.utc)
+        if payload.status == "completed":
+            job.completed_at = now_utc
+            experiment.status = "draft"
+        elif payload.status == "failed":
+            job.completed_at = now_utc
+            experiment.status = "draft_media_failed"
+
+    db.commit()
+    db.refresh(job)
+
+    logger.info(
+        "bundle_upload.status_patched",
+        extra={
+            "experiment_id": str(experiment.id),
+            "job_id": str(job.id),
+            "status": job.status,
+            "files_processed": job.files_processed,
+            "files_total": job.files_total,
+        },
+    )
+    return BundleUploadStatusResponse(
+        status=job.status,
+        progress=BundleUploadProgress(
+            files_processed=job.files_processed,
+            files_total=job.files_total,
+        ),
+        result=BundleUploadResult(
+            applied=job.applied or [],
+            errors=[
+                BundleUploadErrorItem(**err) if isinstance(err, dict) else BundleUploadErrorItem(filename="unknown", error=str(err))
+                for err in (job.errors or [])
+            ],
+        ),
+    )
+
+
 @app.post("/experiments/{experiment_id}/deploy")
 def deploy_experiment(
     experiment_id: uuid.UUID,
@@ -642,6 +959,10 @@ def deploy_experiment(
     user: User = Depends(get_current_user),
 ):
     experiment = get_owned_experiment(experiment_id, db, user)
+    if experiment.status == "draft_media_processing":
+        raise HTTPException(status_code=409, detail="Cannot deploy while media archive is processing")
+    if experiment.status == "draft_media_failed":
+        raise HTTPException(status_code=409, detail="Cannot deploy when media archive processing failed")
     if not db.query(DataUnit).filter_by(experiment_id=experiment.id).first():
         raise HTTPException(status_code=409, detail="Upload at least one sample before deployment")
     experiment.status = "active"
@@ -659,11 +980,35 @@ def deploy_experiment(
 
 @app.post("/experiments/{experiment_id}/data-units")
 def create_data_units(
-    experiment_id: uuid.UUID, payload: DataUnitBatchCreate,
+    experiment_id: uuid.UUID,
+    payload: DataUnitBatchCreate,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    caller: DataUnitAuthCaller = Depends(get_data_units_caller),
 ):
-    experiment = get_owned_experiment(experiment_id, db, user)
+    if caller.is_service:
+        experiment = db.query(Experiment).filter(
+            Experiment.id == experiment_id,
+            Experiment.status != "deleted",
+        ).first()
+        if not experiment or experiment.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Experiment not found")
+        if experiment.status != "draft_media_processing":
+            raise HTTPException(
+                status_code=403,
+                detail="Internal service key can only register data units for experiments in draft_media_processing status",
+            )
+        active_job = db.query(BundleUploadJob).filter(
+            BundleUploadJob.experiment_id == experiment.id,
+            BundleUploadJob.status.in_(["queued", "processing"]),
+        ).first()
+        if not active_job:
+            raise HTTPException(
+                status_code=403,
+                detail="No active bundle upload job for this experiment",
+            )
+    else:
+        experiment = get_owned_experiment(experiment_id, db, caller.user)
+
     ensure_current_schema(experiment)
     spec = get_type(experiment.label_schema["annotation_type"])
     created_units = []
@@ -689,39 +1034,49 @@ def create_data_units(
                     detail=f"S3 URI bucket '{bucket}' in raw_uri does not match configured storage bucket '{BUCKET_NAME}'",
                 )
 
-            # Object-level authorization (Finding 1)
+            # Object-level authorization
             is_experiment_scoped = key.startswith(f"experiments/{experiment.id}/")
-            if not is_experiment_scoped:
-                upload_record = db.query(MediaUpload).filter(
-                    MediaUpload.bucket == bucket,
-                    MediaUpload.key == key,
-                ).first()
-                if upload_record:
-                    if upload_record.user_id != user.id or (
-                        upload_record.experiment_id is not None and upload_record.experiment_id != experiment.id
-                    ):
-                        raise HTTPException(
-                            status_code=403,
-                            detail=f"Access denied: media object '{key}' belongs to another user or experiment",
-                        )
-                    if upload_record.experiment_id is None:
-                        upload_record.experiment_id = experiment.id
-                else:
-                    is_test_prefix = key.startswith(("test/", "typed/"))
-                    is_test_env = (
-                        os.getenv("PYTEST_CURRENT_TEST") is not None
-                        or os.getenv("RUN_INTEGRATION") == "1"
-                        or os.getenv("TESTING") == "1"
+            if caller.is_service:
+                if not is_experiment_scoped:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Access denied: service caller can only register experiment-scoped media objects",
                     )
-                    if not (is_test_env and is_test_prefix):
-                        raise HTTPException(
-                            status_code=403,
-                            detail=f"Access denied: media object '{key}' is not authorized for experiment {experiment.id}",
+            else:
+                if not is_experiment_scoped:
+                    upload_record = db.query(MediaUpload).filter(
+                        MediaUpload.bucket == bucket,
+                        MediaUpload.key == key,
+                    ).first()
+                    if upload_record:
+                        if upload_record.user_id != caller.user.id or (
+                            upload_record.experiment_id is not None and upload_record.experiment_id != experiment.id
+                        ):
+                            raise HTTPException(
+                                status_code=403,
+                                detail=f"Access denied: media object '{key}' belongs to another user or experiment",
+                            )
+                        if upload_record.experiment_id is None:
+                            upload_record.experiment_id = experiment.id
+                    else:
+                        is_test_prefix = key.startswith(("test/", "typed/"))
+                        is_test_env = (
+                            os.getenv("PYTEST_CURRENT_TEST") is not None
+                            or os.getenv("RUN_INTEGRATION") == "1"
+                            or os.getenv("TESTING") == "1"
                         )
+                        if not (is_test_env and is_test_prefix):
+                            raise HTTPException(
+                                status_code=403,
+                                detail=f"Access denied: media object '{key}' is not authorized for experiment {experiment.id}",
+                            )
 
         unit = DataUnit(
-            experiment_id=experiment.id, raw_uri=item.raw_uri,
-            is_gold=item.is_gold, gold_answer=gold_answer, metadata_json=metadata,
+            experiment_id=experiment.id,
+            raw_uri=item.raw_uri,
+            is_gold=item.is_gold,
+            gold_answer=gold_answer,
+            metadata_json=metadata,
         )
         db.add(unit)
         created_units.append(unit)
@@ -747,6 +1102,29 @@ def create_data_units(
             }
             for unit in created_units
         ],
+    }
+
+
+@app.get("/experiments/{experiment_id}/data-units")
+def list_data_units(
+    experiment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    units = db.query(DataUnit).filter_by(experiment_id=experiment.id).all()
+    return {
+        "data_units": [
+            {
+                "id": str(unit.id),
+                "raw_uri": unit.raw_uri,
+                "filename": unit.raw_uri.rsplit("/", 1)[-1],
+                "is_gold": unit.is_gold,
+                "metadata": unit.metadata_json or {},
+                "media_url": generate_media_url(unit.raw_uri),
+            }
+            for unit in units
+        ]
     }
 
 

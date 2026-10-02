@@ -23,6 +23,7 @@ class User(Base):
     experiments = relationship("Experiment", back_populates="owner")
     annotator_profiles = relationship("Annotator", back_populates="user")
     export_jobs = relationship("ExportJob", back_populates="requested_by_user")
+    bundle_upload_jobs = relationship("BundleUploadJob", back_populates="user")
 
 class Experiment(Base):
     __tablename__ = 'experiment'
@@ -49,6 +50,7 @@ class Experiment(Base):
     annotators = relationship("Annotator", back_populates="experiment", cascade="all, delete-orphan")
     owner = relationship("User", back_populates="experiments")
     export_jobs = relationship("ExportJob", back_populates="experiment", cascade="all, delete-orphan")
+    bundle_upload_jobs = relationship("BundleUploadJob", back_populates="experiment", cascade="all, delete-orphan")
 
 class DataUnit(Base):
     __tablename__ = 'data_unit'
@@ -164,3 +166,23 @@ class MediaUpload(Base):
 
     user = relationship("User")
     experiment = relationship("Experiment")
+
+
+class BundleUploadJob(Base):
+    __tablename__ = 'bundle_upload_job'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    experiment_id = Column(UUID(as_uuid=True), ForeignKey('experiment.id', ondelete='CASCADE'), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('app_user.id', ondelete='SET NULL'), nullable=True, index=True)
+    s3_key = Column(String, nullable=False)
+    status = Column(String, nullable=False, default='queued', index=True)  # 'queued' | 'processing' | 'completed' | 'failed'
+    files_total = Column(Integer, nullable=False, default=0)
+    files_processed = Column(Integer, nullable=False, default=0)
+    applied = Column(JSONB, nullable=False, default=list)
+    errors = Column(JSONB, nullable=False, default=list)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    completed_at = Column(DateTime(timezone=True))
+
+    experiment = relationship("Experiment", back_populates="bundle_upload_jobs")
+    user = relationship("User", back_populates="bundle_upload_jobs")

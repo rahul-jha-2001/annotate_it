@@ -107,7 +107,7 @@ def policies_for_request(method: str, path: str) -> list[RateLimitPolicy]:
     normalized_method = method.upper()
     if normalized_method == "POST" and _SESSION_PATH.fullmatch(path):
         policies.append(SESSION_POLICY)
-    elif normalized_method == "POST" and path == "/uploads/presign":
+    elif normalized_method == "POST" and path in ("/uploads/presign", "/uploads/presign-multipart"):
         policies.append(UPLOAD_POLICY)
     elif normalized_method == "POST" and _EXPORT_PATH.fullmatch(path):
         policies.append(EXPORT_POLICY)
