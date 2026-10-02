@@ -1,0 +1,480 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-01T15:42:39.873507+00:00",
+  "title": "Design System: TaskGlass",
+  "extensions": {
+    "colorMeta": {
+      "deep-ocean-ink": {
+        "role": "neutral",
+        "displayName": "Deep Ocean Ink",
+        "canonical": "#102a32",
+        "tonalRamp": [
+          "#13313a",
+          "#205464",
+          "#2e788f",
+          "#3b9cb9",
+          "#61b3cc",
+          "#8bc7da",
+          "#b9dee9",
+          "#ecf6f9"
+        ]
+      },
+      "tide-slate": {
+        "role": "neutral",
+        "displayName": "Tide Slate",
+        "canonical": "#60767b",
+        "tonalRamp": [
+          "#22292b",
+          "#3a474a",
+          "#53666a",
+          "#6b8489",
+          "#8a9fa3",
+          "#a9b8bc",
+          "#cbd5d7",
+          "#f1f3f4"
+        ]
+      },
+      "lagoon-teal": {
+        "role": "primary",
+        "displayName": "Lagoon Teal",
+        "canonical": "#087796",
+        "tonalRamp": [
+          "#043a49",
+          "#07647e",
+          "#0a8eb3",
+          "#0cb8e8",
+          "#38cbf4",
+          "#6ed9f7",
+          "#a8e8fa",
+          "#e7f9fe"
+        ]
+      },
+      "lagoon-teal-deep": {
+        "role": "primary",
+        "displayName": "Lagoon Teal Deep",
+        "canonical": "#05627d",
+        "tonalRamp": [
+          "#033a4a",
+          "#056480",
+          "#078eb5",
+          "#09b9eb",
+          "#36ccf7",
+          "#6cd9f9",
+          "#a7e8fb",
+          "#e6f9fe"
+        ]
+      },
+      "shallows-cyan": {
+        "role": "secondary",
+        "displayName": "Shallows Cyan",
+        "canonical": "#30afff",
+        "tonalRamp": [
+          "#002f4c",
+          "#005185",
+          "#0074bd",
+          "#0096f5",
+          "#2eaeff",
+          "#66c4ff",
+          "#a3dcff",
+          "#e5f5ff"
+        ]
+      },
+      "spray-cyan": {
+        "role": "secondary",
+        "displayName": "Spray Cyan",
+        "canonical": "#92eeff",
+        "tonalRamp": [
+          "#00414c",
+          "#007085",
+          "#009fbd",
+          "#00cff5",
+          "#2edeff",
+          "#66e7ff",
+          "#a3f1ff",
+          "#e5fbff"
+        ]
+      },
+      "kelp-mint": {
+        "role": "tertiary",
+        "displayName": "Kelp Mint",
+        "canonical": "#23745d",
+        "tonalRamp": [
+          "#123b2f",
+          "#1f6652",
+          "#2c9174",
+          "#39bc97",
+          "#5ecfaf",
+          "#89dcc4",
+          "#b8eadc",
+          "#ebf9f5"
+        ]
+      },
+      "kelp-mint-wash": {
+        "role": "tertiary",
+        "displayName": "Kelp Mint Wash",
+        "canonical": "#c4f7ca",
+        "tonalRamp": [
+          "#094310",
+          "#10751c",
+          "#17a627",
+          "#1dd833",
+          "#47e65a",
+          "#78ed86",
+          "#aef4b6",
+          "#e9fceb"
+        ]
+      },
+      "sea-glass-mint": {
+        "role": "tertiary",
+        "displayName": "Sea Glass Mint",
+        "canonical": "#d8ffc5",
+        "tonalRamp": [
+          "#194c00",
+          "#2b8500",
+          "#3ebd00",
+          "#50f500",
+          "#72ff2e",
+          "#98ff66",
+          "#c1ffa3",
+          "#eeffe5"
+        ]
+      },
+      "gold-standard-amber": {
+        "role": "tertiary",
+        "displayName": "Gold Standard Amber",
+        "canonical": "#b97812",
+        "tonalRamp": [
+          "#462d07",
+          "#794e0c",
+          "#ac7011",
+          "#df9116",
+          "#ecaa40",
+          "#f1c074",
+          "#f7d9ab",
+          "#fdf5e8"
+        ]
+      },
+      "gold-standard-wash": {
+        "role": "tertiary",
+        "displayName": "Gold Standard Wash",
+        "canonical": "#fff5d9",
+        "tonalRamp": [
+          "#4c3800",
+          "#856200",
+          "#bd8b00",
+          "#f5b400",
+          "#ffc82e",
+          "#ffd766",
+          "#ffe7a3",
+          "#fff8e5"
+        ]
+      },
+      "coral-alert": {
+        "role": "tertiary",
+        "displayName": "Coral Alert",
+        "canonical": "#b83e47",
+        "tonalRamp": [
+          "#391316",
+          "#632126",
+          "#8d3036",
+          "#b73e47",
+          "#ca636a",
+          "#d88d92",
+          "#e8babe",
+          "#f9eced"
+        ]
+      },
+      "coral-alert-wash": {
+        "role": "tertiary",
+        "displayName": "Coral Alert Wash",
+        "canonical": "#fff0f1",
+        "tonalRamp": [
+          "#4c0005",
+          "#850009",
+          "#bd000d",
+          "#f50010",
+          "#ff2e3c",
+          "#ff6670",
+          "#ffa3a9",
+          "#ffe5e7"
+        ]
+      },
+      "salt-white": {
+        "role": "neutral",
+        "displayName": "Salt White",
+        "canonical": "#f6fafa",
+        "tonalRamp": [
+          "#1b3131",
+          "#2f5555",
+          "#437979",
+          "#579d9d",
+          "#79b4b4",
+          "#9dc8c8",
+          "#c4dede",
+          "#eff6f6"
+        ]
+      },
+      "shoal": {
+        "role": "neutral",
+        "displayName": "Shoal",
+        "canonical": "#eef8f8",
+        "tonalRamp": [
+          "#163636",
+          "#275e5e",
+          "#378686",
+          "#47adad",
+          "#6bc2c2",
+          "#93d2d2",
+          "#bee4e4",
+          "#edf8f8"
+        ]
+      },
+      "pure-white": {
+        "role": "neutral",
+        "displayName": "Pure White",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "#262626",
+          "#424242",
+          "#5e5e5e",
+          "#7a7a7a",
+          "#969696",
+          "#b2b2b2",
+          "#d1d1d1",
+          "#f2f2f2"
+        ]
+      },
+      "waterline": {
+        "role": "neutral",
+        "displayName": "Waterline",
+        "canonical": "#dce9e9",
+        "tonalRamp": [
+          "#1e2f2f",
+          "#335151",
+          "#497474",
+          "#5e9696",
+          "#7faeae",
+          "#a1c4c4",
+          "#c7dcdc",
+          "#eff5f5"
+        ]
+      },
+      "glass-edge": {
+        "role": "neutral",
+        "displayName": "Glass Edge",
+        "canonical": "#e4eeee",
+        "tonalRamp": [
+          "#1e2f2f",
+          "#335151",
+          "#497474",
+          "#5f9696",
+          "#7faeae",
+          "#a1c4c4",
+          "#c7dcdc",
+          "#eff5f5"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Catalog hero headings only."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Page-level h1."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Section h2, panel and wizard step titles."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Inputs, buttons, running copy; 0.82–0.9rem on dense surfaces."
+      },
+      "label": {
+        "displayName": "Index Label",
+        "purpose": "Uppercase teal labels that index data: sample numbers, eyebrows, kickers."
+      },
+      "data-mono": {
+        "displayName": "Data Mono",
+        "purpose": "Gold-answer JSON, code inputs, anonymous IDs."
+      }
+    },
+    "shadows": [
+      {
+        "name": "ambient-low",
+        "value": "0 2px 8px rgba(16, 42, 50, 0.07)",
+        "purpose": "Primary buttons at rest, catalog cards."
+      },
+      {
+        "name": "ambient-panel",
+        "value": "0 12px 32px rgba(16, 42, 50, 0.08)",
+        "purpose": "Glass panels, hovered catalog cards, toasts."
+      },
+      {
+        "name": "cyan-halo",
+        "value": "0 0 0 4px rgba(48, 175, 255, 0.14)",
+        "purpose": "Hover/focus halo on buttons and search; inputs use 3px at 18%."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state",
+        "value": "0.2s ease",
+        "purpose": "All hover/focus/selection state changes."
+      },
+      {
+        "name": "card-lift",
+        "value": "transform .18s ease",
+        "purpose": "Catalog card 3px rise on hover."
+      },
+      {
+        "name": "toast-in",
+        "value": "0.22s ease-out",
+        "purpose": "Warning toast entrance."
+      },
+      {
+        "name": "fade-in",
+        "value": "0.4s ease forwards",
+        "purpose": "Page/panel entrance fade."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "narrow",
+        "value": "560px"
+      },
+      {
+        "name": "compact",
+        "value": "700px"
+      },
+      {
+        "name": "medium",
+        "value": "900px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Commits an action: deploy, save, next step.",
+      "html": "<button class=\"ds-btn-primary\">Deploy experiment</button>",
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border:none;border-radius:8px;background:#087796;color:#fff;font-family:Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;font-weight:500;font-size:0.95rem;cursor:pointer;box-shadow:0 2px 8px rgba(16,42,50,0.07);transition:all 0.2s ease}.ds-btn-primary:hover,.ds-btn-primary:focus-visible{background:#05627d;box-shadow:0 0 0 4px rgba(48,175,255,0.14);transform:translateY(-1px);outline:none}.ds-btn-primary:active{transform:none}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Back, cancel, and alternate actions.",
+      "html": "<button class=\"ds-btn-secondary\">Back</button>",
+      "css": ".ds-btn-secondary{display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border:1px solid #dce9e9;border-radius:8px;background:transparent;color:#102a32;font-family:Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;font-weight:500;font-size:0.95rem;cursor:pointer;transition:all 0.2s ease}.ds-btn-secondary:hover,.ds-btn-secondary:focus-visible{background:rgba(146,238,255,0.24);border-color:#9bddea;outline:none}"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Destructive confirmation, e.g. delete experiment.",
+      "html": "<button class=\"ds-btn-danger\">Delete experiment</button>",
+      "css": ".ds-btn-danger{display:inline-flex;align-items:center;gap:8px;padding:10px 20px;border:none;border-radius:8px;background:#b83e47;color:#fff;font-family:Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;font-weight:500;font-size:0.95rem;cursor:pointer;transition:all 0.2s ease}.ds-btn-danger:hover,.ds-btn-danger:focus-visible{background:#96313a;transform:translateY(-1px);outline:none;box-shadow:0 0 0 4px rgba(184,62,71,0.16)}"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Standard form field with cyan focus halo.",
+      "html": "<input class=\"ds-input\" placeholder=\"Experiment name\" />",
+      "css": ".ds-input{width:280px;padding:12px 16px;background:#fff;border:1px solid #dce9e9;border-radius:8px;color:#102a32;font-family:Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;font-size:0.95rem;transition:all 0.2s ease}.ds-input::placeholder{color:#8ca0a4}.ds-input:focus{outline:none;border-color:#30afff;box-shadow:0 0 0 3px rgba(48,175,255,0.18)}"
+    },
+    {
+      "name": "Nav Links",
+      "kind": "nav",
+      "refersTo": "nav-link",
+      "description": "Header navigation pills with a filled primary link.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-link\" href=\"#\">Catalog</a><a class=\"ds-nav-link\" href=\"#\">Profile</a><a class=\"ds-nav-link ds-nav-primary\" href=\"#\">New experiment</a></nav>",
+      "css": ".ds-nav{display:flex;gap:10px;font-family:Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif}.ds-nav-link{display:inline-flex;align-items:center;padding:9px 13px;border:1px solid #dce9e9;border-radius:8px;color:#102a32;text-decoration:none;font-size:0.9rem;transition:background 0.2s ease}.ds-nav-link:hover,.ds-nav-link:focus-visible{background:rgba(146,238,255,0.22);outline:none}.ds-nav-primary{background:#087796;border-color:#087796;color:#fff}.ds-nav-primary:hover,.ds-nav-primary:focus-visible{background:#05627d}"
+    },
+    {
+      "name": "Semantic Chips",
+      "kind": "chip",
+      "refersTo": "chip-metadata",
+      "description": "Metadata, gold, active, and paused chips.",
+      "html": "<div class=\"ds-chips\"><span class=\"ds-chip\">lang: hi-IN</span><span class=\"ds-chip ds-chip-gold\">Gold</span><span class=\"ds-chip ds-chip-active\">Active</span><span class=\"ds-chip ds-chip-paused\">Paused</span></div>",
+      "css": ".ds-chips{display:flex;flex-wrap:wrap;gap:8px;font-family:Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif}.ds-chip{display:inline-flex;padding:5px 9px;border-radius:999px;background:#eef8f8;color:#60767b;font-size:0.78rem}.ds-chip-gold{background:#fff5d9;color:#b97812;font-weight:700}.ds-chip-active{background:#d8ffc5;color:#23745d;font-weight:700}.ds-chip-paused{background:#fff0f1;color:#b83e47;font-weight:700}"
+    },
+    {
+      "name": "Glass Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "Top-level content panel with quiet ambient lift.",
+      "html": "<section class=\"ds-panel\"><span class=\"ds-label\">Sample 12</span><h3>Speaker turn boundaries</h3><p>18 of 24 items complete · agreement 0.94 (n=3)</p></section>",
+      "css": ".ds-panel{width:340px;background:#fff;border:1px solid #e4eeee;border-radius:14px;padding:24px;box-shadow:0 12px 32px rgba(16,42,50,0.08);font-family:Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;color:#102a32}.ds-panel h3{margin:4px 0 8px;font-size:1.2rem;font-weight:600;letter-spacing:-0.025em}.ds-panel p{margin:0;color:#60767b;font-size:0.9rem}.ds-label{color:#087796;font-size:0.78rem;font-weight:700;letter-spacing:0.05em;text-transform:uppercase}"
+    },
+    {
+      "name": "Selectable Card",
+      "kind": "card",
+      "refersTo": "selectable-card",
+      "description": "Access-mode and task-type choice cards.",
+      "html": "<div class=\"ds-select-grid\"><button class=\"ds-select-card ds-selected\"><strong>Sign-in required</strong><span>Verified Clerk accounts only.</span></button><button class=\"ds-select-card\"><strong>Guest name</strong><span>Unverified display name.</span></button></div>",
+      "css": ".ds-select-grid{display:grid;grid-template-columns:repeat(2,200px);gap:12px;font-family:Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif}.ds-select-card{min-height:110px;padding:16px;border:1px solid #dce9e9;border-radius:12px;background:#fff;color:#102a32;font:inherit;text-align:left;cursor:pointer;transition:border-color 0.2s ease,background-color 0.2s ease,box-shadow 0.2s ease}.ds-select-card strong,.ds-select-card span{display:block}.ds-select-card span{margin-top:7px;color:#60767b;font-size:0.82rem;line-height:1.45}.ds-select-card:hover,.ds-select-card:focus-visible{border-color:#30afff;background:rgba(146,238,255,0.1);outline:none}.ds-select-card.ds-selected{border-color:#087796;background:rgba(146,238,255,0.17);box-shadow:inset 0 0 0 1px #087796}"
+    },
+    {
+      "name": "Wizard Stepper",
+      "kind": "custom",
+      "refersTo": null,
+      "description": "Six-step creation progress: complete mint, current cyan, upcoming outlined.",
+      "html": "<ol class=\"ds-steps\"><li class=\"ds-done\"><span>1</span>Basics</li><li class=\"ds-done\"><span>2</span>Task</li><li class=\"ds-current\"><span>3</span>Dataset</li><li><span>4</span>Preview</li></ol>",
+      "css": ".ds-steps{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;list-style:none;padding:0;margin:0;width:520px;font-family:Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif}.ds-steps li{display:flex;align-items:center;gap:7px;color:#60767b;font-size:0.82rem}.ds-steps span{width:26px;height:26px;display:grid;place-items:center;border:1px solid #dce9e9;border-radius:50%}.ds-steps .ds-current,.ds-steps .ds-done{color:#102a32}.ds-current span{background:#30afff;border-color:#30afff;color:#082b36}.ds-done span{background:#d8ffc5;border-color:#a9e9b2;color:#23745d}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Clear Instrument",
+    "overview": "TaskGlass is lab glassware for human data: a calm, precise vessel the designer looks *through* to see the work, not *at*. The interface is white and quiet, with a cool mineral cast, and the data is always the subject: waveforms, images, label regions, sample tables, agreement scores. The chrome stays thin and measured so these readings stay legible. Color appears only when it means something: cyan for where you are acting, mint for what has passed, amber for gold-standard reference, and coral for what will cost you data.\n\nThe density is that of a working instrument, not a brochure. Tables, wizards and dashboards are packed with real readings (counts, scores with their N, statuses), set in Inter at modest sizes with small uppercase labels that index the data. Components feel friendly and tactile: gently rounded corners, a soft ambient float on panels, and a small lift with a cyan halo on interaction. Movement is short (0.2s) and settles without bounce.\n\nThe marketing landing page (`frontend/src/components/landing/`) is a deliberate variant called the **Product Sheet**. It shares the palette but is set in Courier monospace, with square 1.5px ink rules, figure numbering (\"Fig. 01\"), and a hard 7px offset shadow, like a printed instrument spec sheet. It does not feed back into the app. App, catalog, annotator and dashboard screens follow Aqua Lab.",
+    "keyCharacteristics": [
+      "White surfaces over a salt-white ground, with faint cyan and mint light pooling at the edges of the viewport.",
+      "One action color (Lagoon Teal) for commits and one interaction color (Shallows Cyan) for focus, selection and current position.",
+      "Semantic color is reserved: mint means passed or active, amber means gold data or locked, coral means destructive or invalid.",
+      "Gently rounded corners (8–14px) and pill-shaped chips.",
+      "Quiet lift: ambient shadows on panels, with lift and glow only in response to interaction."
+    ],
+    "rules": [
+      {
+        "name": "The Reserved Amber Rule",
+        "body": "Amber means gold-standard reference data, or something the system has locked to protect it. Never use amber for decoration, brand emphasis or generic \"warning yellow\" that has nothing to do with gold or locks.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two Cyans Rule",
+        "body": "Lagoon Teal commits and Shallows Cyan indicates. A filled button is teal. A focus ring, current step or selected border is cyan. Don't swap them.",
+        "section": "colors"
+      },
+      {
+        "name": "The Index Label Rule",
+        "body": "Small, uppercase, tracked, teal labels index the data (\"SAMPLE 12\", \"STEP 3\"). They identify things; they are not headings, and they are never more than one line.",
+        "section": "typography"
+      },
+      {
+        "name": "The Ink-Tinted Shadow Rule",
+        "body": "Shadows are tinted with Deep Ocean Ink (rgba 16, 42, 50), never neutral black, and stay at or below 8% alpha.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** keep the data the loudest thing on screen, with chrome in white, Waterline and Tide Slate.",
+      "**Do** use Lagoon Teal (#087796) for every committing action and Shallows Cyan (#30afff) for focus, selection and current position.",
+      "**Do** pair every semantic color with its wash: mint text on mint wash, amber on gold wash, coral on coral wash.",
+      "**Do** let larger containers have rounder corners (8 → 10 → 12 → 14px) and keep chips as full pills.",
+      "**Do** tint shadows with Deep Ocean Ink at ≤8% alpha, and reserve lift and glow for interaction.",
+      "**Do** keep the landing page's Product Sheet look (Courier, square ink rules, figure numbers) on marketing surfaces only."
+    ],
+    "donts": [
+      "**Don't** use amber for anything other than gold-standard data, locked settings, or warnings tied to them.",
+      "**Don't** visually mark gold items on annotator screens. Amber gold styling is for designer and review surfaces only.",
+      "**Don't** bring Courier, square corners or hard offset shadows into the app, catalog or annotator screens.",
+      "**Don't** use pure black text or neutral-gray shadows. Ink is #102a32.",
+      "**Don't** add bounce, spring or long easing. State changes are 0.2s ease, and entrance fades are ≤0.4s."
+    ]
+  }
+}
