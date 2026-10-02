@@ -19,6 +19,27 @@ describe("waveform region synchronization", () => {
     }]);
   });
 
+  it("hydrates interaction-level label for segment annotations", () => {
+    const interaction = {
+      kind: "temporal-regions" as const,
+      label: "Good",
+      regions: [{ start: 0.5, end: 2.22 }],
+      onChange: vi.fn(),
+      readonly: true,
+    };
+
+    const [region] = waveformRegionOptions(interaction);
+    expect(region).toMatchObject({
+      id: "annotation-region-0",
+      start: 0.5,
+      end: 2.22,
+      content: "Good",
+      drag: false,
+      resize: false,
+    });
+    expect(region.color).toMatch(/^hsla\(/);
+  });
+
   it("hydrates labels and makes review overlays read-only", () => {
     const interaction = {
       kind: "labeled-temporal-regions" as const,

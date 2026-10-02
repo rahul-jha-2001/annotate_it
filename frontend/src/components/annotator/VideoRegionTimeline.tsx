@@ -203,11 +203,18 @@ export default function VideoRegionTimeline({
           const region = index >= 0 ? interaction.regions[index] : null;
           const label = region && "label" in region && typeof region.label === "string"
             ? region.label
+            : "label" in interaction && typeof interaction.label === "string" && interaction.label
+            ? interaction.label
             : `Region ${index + 1}`;
+          const activeLabel = region && "label" in region && typeof region.label === "string"
+            ? region.label
+            : "label" in interaction && typeof interaction.label === "string" && interaction.label
+            ? interaction.label
+            : undefined;
           const background = action.id === "draft-region"
             ? "rgba(48, 175, 255, 0.24)"
-            : region && "label" in region && typeof region.label === "string"
-              ? labelColor(region.label, 0.42)
+            : activeLabel
+              ? labelColor(activeLabel, 0.42)
               : "rgba(48, 175, 255, 0.42)";
           const displayText = action.id === "draft-region"
             ? "New region"

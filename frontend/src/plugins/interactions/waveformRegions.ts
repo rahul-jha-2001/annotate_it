@@ -18,7 +18,12 @@ type RegionInteraction = Extract<
 
 export function waveformRegionOptions(interaction: RegionInteraction): WaveformRegionOption[] {
   return interaction.regions.map((region, index) => {
-    const label = "label" in region ? region.label : undefined;
+    const label =
+      "label" in region && region.label
+        ? region.label
+        : "label" in interaction && interaction.label
+        ? interaction.label
+        : undefined;
     return {
       id: `annotation-region-${index}`,
       start: region.start,
@@ -38,6 +43,7 @@ export function interactionRegionKey(interaction: MediaInteraction): string {
   return JSON.stringify({
     kind: interaction.kind,
     regions: interaction.regions,
+    label: "label" in interaction ? interaction.label : undefined,
     readonly: Boolean(interaction.readonly),
   });
 }

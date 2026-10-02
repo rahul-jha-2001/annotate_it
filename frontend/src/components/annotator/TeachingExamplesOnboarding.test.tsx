@@ -169,6 +169,10 @@ describe("TeachingExamplesOnboarding", () => {
     const transcriptionSchema: LabelSchema = {
       annotation_type: "transcription",
       schema_version: 1,
+      case_sensitive: false,
+      collapse_whitespace: true,
+      strip_punctuation: true,
+      minimum_length: 1,
     };
 
     const transcriptionExamples: TeachingExampleItem[] = [
@@ -202,6 +206,7 @@ describe("TeachingExamplesOnboarding", () => {
       schema_version: 1,
       choices: ["Scene change", "Action"],
       allow_custom_labels: false,
+      max_regions: 10,
     };
 
     const videoExamples: TeachingExampleItem[] = [

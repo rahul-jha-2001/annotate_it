@@ -211,10 +211,6 @@ export default function CreateExperiment() {
     [datasetRows]
   );
 
-  const goldRows = useMemo(
-    () => datasetRows.filter(row => row.goldAnswer),
-    [datasetRows]
-  );
 
   const addTeachingExample = (fromGold = false) => {
     const used = new Set(teachingExamples.map(te => te.filename));

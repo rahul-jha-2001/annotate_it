@@ -2296,3 +2296,39 @@ summary {
   margin-top: 12px;
   margin-bottom: 32px;
 }
+
+/* Waveform region content and timeline x-axis */
+[part*="region-content"] {
+  font-family: var(--font-body, inherit);
+  font-size: 11px;
+  font-weight: 600;
+  color: #0f172a;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 2px 7px;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
+  margin: 5px;
+  pointer-events: none;
+  display: inline-block;
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+}
+
+[part*="timeline"] {
+  border-top: 1px solid rgba(148, 163, 184, 0.28);
+  margin-top: 6px;
+}
+
+[part*="timeline-notch"] {
+  border-left-color: #94a3b8 !important;
+}
+
+[part*="timeline-notch-primary"],
+[part*="timeline-notch-secondary"] {
+  font-family: var(--font-body, inherit);
+  font-size: 11px !important;
+  font-weight: 600;
+  color: #475569 !important;
+  border-left-color: #475569 !important;
+}
+

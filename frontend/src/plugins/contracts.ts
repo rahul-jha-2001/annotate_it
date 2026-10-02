@@ -16,6 +16,7 @@ export type MediaInteraction =
   | {
       kind: "temporal-regions";
       regions: TemporalRegion[];
+      label?: string;
       onChange: (regions: TemporalRegion[]) => void;
       readonly?: boolean;
     }
