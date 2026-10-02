@@ -57,7 +57,8 @@ from schemas import (
     GoldManifestRequest, ModalityResponse,
     NextItemResponse, PresignRequest,
     PresignResponse, PresignResponseItem, QualificationSubmission, SessionResponse,
-    SessionStartRequest,
+    SessionStartRequest, TeachingExampleItem, TeachingExampleItemResponse,
+    TeachingExamplesRequest, TeachingExamplesResponse,
 )
 from schema_compat import normalize_label_schema
 from services.allocation import allocate_next_item, has_pending_unseen_items
@@ -831,6 +832,23 @@ def process_gold_manifest(
         matches[0].is_gold = True
         matches[0].gold_answer = answer
         results["applied"].append(entry.filename)
+    if experiment.teaching_examples:
+        applied_units = {u.id for u in units if u.raw_uri.rsplit("/", 1)[-1] in results["applied"]}
+        updated_te = []
+        changed = False
+        for te in experiment.teaching_examples:
+            if isinstance(te, dict):
+                uid_str = te.get("data_unit_id")
+                try:
+                    uid = uuid.UUID(uid_str) if uid_str else None
+                except ValueError:
+                    uid = None
+                if uid in applied_units and not te.get("keep_as_gold"):
+                    te = {**te, "keep_as_gold": True}
+                    changed = True
+            updated_te.append(te)
+        if changed:
+            experiment.teaching_examples = updated_te
     db.commit()
     logger.info(
         "gold_manifest.processed",
@@ -841,6 +859,126 @@ def process_gold_manifest(
         },
     )
     return results
+
+
+@app.get(
+    "/experiments/{experiment_id}/teaching-examples",
+    response_model=TeachingExamplesResponse,
+)
+def get_teaching_examples(
+    experiment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    ensure_current_schema(experiment)
+    te_unit_ids = [
+        uuid.UUID(te["data_unit_id"]) if isinstance(te["data_unit_id"], str) else te["data_unit_id"]
+        for te in (experiment.teaching_examples or [])
+        if isinstance(te, dict) and te.get("data_unit_id")
+    ]
+    units_by_id = {
+        unit.id: unit
+        for unit in db.query(DataUnit).filter(DataUnit.id.in_(te_unit_ids)).all()
+    }
+    result = []
+    for te in (experiment.teaching_examples or []):
+        uid = uuid.UUID(te["data_unit_id"]) if isinstance(te["data_unit_id"], str) else te["data_unit_id"]
+        unit = units_by_id.get(uid)
+        if unit:
+            result.append(
+                TeachingExampleItemResponse(
+                    data_unit_id=uid,
+                    media_url=generate_media_url(unit.raw_uri),
+                    displayed_answer=te.get("displayed_answer") or {},
+                    explanation=te.get("explanation"),
+                    filename=unit.raw_uri.rsplit("/", 1)[-1],
+                    keep_as_gold=bool(te.get("keep_as_gold", False)),
+                )
+            )
+    return TeachingExamplesResponse(teaching_examples=result)
+
+
+@app.post(
+    "/experiments/{experiment_id}/teaching-examples",
+    response_model=TeachingExamplesResponse,
+)
+@app.put(
+    "/experiments/{experiment_id}/teaching-examples",
+    response_model=TeachingExamplesResponse,
+)
+def configure_teaching_examples(
+    experiment_id: uuid.UUID,
+    payload: TeachingExamplesRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    ensure_current_schema(experiment)
+    spec = get_type(experiment.label_schema["annotation_type"])
+
+    units = db.query(DataUnit).filter_by(experiment_id=experiment.id).all()
+    units_by_id = {unit.id: unit for unit in units}
+
+    seen_ids = set()
+    validated_examples = []
+    for item in payload.teaching_examples:
+        if item.data_unit_id in seen_ids:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Duplicate teaching example for data unit {item.data_unit_id}",
+            )
+        seen_ids.add(item.data_unit_id)
+        unit = units_by_id.get(item.data_unit_id)
+        if unit is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Data unit {item.data_unit_id} not found in this experiment",
+            )
+        try:
+            validated_answer = spec.validate_answer(
+                item.displayed_answer, experiment.label_schema
+            )
+        except (ValueError, ValidationError) as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid displayed_answer for data unit {item.data_unit_id}: {exc}",
+            ) from exc
+
+        keep_as_gold = bool(item.keep_as_gold)
+        if keep_as_gold:
+            unit.is_gold = True
+            unit.gold_answer = validated_answer
+        elif unit.is_gold:
+            # If not keeping in scored gold pool, convert to teaching-only
+            unit.is_gold = False
+            unit.gold_answer = None
+
+        explanation = item.explanation.strip() if item.explanation else None
+        validated_examples.append({
+            "data_unit_id": str(item.data_unit_id),
+            "displayed_answer": validated_answer,
+            "explanation": explanation,
+            "keep_as_gold": keep_as_gold,
+        })
+
+    experiment.teaching_examples = validated_examples
+    db.commit()
+    db.refresh(experiment)
+
+    result = [
+        TeachingExampleItemResponse(
+            data_unit_id=uuid.UUID(te["data_unit_id"]),
+            media_url=generate_media_url(units_by_id[uuid.UUID(te["data_unit_id"])].raw_uri),
+            displayed_answer=te["displayed_answer"],
+            explanation=te.get("explanation"),
+            filename=units_by_id[uuid.UUID(te["data_unit_id"])].raw_uri.rsplit("/", 1)[-1],
+            keep_as_gold=bool(te.get("keep_as_gold", False)),
+        )
+        for te in validated_examples
+    ]
+    return TeachingExamplesResponse(teaching_examples=result)
+    return TeachingExamplesResponse(teaching_examples=result)
 
 
 @app.get(
@@ -950,6 +1088,34 @@ def get_session(
         },
     )
 
+    requires_teaching = bool(
+        experiment.teaching_examples and annotator.teaching_examples_shown_at is None
+    )
+    teaching_examples_list: list[TeachingExampleItemResponse] = []
+    if requires_teaching:
+        te_unit_ids = [
+            uuid.UUID(te["data_unit_id"]) if isinstance(te["data_unit_id"], str) else te["data_unit_id"]
+            for te in (experiment.teaching_examples or [])
+            if isinstance(te, dict) and te.get("data_unit_id")
+        ]
+        units_by_id = {
+            unit.id: unit
+            for unit in db.query(DataUnit).filter(DataUnit.id.in_(te_unit_ids)).all()
+        }
+        for te in (experiment.teaching_examples or []):
+            uid = uuid.UUID(te["data_unit_id"]) if isinstance(te["data_unit_id"], str) else te["data_unit_id"]
+            unit = units_by_id.get(uid)
+            if unit:
+                teaching_examples_list.append(
+                    TeachingExampleItemResponse(
+                        data_unit_id=uid,
+                        media_url=generate_media_url(unit.raw_uri),
+                        displayed_answer=te.get("displayed_answer") or {},
+                        explanation=te.get("explanation"),
+                        filename=unit.raw_uri.rsplit("/", 1)[-1],
+                    )
+                )
+
     return SessionResponse(
         session_token=session_token, experiment_id=experiment.id,
         modality=experiment.modality, instructions=experiment.instructions,
@@ -962,6 +1128,8 @@ def get_session(
             experiment.qualification_form and annotator.qualified_at is None
         ),
         qualification_form=experiment.qualification_form or [],
+        requires_teaching_examples=requires_teaching,
+        teaching_examples=teaching_examples_list,
     )
 
 
@@ -1024,6 +1192,36 @@ def submit_qualifications(
     return {"status": "qualified"}
 
 
+@app.post("/annotate/{share_token}/teaching-examples/complete")
+def complete_teaching_examples(
+    share_token: str,
+    session_token: str,
+    db: Session = Depends(get_db),
+):
+    experiment = db.query(Experiment).filter_by(
+        share_token=share_token, status="active"
+    ).first()
+    if experiment is None:
+        raise HTTPException(status_code=404, detail="Active experiment not found")
+    annotator = db.query(Annotator).filter_by(
+        session_token=session_token,
+        experiment_id=experiment.id,
+        status="active",
+    ).first()
+    if annotator is None:
+        raise HTTPException(status_code=401, detail="Invalid or inactive session")
+    annotator.teaching_examples_shown_at = datetime.now(timezone.utc)
+    db.commit()
+    logger.info(
+        "annotator.teaching_examples_completed",
+        extra={
+            "experiment_id": str(experiment.id),
+            "annotator_id": str(annotator.id),
+        },
+    )
+    return {"status": "completed"}
+
+
 @app.get("/annotate/{share_token}/next")
 def get_next_item(
     share_token: str, session_token: str, db: Session = Depends(get_db)
@@ -1044,6 +1242,8 @@ def get_next_item(
         raise HTTPException(status_code=401, detail="Invalid or inactive session")
     if experiment.qualification_form and annotator.qualified_at is None:
         raise HTTPException(status_code=403, detail="Qualification form is incomplete")
+    if experiment.teaching_examples and annotator.teaching_examples_shown_at is None:
+        raise HTTPException(status_code=403, detail="Teaching examples onboarding is incomplete")
 
     current_experiment_id.set(str(experiment.id))
     current_annotator_id.set(str(annotator.id))

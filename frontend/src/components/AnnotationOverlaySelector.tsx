@@ -47,6 +47,7 @@ interface AnnotationOverlaySelectorProps {
   mediaUrl: string;
   title?: string;
   options: OverlayOption[];
+  hideAnswerCode?: boolean;
 }
 
 export default function AnnotationOverlaySelector({
@@ -55,6 +56,7 @@ export default function AnnotationOverlaySelector({
   mediaUrl,
   title,
   options,
+  hideAnswerCode = false,
 }: AnnotationOverlaySelectorProps) {
   const [selectedId, setSelectedId] = useState(options[0]?.id ?? "");
   const selected = selectedOverlay(options, selectedId);
@@ -73,7 +75,7 @@ export default function AnnotationOverlaySelector({
     const Preview = mediaPlugin.PreviewRenderer;
     return <div>
       <Preview mediaUrl={mediaUrl} title={title} />
-      {selected && <code>{JSON.stringify(selected.answer)}</code>}
+      {selected && !hideAnswerCode && <code>{JSON.stringify(selected.answer)}</code>}
     </div>;
   }
 

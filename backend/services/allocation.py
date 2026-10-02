@@ -78,10 +78,15 @@ def allocate_next_item(
         )
         return first_matching(candidates)
 
+    teaching_ids = [
+        te["data_unit_id"]
+        for te in (getattr(experiment, "teaching_examples", None) or [])
+        if isinstance(te, dict) and te.get("data_unit_id")
+    ]
     annotation_count = func.count(Annotation.id)
 
     def regular_candidate():
-        candidates = (
+        query = (
             db.query(DataUnit)
             .outerjoin(Annotation, Annotation.data_unit_id == DataUnit.id)
             .filter(
@@ -89,7 +94,11 @@ def allocate_next_item(
                 DataUnit.is_gold.is_(False),
                 _unseen_filter(db, annotator),
             )
-            .group_by(DataUnit.id)
+        )
+        if teaching_ids:
+            query = query.filter(~DataUnit.id.in_(teaching_ids))
+        candidates = (
+            query.group_by(DataUnit.id)
             .having(annotation_count < experiment.overlap_n)
             .order_by(annotation_count.asc(), DataUnit.id.asc())
             .all()
@@ -140,6 +149,11 @@ def has_pending_unseen_items(
     db: Session, experiment: Experiment, annotator: Annotator
 ) -> bool:
     """Return whether work exists for the annotator before qualification routing."""
+    teaching_ids = [
+        te["data_unit_id"]
+        for te in (getattr(experiment, "teaching_examples", None) or [])
+        if isinstance(te, dict) and te.get("data_unit_id")
+    ]
     unseen = _unseen_filter(db, annotator)
     if db.query(DataUnit.id).filter(
         DataUnit.experiment_id == experiment.id,
@@ -148,12 +162,15 @@ def has_pending_unseen_items(
     ).first():
         return True
     annotation_count = func.count(Annotation.id)
-    return db.query(DataUnit.id).outerjoin(
+    reg_query = db.query(DataUnit.id).outerjoin(
         Annotation, Annotation.data_unit_id == DataUnit.id
     ).filter(
         DataUnit.experiment_id == experiment.id,
         DataUnit.is_gold.is_(False),
         unseen,
-    ).group_by(DataUnit.id).having(
+    )
+    if teaching_ids:
+        reg_query = reg_query.filter(~DataUnit.id.in_(teaching_ids))
+    return reg_query.group_by(DataUnit.id).having(
         annotation_count < experiment.overlap_n
     ).first() is not None

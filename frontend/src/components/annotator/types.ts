@@ -4,6 +4,15 @@ export interface AnnotationAnswerMap {}
 export type LabelSchema = AnnotationSchemaMap[keyof AnnotationSchemaMap];
 export type AnnotationAnswer = AnnotationAnswerMap[keyof AnnotationAnswerMap];
 
+export interface TeachingExampleItem {
+  data_unit_id: string;
+  media_url: string;
+  displayed_answer: AnnotationAnswer;
+  explanation?: string | null;
+  filename?: string | null;
+  keep_as_gold?: boolean;
+}
+
 export interface AnnotationSession {
   session_token: string;
   experiment_id: string;
@@ -14,6 +23,8 @@ export interface AnnotationSession {
   annotator_display_name?: string | null;
   requires_qualification: boolean;
   qualification_form: QualificationQuestion[];
+  requires_teaching_examples?: boolean;
+  teaching_examples?: TeachingExampleItem[];
 }
 
 export interface QualificationQuestion {

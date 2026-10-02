@@ -4,6 +4,7 @@ import { LogIn, Send, UserRound } from "lucide-react";
 import { isAnswerComplete } from "./annotator/AnnotationControl";
 import { AnnotationExperience, resolveAnnotationExperience } from "./annotator/AnnotationExperience";
 import QualificationForm from "./annotator/QualificationForm";
+import TeachingExamplesOnboarding from "./annotator/TeachingExamplesOnboarding";
 import type { AnnotationAnswer, AnnotationSession } from "./annotator/types";
 import { apiFetch } from "../api";
 
@@ -103,7 +104,7 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
       const data: AnnotationSession = await response.json();
       localStorage.setItem(`annotate_session_${shareToken}`, data.session_token);
       setSession(data);
-      if (!data.requires_qualification) await fetchNextItem(data.session_token);
+      if (!data.requires_qualification && !data.requires_teaching_examples) await fetchNextItem(data.session_token);
       else setLoading(false);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not initialize session");
@@ -187,9 +188,29 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
       });
       if (!response.ok) throw new Error(await responseError(response, "Could not save qualifications"));
       setSession(current => current ? { ...current, requires_qualification: false } : current);
-      await fetchNextItem(session.session_token);
+      if (!session.requires_teaching_examples) {
+        await fetchNextItem(session.session_token);
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not save qualifications");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const completeTeachingExamples = async () => {
+    if (!session) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const url = new URL(`/api/annotate/${shareToken}/teaching-examples/complete`, window.location.origin);
+      url.searchParams.set("session_token", session.session_token);
+      const response = await apiFetch(url, { method: "POST" });
+      if (!response.ok) throw new Error(await responseError(response, "Could not complete teaching examples onboarding"));
+      setSession(current => current ? { ...current, requires_teaching_examples: false } : current);
+      await fetchNextItem(session.session_token);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not complete teaching examples onboarding");
     } finally {
       setSubmitting(false);
     }
@@ -208,6 +229,18 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
         questions={session.qualification_form}
         submitting={submitting}
         onSubmit={submitQualifications}
+        error={error}
+      />
+    );
+  }
+  if (session?.requires_teaching_examples && session.teaching_examples && session.teaching_examples.length > 0) {
+    return (
+      <TeachingExamplesOnboarding
+        modality={session.modality}
+        schema={session.label_schema}
+        teachingExamples={session.teaching_examples}
+        onComplete={completeTeachingExamples}
+        submitting={submitting}
         error={error}
       />
     );

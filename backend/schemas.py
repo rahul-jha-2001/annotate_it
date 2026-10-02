@@ -210,6 +210,36 @@ class DataUnitCreate(BaseModel):
 class DataUnitBatchCreate(BaseModel):
     items: List[DataUnitCreate]
 
+class TeachingExampleItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    data_unit_id: UUID
+    displayed_answer: Dict[str, Any]
+    explanation: Optional[str] = None
+    keep_as_gold: Optional[bool] = False
+
+
+class TeachingExampleItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    data_unit_id: UUID
+    media_url: str
+    displayed_answer: Dict[str, Any]
+    explanation: Optional[str] = None
+    filename: Optional[str] = None
+    keep_as_gold: Optional[bool] = False
+
+
+class TeachingExamplesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    teaching_examples: List[TeachingExampleItem] = Field(default_factory=list)
+
+
+class TeachingExamplesResponse(BaseModel):
+    teaching_examples: List[TeachingExampleItemResponse]
+
+
 class SessionResponse(BaseModel):
     session_token: str
     experiment_id: UUID
@@ -220,6 +250,8 @@ class SessionResponse(BaseModel):
     annotator_display_name: Optional[str] = None
     requires_qualification: bool = False
     qualification_form: List[QualificationQuestionDefinition] = Field(default_factory=list)
+    requires_teaching_examples: bool = False
+    teaching_examples: List[TeachingExampleItemResponse] = Field(default_factory=list)
 
 class SessionStartRequest(BaseModel):
     session_token: Optional[str] = None

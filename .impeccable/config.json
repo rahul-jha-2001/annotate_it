@@ -1,0 +1,14 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "overused-font",
+        "value": "inter",
+        "createdAt": "2026-10-02T10:15:43.848Z",
+        "reason": "TaskGlass DESIGN.md explicitly defines Inter as the committed body and display typeface."
+      }
+    ]
+  }
+}

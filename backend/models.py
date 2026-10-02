@@ -41,6 +41,7 @@ class Experiment(Base):
     metadata_schema = Column(JSONB, nullable=False, default=list)
     qualification_form = Column(JSONB, nullable=False, default=list)
     routing_rules = Column(JSONB, nullable=False, default=list)
+    teaching_examples = Column(JSONB, nullable=False, default=list)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     deleted_at = Column(DateTime(timezone=True))
 
@@ -74,6 +75,7 @@ class Annotator(Base):
     status = Column(String, nullable=False, default='active')
     qualification_answers = Column(JSONB)
     qualified_at = Column(DateTime(timezone=True))
+    teaching_examples_shown_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     experiment = relationship("Experiment", back_populates="annotators")

@@ -43,7 +43,16 @@ interface RoutingRule {
   question_key: string;
 }
 
-const steps = ["Basics", "Task", "Dataset bundle", "Dataset preview", "Qualifications", "Review"];
+interface TeachingExampleDraft {
+  filename: string;
+  answer: AnnotationAnswer;
+  answerText: string;
+  explanation: string;
+  error?: string | null;
+  keepAsGold?: boolean;
+}
+
+const steps = ["Basics", "Task", "Dataset bundle", "Dataset preview", "Qualifications", "Teaching examples", "Review"];
 
 const routingOperatorFor = (
   field: MetadataFieldDefinition | undefined,
@@ -81,6 +90,7 @@ export default function CreateExperiment() {
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const [questions, setQuestions] = useState<QualificationQuestion[]>([]);
   const [rules, setRules] = useState<RoutingRule[]>([]);
+  const [teachingExamples, setTeachingExamples] = useState<TeachingExampleDraft[]>([]);
   const [goldManifest, setGoldManifest] = useState("");
   const [uploadStatus, setUploadStatus] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -196,12 +206,137 @@ export default function CreateExperiment() {
     }]);
   };
 
+  const allDatasetFilenames = useMemo(
+    () => datasetRows.map(row => row.filename),
+    [datasetRows]
+  );
+
+  const goldRows = useMemo(
+    () => datasetRows.filter(row => row.goldAnswer),
+    [datasetRows]
+  );
+
+  const addTeachingExample = (fromGold = false) => {
+    const used = new Set(teachingExamples.map(te => te.filename));
+    const targetRow = fromGold
+      ? (datasetRows.find(r => r.goldAnswer && !used.has(r.filename)) || datasetRows.find(r => r.goldAnswer))
+      : (datasetRows.find(r => !used.has(r.filename)) || datasetRows[0]);
+    if (!targetRow) return;
+
+    const filename = targetRow.filename;
+    const hasGold = Boolean(targetRow.goldAnswer);
+    const answer = hasGold
+      ? targetRow.goldAnswer!
+      : (annotationPlugin?.createGoldExample(annotationSchema) ?? {});
+
+    setTeachingExamples(current => [
+      ...current,
+      {
+        filename,
+        answer,
+        answerText: JSON.stringify(answer, null, 2),
+        explanation: "",
+        keepAsGold: false,
+      },
+    ]);
+  };
+
+  const updateTeachingExampleFile = (index: number, filename: string) => {
+    const targetRow = datasetRows.find(r => r.filename === filename);
+    const hasGold = Boolean(targetRow?.goldAnswer);
+    setTeachingExamples(current =>
+      current.map((item, pos) => {
+        if (pos !== index) return item;
+        if (hasGold && targetRow?.goldAnswer) {
+          return {
+            ...item,
+            filename,
+            answer: targetRow.goldAnswer,
+            answerText: JSON.stringify(targetRow.goldAnswer, null, 2),
+            error: null,
+            keepAsGold: false,
+          };
+        }
+        return { ...item, filename };
+      })
+    );
+  };
+
+  const useGoldAnswerForExample = (index: number) => {
+    setTeachingExamples(current =>
+      current.map((item, pos) => {
+        if (pos !== index) return item;
+        const targetRow = datasetRows.find(r => r.filename === item.filename);
+        if (!targetRow?.goldAnswer) return item;
+        return {
+          ...item,
+          answer: targetRow.goldAnswer,
+          answerText: JSON.stringify(targetRow.goldAnswer, null, 2),
+          error: null,
+        };
+      })
+    );
+  };
+
+  const updateTeachingExampleKeepAsGold = (index: number, keepAsGold: boolean) => {
+    setTeachingExamples(current =>
+      current.map((item, pos) => (pos === index ? { ...item, keepAsGold } : item))
+    );
+  };
+
+  const updateTeachingExampleAnswer = (index: number, text: string) => {
+    setTeachingExamples(current =>
+      current.map((item, pos) => {
+        if (pos !== index) return item;
+        if (!text.trim()) {
+          return {
+            ...item,
+            answerText: text,
+            answer: {},
+            error: "Answer cannot be empty",
+          };
+        }
+        try {
+          const parsed = JSON.parse(text) as AnnotationAnswer;
+          const errors = validateGold(parsed, { schema: annotationSchema });
+          return {
+            ...item,
+            answerText: text,
+            answer: parsed,
+            error: errors.length ? errors.join("; ") : null,
+          };
+        } catch {
+          return {
+            ...item,
+            answerText: text,
+            error: "Answer is not valid JSON",
+          };
+        }
+      })
+    );
+  };
+
+  const updateTeachingExampleExplanation = (index: number, explanation: string) => {
+    setTeachingExamples(current =>
+      current.map((item, pos) => (pos === index ? { ...item, explanation } : item))
+    );
+  };
+
+  const removeTeachingExample = (index: number) => {
+    setTeachingExamples(current => current.filter((_, pos) => pos !== index));
+  };
+
   const canContinue = (() => {
     if (step === 0) return Boolean(form.name.trim() && form.instructions.trim());
     if (step === 1) return Boolean(annotationPlugin && currentType && annotationPlugin.validateSchema(annotationSchema).length === 0);
     if (step === 2) return files.length > 0 && duplicateFiles.size === 0;
     if (step === 3) return datasetAssemblyCurrent && datasetRows.length > 0 && datasetErrors.length === 0 && datasetRows.every(row => row.errors.length === 0);
     if (step === 4) return questions.every(question => question.label.trim() && (!question.type.includes("choice") || question.options.length > 0));
+    if (step === 5) {
+      return teachingExamples.every(
+        te => Boolean(te.filename) && !te.error && validateGold(te.answer, { schema: annotationSchema }).length === 0
+      );
+    }
     return true;
   })();
 
@@ -303,11 +438,36 @@ export default function CreateExperiment() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items: dataUnits }),
       });
-      if (!unitsResponse.ok) throw new Error((await unitsResponse.json()).detail || "Could not register dataset");
+      const unitsData = await unitsResponse.json();
+      if (!unitsResponse.ok) throw new Error(unitsData.detail || "Could not register dataset");
 
-      const goldEntries = datasetRows
-        .filter(row => row.goldAnswer)
-        .map(row => ({ filename: row.filename, answer: row.goldAnswer }));
+      const teachingMap = new Map(teachingExamples.map(te => [te.filename, te]));
+      const effectiveGoldEntries = new Map<string, AnnotationAnswer>();
+
+      for (const row of datasetRows) {
+        if (row.goldAnswer) {
+          const te = teachingMap.get(row.filename);
+          if (!te || te.keepAsGold) {
+            effectiveGoldEntries.set(row.filename, row.goldAnswer);
+          }
+        }
+      }
+
+      for (const te of teachingExamples) {
+        if (te.keepAsGold && te.answer) {
+          effectiveGoldEntries.set(te.filename, te.answer);
+        }
+      }
+
+      const goldEntries = Array.from(effectiveGoldEntries.entries()).map(([filename, answer]) => ({
+        filename,
+        answer,
+      }));
+
+      if (form.gold_ratio > 0 && goldEntries.length === 0) {
+        throw new Error('Add at least one scored gold answer or set quality-check frequency to "None"');
+      }
+
       if (goldEntries.length) {
         const goldResponse = await apiFetch(`/api/experiments/${experimentBody.id}/gold-manifest`, {
           method: "POST", headers: { "Content-Type": "application/json" },
@@ -315,6 +475,32 @@ export default function CreateExperiment() {
         });
         const result = await goldResponse.json();
         if (!goldResponse.ok || result.errors?.length) throw new Error(result.errors?.[0]?.error || "Could not apply gold answers");
+      }
+
+      if (teachingExamples.length > 0) {
+        const unitByFilename = new Map<string, string>();
+        for (const unit of unitsData.data_units || []) {
+          const fn = unit.raw_uri?.split("/").pop();
+          if (fn) unitByFilename.set(fn, unit.id);
+        }
+        const tePayload = teachingExamples.map(te => ({
+          data_unit_id: unitByFilename.get(te.filename),
+          displayed_answer: te.answer,
+          explanation: te.explanation.trim() || undefined,
+          keep_as_gold: Boolean(te.keepAsGold),
+        }));
+        if (tePayload.some(te => !te.data_unit_id)) {
+          throw new Error("Could not find matching uploaded file for teaching example");
+        }
+        const teResponse = await apiFetch(`/api/experiments/${experimentBody.id}/teaching-examples`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ teaching_examples: tePayload }),
+        });
+        if (!teResponse.ok) {
+          const teErr = await teResponse.json();
+          throw new Error(teErr.detail || "Could not configure teaching examples");
+        }
       }
 
       const deployResponse = await apiFetch(`/api/experiments/${experimentBody.id}/deploy`, { method: "POST" });
@@ -329,27 +515,35 @@ export default function CreateExperiment() {
 
   return (
     <div className="wizard-shell">
-      <div className="wizard-steps">
+      <nav className="wizard-progress" aria-label="Experiment setup progress">
+        <ol className="wizard-steps">
         {steps.map((label, index) => (
-          <div key={label} className={`wizard-step ${index === step ? "current" : ""} ${index < step ? "complete" : ""}`}>
-            <span>{index < step ? <Check size={15} /> : index + 1}</span>{label}
-          </div>
+          <li
+            key={label}
+            className={`wizard-step ${index === step ? "current" : ""} ${index < step ? "complete" : ""}`}
+            aria-current={index === step ? "step" : undefined}
+          >
+            <span aria-hidden="true">{index < step ? <Check size={15} /> : index + 1}</span>
+            <span className="wizard-step-label">{label}</span>
+          </li>
         ))}
-      </div>
+        </ol>
+      </nav>
 
       <div className="glass-panel wizard-panel">
-        <div className="wizard-title"><Settings size={24} className="app-logo-icon" /><div><h2>{steps[step]}</h2><p>{[
+        <div className="wizard-title"><Settings size={24} className="app-logo-icon" aria-hidden="true" /><div><span className="wizard-step-count">Step {step + 1} of {steps.length}</span><h2>{steps[step]}</h2><p>{[
           "Name the experiment, explain the work, and choose how annotators join.",
           "Choose what annotators will submit.",
           "Add media, metadata, and gold answers together.",
           "Inspect every assembled sample before upload.",
           "Decide which annotators are eligible for each type of sample.",
+          "Show annotators observational examples with the correct answer before real work begins.",
           "Confirm quality settings and deploy.",
         ][step]}</p></div></div>
 
         {step === 0 && <div className="flex-col">
-          <div className="form-group"><label className="form-label">Experiment name</label><input className="form-input" value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="Hindi speech quality" /></div>
-          <div className="form-group"><label className="form-label">Instructions for annotators</label><textarea className="form-textarea" value={form.instructions} onChange={event => setForm({ ...form, instructions: event.target.value })} placeholder="Explain what a good annotation looks like…" /></div>
+          <div className="form-group"><label className="form-label" htmlFor="experiment-name">Experiment name</label><input id="experiment-name" className="form-input" value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="Hindi speech quality" /></div>
+          <div className="form-group"><label className="form-label" htmlFor="experiment-instructions">Instructions for annotators</label><textarea id="experiment-instructions" className="form-textarea" value={form.instructions} onChange={event => setForm({ ...form, instructions: event.target.value })} placeholder="Explain what a good annotation looks like…" /></div>
           <div className="form-group">
             <label className="form-label">How should annotators join?</label>
             <div className="access-mode-grid">
@@ -362,6 +556,7 @@ export default function CreateExperiment() {
                   type="button"
                   key={option.value}
                   className={`access-mode-card ${form.access_mode === option.value ? "selected" : ""}`}
+                  aria-pressed={form.access_mode === option.value}
                   onClick={() => setForm({ ...form, access_mode: option.value })}
                 >
                   <strong>{option.title}</strong><span>{option.description}</span>
@@ -369,7 +564,7 @@ export default function CreateExperiment() {
               ))}
             </div>
           </div>
-          <div className="form-group"><label className="form-label">Media type</label><select className="form-select" value={form.modality} onChange={event => { setForm({ ...form, modality: event.target.value }); setFiles([]); setDatasetRows([]); }}>{listMediaPlugins().map(plugin => <option key={plugin.key} value={plugin.key}>{plugin.name}</option>)}</select></div>
+          <div className="form-group"><label className="form-label" htmlFor="experiment-media-type">Media type</label><select id="experiment-media-type" className="form-select" value={form.modality} onChange={event => { setForm({ ...form, modality: event.target.value }); setFiles([]); setDatasetRows([]); }}>{listMediaPlugins().map(plugin => <option key={plugin.key} value={plugin.key}>{plugin.name}</option>)}</select></div>
         </div>}
 
         {step === 1 && <div className="task-config-layout">
@@ -428,13 +623,17 @@ export default function CreateExperiment() {
             <div><strong>{datasetErrors.length + datasetRows.filter(row => row.errors.length).length}</strong><span>issues</span></div>
           </div>
           {datasetErrors.map(message => <p className="form-error" key={message}>{message}</p>)}
-          <div className="dataset-table-wrap"><table className="dataset-table"><thead><tr><th>Sample</th><th>Preview</th>{metadataFields.map(field => <th key={field.key}>{field.label}</th>)}<th>Gold answer</th><th>Status</th></tr></thead><tbody>
+          <div className="dataset-table-wrap"><table className="dataset-table"><thead><tr><th style={{ minWidth: "220px" }}>Sample</th>{metadataFields.map(field => <th key={field.key}>{field.label}</th>)}<th>Gold answer</th><th>Status</th></tr></thead><tbody>
             {datasetRows.map(row => <tr key={row.filename} className={row.errors.length ? "invalid" : ""}>
-              <td><strong>{row.filename}</strong></td>
-              <td>{mediaPlugin ? row.goldAnswer
-                ? <AnnotationOverlaySelector modality={form.modality} schema={annotationSchema} mediaUrl={mediaUrls[row.filename]} title={row.filename} options={buildOverlayOptions(row.goldAnswer as AnnotationAnswer, [])} />
-                : <mediaPlugin.PreviewRenderer mediaUrl={mediaUrls[row.filename]} title={row.filename} />
-                : <span>Unsupported media</span>}</td>
+              <td style={{ minWidth: "220px", verticalAlign: "top" }}>
+                <strong style={{ display: "block", marginBottom: "6px", wordBreak: "break-all" }}>{row.filename}</strong>
+                <div className="sample-row-preview">
+                  {mediaPlugin ? row.goldAnswer
+                    ? <AnnotationOverlaySelector modality={form.modality} schema={annotationSchema} mediaUrl={mediaUrls[row.filename]} title={row.filename} options={buildOverlayOptions(row.goldAnswer as AnnotationAnswer, [])} />
+                    : <mediaPlugin.PreviewRenderer mediaUrl={mediaUrls[row.filename]} title={row.filename} />
+                    : <span>Unsupported media</span>}
+                </div>
+              </td>
               {metadataFields.map(field => <td key={field.key}>
                 {field.type === "choice" ? <select className="table-input" value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value || undefined)}><option value="">—</option>{field.options.map(option => <option key={option}>{option}</option>)}</select>
                   : field.type === "boolean" ? <select className="table-input" value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value ? event.target.value === "true" : undefined)}><option value="">—</option><option value="true">Yes</option><option value="false">No</option></select>
@@ -488,9 +687,196 @@ export default function CreateExperiment() {
         </div>}
 
         {step === 5 && <div className="flex-col">
+          <div className="qualification-guide teaching-guide">
+            <strong>Teaching examples are optional</strong>
+            <p>
+              Show annotators concrete examples with the correct answer visible before real work starts.
+              Teaching examples are purely observational — not interactive and not scored.
+            </p>
+            <span>
+              Recommendation: Select 2–5 samples. You can use samples with gold answers or regular samples. If using a gold sample, you can choose whether to also keep it in the scored gold queue.
+            </span>
+          </div>
+
+          <div className="section-heading">
+            <div>
+              <h3>Teaching Examples</h3>
+              <p>Configure examples that demonstrate correct annotations.</p>
+            </div>
+            <div className="section-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => addTeachingExample(false)}
+                disabled={allDatasetFilenames.length === 0}
+              >
+                <Plus size={16} /> Add teaching example
+              </button>
+              {/* {goldRows.length > 0 && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => addTeachingExample(true)}
+                  disabled={allDatasetFilenames.length === 0}
+                >
+                  <Plus size={16} /> Use gold answer as teaching example
+                </button>
+              )} */}
+            </div>
+          </div>
+
+          {allDatasetFilenames.length === 0 && (
+            <p className="form-error" role="alert">
+              No media files found in this dataset. Add media in step 3 to configure teaching examples.
+            </p>
+          )}
+
+          {teachingExamples.length === 0 && allDatasetFilenames.length > 0 && (
+            <div className="empty-builder">
+              <strong>No teaching examples configured.</strong>
+              <span>
+                Annotators will proceed directly to real annotation tasks after joining (and passing any qualifications).
+              </span>
+            </div>
+          )}
+
+          {teachingExamples.map((item, index) => {
+            const rowForFile = datasetRows.find(r => r.filename === item.filename);
+            const hasGoldAnswer = Boolean(rowForFile?.goldAnswer);
+            return (
+              <div className="builder-card teaching-card" key={`${item.filename}-${index}`}>
+                <div className="card-heading">
+                  <div className="teaching-card-title">
+                    <strong>Teaching Example {index + 1}</strong>
+                    {hasGoldAnswer && (
+                      <span className="teaching-badge">
+                        Gold answer source
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={`Delete teaching example ${index + 1}`}
+                    onClick={() => removeTeachingExample(index)}
+                  >
+                    <Trash2 size={17} />
+                  </button>
+                </div>
+
+                <div className="qualification-question-grid">
+                  <div className="form-group">
+                    <div className="teaching-field-heading">
+                      <label className="form-label" htmlFor={`teaching-file-${index}`}>Sample file</label>
+                      {hasGoldAnswer && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-compact"
+                          onClick={() => useGoldAnswerForExample(index)}
+                        >
+                          Reset to gold answer
+                        </button>
+                      )}
+                    </div>
+                    <select
+                      id={`teaching-file-${index}`}
+                      className="form-select"
+                      value={item.filename}
+                      onChange={event => updateTeachingExampleFile(index, event.target.value)}
+                    >
+                      {allDatasetFilenames.map(fn => {
+                        const isGold = Boolean(datasetRows.find(r => r.filename === fn)?.goldAnswer);
+                        return (
+                          <option key={fn} value={fn}>
+                            {fn} {isGold ? "★ (Gold sample)" : ""}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+
+                <div className="form-group">
+                  <label className="form-label" htmlFor={`teaching-explanation-${index}`}>Explanation <span>— optional</span></label>
+                  <input
+                    id={`teaching-explanation-${index}`}
+                    className="form-input"
+                    value={item.explanation}
+                    onChange={event => updateTeachingExampleExplanation(index, event.target.value)}
+                    placeholder="One-line note explaining why this is correct"
+                  />
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" htmlFor={`teaching-answer-${index}`}>Correct answer JSON</label>
+                <textarea
+                  id={`teaching-answer-${index}`}
+                  className="table-input gold-cell teaching-answer-input"
+                  aria-invalid={Boolean(item.error)}
+                  aria-describedby={item.error ? `teaching-answer-error-${index}` : undefined}
+                  value={item.answerText}
+                  onChange={event => updateTeachingExampleAnswer(index, event.target.value)}
+                  placeholder="JSON answer"
+                />
+                {item.error && <p className="form-error" id={`teaching-answer-error-${index}`} role="alert">{item.error}</p>}
+              </div>
+
+              <div className="teaching-gold-option">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(item.keepAsGold)}
+                    onChange={e => updateTeachingExampleKeepAsGold(index, e.target.checked)}
+                  />
+                  <div>
+                    <strong>Also keep as scored gold item</strong>
+                    <span className="help-text">
+                      {item.keepAsGold
+                        ? "Annotators will observe this answer upfront in onboarding AND will also encounter it later in the scored queue to test accuracy."
+                        : "Annotators will observe this answer upfront in onboarding only. It will NOT appear in the scored gold queue."}
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              {item.filename && mediaUrls[item.filename] && (
+                <div className="teaching-preview-wrapper">
+                  <span className="teaching-section-label">
+                    Preview with answer overlay
+                  </span>
+                  <AnnotationOverlaySelector
+                    modality={form.modality}
+                    schema={annotationSchema}
+                    mediaUrl={mediaUrls[item.filename]}
+                    title={item.filename}
+                    options={[
+                      {
+                        id: "teaching-answer",
+                        label: "Example Answer",
+                        answer: item.answer,
+                      },
+                    ]}
+                  />
+                </div>
+              )}
+              </div>
+            );
+          })}
+        </div>}
+
+        {step === 6 && <div className="flex-col">
           <div className="quality-grid"><div className="form-group"><label className="form-label">People per regular sample</label><input className="form-input" type="number" min="1" max="100" value={form.overlap_n} onChange={event => setForm({ ...form, overlap_n: event.target.valueAsNumber })} /></div><div className="form-group"><label className="form-label">Quality-check frequency</label><select className="form-select" value={form.gold_ratio} onChange={event => setForm({ ...form, gold_ratio: Number(event.target.value) })}><option value="0">None</option><option value="0.05">Light — 5%</option><option value="0.1">Recommended — 10%</option><option value="0.2">Strict — 20%</option></select></div></div>
           <div className="workload-card"><strong>Estimated regular assignments</strong><span>{regularCount} regular samples × {form.overlap_n} people</span><h2>{regularCount * form.overlap_n}</h2></div>
-          <div className="review-grid"><div><span>Name</span><strong>{form.name}</strong></div><div><span>Task</span><strong>{currentType?.name}</strong></div><div><span>Annotator access</span><strong>{form.access_mode === "sign_in_required" ? "Sign-in required" : form.access_mode === "guest_name" ? "Name required" : "Fully anonymous"}</strong></div><div><span>Samples</span><strong>{datasetRows.length} ({goldCount} gold)</strong></div><div><span>Metadata fields</span><strong>{metadataFields.length}</strong></div><div><span>Qualification questions</span><strong>{questions.length}</strong></div><div><span>Routing rules</span><strong>{rules.length}</strong></div></div>
+          <div className="review-grid">
+            <div><span>Name</span><strong>{form.name}</strong></div>
+            <div><span>Task</span><strong>{currentType?.name}</strong></div>
+            <div><span>Annotator access</span><strong>{form.access_mode === "sign_in_required" ? "Sign-in required" : form.access_mode === "guest_name" ? "Name required" : "Fully anonymous"}</strong></div>
+            <div><span>Samples</span><strong>{datasetRows.length} ({goldCount} gold)</strong></div>
+            <div><span>Teaching examples</span><strong>{teachingExamples.length ? `${teachingExamples.length} (observational)` : "None"}</strong></div>
+            <div><span>Metadata fields</span><strong>{metadataFields.length}</strong></div>
+            <div><span>Qualification questions</span><strong>{questions.length}</strong></div>
+            <div><span>Routing rules</span><strong>{rules.length}</strong></div>
+          </div>
           {form.gold_ratio > 0 && goldCount === 0 && <p className="form-error">Add at least one gold answer or set quality-check frequency to “None”.</p>}
           {error && <p className="form-error">{error}</p>}
         </div>}
