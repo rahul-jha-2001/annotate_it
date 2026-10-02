@@ -53,7 +53,18 @@ def get_data_units_caller(
             return DataUnitAuthCaller(user=None, is_service=True)
         raise HTTPException(status_code=403, detail="Invalid internal service key")
 
-    user = get_current_user(request, db)
+    override = request.app.dependency_overrides.get(get_current_user)
+    if override:
+        import inspect
+        sig = inspect.signature(override)
+        params = {}
+        if "request" in sig.parameters:
+            params["request"] = request
+        if "db" in sig.parameters:
+            params["db"] = db
+        user = override(**params)
+    else:
+        user = get_current_user(request, db)
     return DataUnitAuthCaller(user=user, is_service=False)
 
 
