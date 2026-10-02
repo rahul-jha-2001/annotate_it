@@ -35,10 +35,10 @@ Other tools cover parts of this: Label Studio provides an annotation UI, and MTu
 
 ## Operating Context
 
-- **Designer flow:** sign in (Clerk) → six-step wizard (basics, annotation task with live annotator preview, dataset bundle of media + optional metadata CSV + optional gold JSON, dataset preview table, qualifications/routing, review) → deploy → share link by any outside channel → poll-based dashboard → review by sample → export.
-- **Annotator flow:** open link → access gate → qualification questions if any → instructions → queue of items with gold items interleaved and not visually marked → submit until the queue runs out or they stop.
+- **Designer flow:** sign in (Clerk) → six-step wizard (basics, annotation task with live annotator preview, dataset bundle of media + optional metadata CSV + optional gold JSON, dataset preview table with inline previews, qualifications/routing and optional observational teaching examples, review) → deploy → share link by any outside channel → poll-based dashboard → review by sample → auditable export.
+- **Annotator flow:** open link → access gate → qualification questions if any → observational teaching examples (with answer overlays and explanations, never scored) if configured → instructions → queue of items with gold items interleaved and not visually marked → submit until the queue runs out or they stop.
 - **Annotation catalog:** designers browse presets by modality, try the real annotator experience on example media, and can start the wizard with modality and task preselected.
-- **Export:** a ZIP snapshot whose manifest records source cutoff, counts, configuration, code/algorithm versions, and checksum.
+- **Export:** a ZIP snapshot whose manifest records source cutoff, counts, configuration, code/algorithm versions, checksum, and consensus settings.
 
 ## Capabilities and Constraints
 

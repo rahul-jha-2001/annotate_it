@@ -89,6 +89,7 @@ CREATE TABLE experiment (
     metadata_schema JSONB NOT NULL DEFAULT '[]',
     qualification_form JSONB NOT NULL DEFAULT '[]',
     routing_rules JSONB NOT NULL DEFAULT '[]',
+    teaching_examples JSONB NOT NULL DEFAULT '[]', -- observational training samples
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     deleted_at TIMESTAMPTZ                    -- set only for soft-deleted experiments
 );
@@ -113,6 +114,7 @@ CREATE TABLE annotator (
     status TEXT NOT NULL DEFAULT 'active',   -- 'active' | 'paused' (manual designer action)
     qualification_answers JSONB,
     qualified_at TIMESTAMPTZ,
+    teaching_examples_shown_at TIMESTAMPTZ,  -- timestamp when observational onboarding was completed
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -156,6 +158,32 @@ CREATE TABLE item_agreement (
     n_annotations INT NOT NULL,
     computed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ExportJob: asynchronous export package generation and consensus resolution
+CREATE TABLE export_job (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    experiment_id UUID NOT NULL REFERENCES experiment(id) ON DELETE CASCADE,
+    requested_by_user_id UUID REFERENCES app_user(id) ON DELETE SET NULL,
+    mode TEXT NOT NULL,                      -- 'complete' | 'consensus'
+    status TEXT NOT NULL DEFAULT 'queued',   -- 'queued' | 'running' | 'ready' | 'failed' | 'expired'
+    policy JSONB NOT NULL DEFAULT '{}',
+    source_cutoff_at TIMESTAMPTZ NOT NULL,
+    source_counts JSONB NOT NULL DEFAULT '{}',
+    source_fingerprint TEXT NOT NULL,
+    preflight_summary JSONB NOT NULL DEFAULT '{}',
+    warnings JSONB NOT NULL DEFAULT '[]',
+    object_uri TEXT,
+    size_bytes BIGINT,
+    sha256 TEXT,
+    error_code TEXT,
+    error_message TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    worker_id TEXT,
+    lease_expires_at TIMESTAMPTZ
+);
 ```
 
 Notes for implementing agents:
@@ -191,6 +219,13 @@ Notes for implementing agents:
   gold answers, agreement, and all annotations for designer inspection.
 - `GET /experiments/{id}/export` — returns the data pack (JSON/JSONL: data_unit + all annotations + agreement/gold scores + provenance)
 - `POST /uploads/presign` — returns a presigned S3 URL so raw files go directly from browser to object storage, not through the FastAPI app
+- `POST /uploads/presign-multipart` — initiates S3 multipart upload for large archives, returns `{ upload_id, s3_key }`
+- `POST /uploads/presign-multipart-part` — generates presigned URL for an individual upload part
+- `POST /uploads/complete-multipart` — completes S3 multipart upload with collected ETags
+- `POST /experiments/{id}/bundle-upload` — queues background zip processing, sets `experiment.status = 'draft_media_processing'`
+- `GET /experiments/{id}/bundle-upload/{job_id}` — owner-only progress polling with 20-minute backend crash watchdog
+- `PATCH /experiments/{id}/bundle-upload/{job_id}` — internal Lambda status callback authenticated via `X-Internal-Service-Key`
+- For full details, see [`docs/specs/2026-10-02-large-file-bundle-upload-plan.md`](docs/specs/2026-10-02-large-file-bundle-upload-plan.md).
 
 All experiment reads and mutations require a designer session. Non-admin users
 can access only experiments whose `owner_id` matches their user ID. Platform
@@ -209,8 +244,10 @@ Bearer token. FastAPI verifies its signature, lifetime, type, and `azp` against
   experiment instructions + label schema.
 - `POST /annotate/{share_token}/qualifications` — validate and persist the
   annotator's qualification answers before allocation.
-- `GET /annotate/{share_token}/next` — returns the next item for this annotator's queue (gold-interleaved per `gold_ratio`, respecting `overlap_n` so the allocator doesn't over/under-assign)
-- `POST /annotate/{share_token}/items/{data_unit_id}/annotations` — submit an answer; triggers the scoring event handler (see below)
+- `GET /annotate/{share_token}/teaching-examples` — fetch ordered observational teaching examples with correct-answer overlays and explanations.
+- `POST /annotate/{share_token}/teaching-examples/complete` — mark observational onboarding as finished (`teaching_examples_shown_at = now()`) before allocation is permitted.
+- `GET /annotate/{share_token}/next` — returns the next item for this annotator's queue (blocked until qualifications and teaching examples are completed; gold-interleaved per `gold_ratio`, respecting `overlap_n` so the allocator doesn't over/under-assign).
+- `POST /annotate/{share_token}/items/{data_unit_id}/annotations` — submit an answer; triggers the scoring event handler (see below).
 
 ## 4. Scoring logic (the core differentiated piece — build carefully)
 

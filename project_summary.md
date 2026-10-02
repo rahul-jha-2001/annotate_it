@@ -133,6 +133,31 @@ quality during collection through gold answers and inter-annotator agreement.
   against the expected answer.
 - Derived scores can be rebuilt with `python rebuild_scores.py [experiment-id]`.
 
+### Observational onboarding (teaching examples)
+
+- Designers can configure ordered teaching examples during experiment creation, either
+  by picking any uploaded dataset item or reusing an existing gold-standard sample.
+- If a gold sample is chosen as a teaching example, designers can select whether to keep
+  it in the scored gold pool or remove it from scoring so it serves purely as training.
+- Each teaching example pairs a media preview with an interactive correct-answer overlay,
+  an expected answer summary card, and an optional written explanation of the reasoning.
+- Dedicated step in the annotator flow: presented after qualification questions but before
+  the active scoring queue begins. Teaching examples are explicitly observational and
+  are never scored or counted toward annotator accuracy.
+- Completed teaching onboarding is recorded on the annotator profile (`completed_teaching_examples_at`),
+  and annotators cannot be allocated active queue items until this onboarding is complete.
+
+### Audio waveform timeline and region overlay
+
+- Integrated Wavesurfer `TimelinePlugin` to provide granular, dynamic x-axis time notches
+  (from 0.5s intervals for short clips up to 30s for long recordings) beneath audio waveforms.
+- Synchronized region hydration with Wavesurfer's `ready` and `decode` events to eliminate
+  race conditions and clipping during fast example switching and read-only overlay inspection.
+- Enhanced `temporal-regions` interaction with interaction-level `label` resolution so that
+  segment/speech-segmentation tasks display their active category label and distinct color badge
+  directly on the waveform and video timeline.
+- Read-only review overlays display instructional feedback indicating annotated time spans.
+
 ### Dashboard and export
 
 - Polling experiment dashboard with completion, remaining work, active
@@ -150,8 +175,12 @@ quality during collection through gold answers and inter-annotator agreement.
 - Dataset preview, sample review, and annotator drill-down provide selectable
   read-only gold/submission overlays through the same module interaction contract.
 - Manual annotator pause/resume.
-- JSON export with experiment configuration, data-unit metadata, gold answers,
-  qualification provenance, annotations, timestamps, and agreement scores.
+- Auditable asynchronous export service powered by Celery background workers, with
+  Redis rate limiting and progress polling.
+- Live export preflight preview with configurable consensus threshold overrides
+  (minimum annotator overlap, agreement tolerance, confidence cutoffs).
+- Checksummed export archives containing raw submissions, resolved consensus annotations,
+  provenance manifests with SHA256 hashes, and algorithm version metadata.
 
 ### Operations and developer experience
 
@@ -168,24 +197,13 @@ quality during collection through gold answers and inter-annotator agreement.
 
 ## Verification
 
-- Frontend TypeScript and Vite production build passes.
-- Frontend unit tests cover plugin discovery, capability compatibility, temporal
-  and spatial mapping, contained-media coordinates, immutable editing, video-time
-  filtering, read-only overlay selection, annotation completion, CSV parsing,
-  metadata inference, filename joining, and bundle validation.
-- Backend unit tests cover the base lifecycle, capability derivation, strict
-  categorical/temporal/spatial shapes, schema versions, text similarity, temporal
-  matching, geometry scoring, unmatched penalties, and qualification validation.
-- Database-backed API integration tests cover experiment creation, access-mode
-  enforcement, guest-name persistence, safe settings edits and locking, confirmed
-  soft deletion with retained annotation rows, allocation,
-  invalid-answer rejection, two-annotator overlap, scoring, dashboard, export,
-  annotator summaries and submission drill-down, cross-experiment session isolation,
-  draft deployment, qualification onboarding, metadata routing, and complete
-  transcription, diarization, image-box, and video-polygon workflows.
-- The current backend suite contains 56 passing tests when PostgreSQL and S3/MinIO
-  integration services are enabled. The latest Alembic migration passes a full
-  downgrade/upgrade cycle and reports no missing schema operations.
+- Frontend TypeScript and Vite production build passes with zero errors.
+- Frontend unit test suite contains 36 test files and 151 passing tests covering plugin discovery,
+  capability compatibility, temporal/spatial mapping, audio timeline intervals, teaching examples
+  onboarding, read-only overlays, consensus export modal, and dataset preview tables.
+- Backend test suite contains 113 tests covering annotation modules, geometry scoring,
+  allocation lifecycle, teaching examples, rate limiting, and auditable export generation.
+- The latest Alembic migrations pass full upgrade/downgrade cycles and report no missing schema operations.
 
 ## Remaining Product Work
 

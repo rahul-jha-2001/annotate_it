@@ -60,6 +60,9 @@ Build a system where a single designer can:
   free-text qualification questions. Structured answers may be connected to
   sample metadata using constrained routing rules. Free-text answers are stored
   for review/export and cannot be used for automatic routing.
+- Designer can configure observational teaching examples with correct-answer overlays
+  and written explanations, choosing any dataset sample or reusing an existing gold item
+  (with the choice to keep or remove it from the scored gold pool).
 - Designer sets `overlap_n` (how many distinct annotators must annotate each non-gold item) and `gold_ratio` (fraction of items in each annotator's queue that are gold, interleaved rather than front-loaded).
 - Creation is draft-first: media, metadata, and gold configuration must register
   successfully before the experiment becomes active and its share link works.
@@ -81,10 +84,13 @@ Build a system where a single designer can:
 - If the experiment has qualification questions, the annotator completes them
   once before receiving work. Required answers are validated, and sample routing
   uses only supported structured answers.
+- If the experiment has teaching examples configured, the annotator views the
+  observational onboarding walkthrough with media, expected answers, and explanations.
+  Teaching examples are purely instructional and are never scored.
 - Annotator sees instructions, then is served the next unannotated item from their assigned queue (gold items interleaved).
 - Annotator uses plugin-driven media and answer controls: categorical or
-  transcription input, labeled time regions over audio/video, or normalized
-  spatial tools over image/video, then submits.
+  transcription input, labeled time regions over audio/video (with waveform x-axis seconds marking),
+  or normalized spatial tools over image/video, then submits.
 - Repeats until their queue is exhausted or they stop.
 - “Anonymous” means no account or name is required, not that activity is discarded. The
   same browser session continues under the same anonymous ID for that experiment.
@@ -106,7 +112,9 @@ Build a system where a single designer can:
   changing the stored submissions.
 
 ### 4.5 Export
-- Designer exports a "data pack": raw data + final annotations + per-item confidence/agreement + provenance (annotator id, timestamp), in a standard format (JSON/JSONL to start).
+- Designer triggers an asynchronous export job: complete archive or consensus dataset.
+- Live export preflight preview lets designers test and adjust consensus thresholds (overlap, agreement, confidence).
+- Export worker produces a downloadable ZIP archive containing raw submissions, resolved consensus data, SHA256 checksums, and provenance manifests.
 
 ## 5. Success criteria for v1
 - A designer can go from a folder of supported media files to a live shareable
