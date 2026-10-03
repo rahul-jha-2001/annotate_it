@@ -118,6 +118,44 @@ def test_middleware_returns_429_headers_and_skips_health_and_options():
     assert limiter.check.await_count == 1
 
 
+def test_middleware_skips_rate_limiting_for_internal_service_key():
+    limiter = AsyncMock()
+    limiter.check.return_value = RateLimitDecision(
+        allowed=False,
+        limit=10,
+        remaining=0,
+        retry_after=37,
+    )
+    app = FastAPI()
+    app.add_middleware(
+        RateLimitMiddleware,
+        limiter=limiter,
+        enabled=True,
+        secret="test-secret",
+        trusted_proxy_cidrs=["127.0.0.1/32"],
+        internal_service_key="super-secret-worker-key",
+    )
+
+    @app.get("/resource")
+    def resource():
+        return {"ok": True}
+
+    client = TestClient(app)
+
+    # Without key -> 429
+    blocked = client.get("/resource")
+    assert blocked.status_code == 429
+
+    # With invalid key -> 429
+    wrong_key = client.get("/resource", headers={"X-Internal-Service-Key": "wrong-key"})
+    assert wrong_key.status_code == 429
+
+    # With correct key -> bypasses limiter (200)
+    passed = client.get("/resource", headers={"X-Internal-Service-Key": "super-secret-worker-key"})
+    assert passed.status_code == 200
+    assert passed.json() == {"ok": True}
+
+
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(

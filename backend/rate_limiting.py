@@ -13,6 +13,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from config import (
+    INTERNAL_SERVICE_KEY,
     RATE_LIMIT_EXPORT_PER_MINUTE,
     RATE_LIMIT_GLOBAL_PER_MINUTE,
     RATE_LIMIT_SESSION_PER_MINUTE,
@@ -150,18 +151,29 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         enabled: bool,
         secret: str,
         trusted_proxy_cidrs: Sequence[str],
+        internal_service_key: Optional[str] = None,
     ):
         super().__init__(app)
         self.limiter = limiter
         self.enabled = enabled
         self.secret = secret
         self.trusted_proxy_cidrs = tuple(trusted_proxy_cidrs)
+        self.internal_service_key = internal_service_key
 
     async def dispatch(self, request: Request, call_next) -> Response:
         if (
             not self.enabled
             or request.method.upper() == "OPTIONS"
             or request.url.path in {"/health", "/healthz"}
+        ):
+            return await call_next(request)
+
+        expected_key = self.internal_service_key or INTERNAL_SERVICE_KEY
+        service_key = request.headers.get("x-internal-service-key")
+        if (
+            service_key
+            and expected_key
+            and hmac.compare_digest(service_key, expected_key)
         ):
             return await call_next(request)
 

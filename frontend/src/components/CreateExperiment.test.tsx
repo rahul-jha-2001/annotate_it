@@ -68,6 +68,26 @@ describe("CreateExperiment - 3-Step Wizard Flow", () => {
     const progress = screen.getByRole("navigation", { name: "Experiment setup progress" });
     expect(screen.getByText("Step 1 of 3")).toBeDefined();
     expect(within(progress).getByText("Basics").closest("li")?.getAttribute("aria-current")).toBe("step");
+    expect(within(progress).getByText("Basics").closest("li")?.getAttribute("aria-label")).toBe("Basics, current step");
+    expect(within(progress).getByText("Task").closest("li")?.getAttribute("aria-label")).toBe("Task, upcoming step");
+  });
+
+  it("explains what is required before the designer can continue", async () => {
+    render(<CreateExperiment />);
+    await waitFor(() => {
+      expect(screen.getByLabelText("Experiment name")).toBeDefined();
+    });
+
+    const continueButton = screen.getByRole("button", { name: /Continue/ });
+    expect(continueButton.hasAttribute("disabled")).toBe(true);
+    expect(continueButton.getAttribute("aria-describedby")).toBe("wizard-action-guidance");
+    expect(screen.getByText("Add an experiment name and annotator instructions to continue.")).toBeDefined();
+
+    fireEvent.change(screen.getByLabelText("Experiment name"), { target: { value: "Speech review" } });
+    fireEvent.change(screen.getByLabelText("Instructions for annotators"), { target: { value: "Choose the clearest sample." } });
+
+    expect(continueButton.hasAttribute("disabled")).toBe(false);
+    expect(screen.queryByText("Add an experiment name and annotator instructions to continue.")).toBeNull();
   });
 
   it("exposes the selected annotator access mode", async () => {
@@ -78,6 +98,22 @@ describe("CreateExperiment - 3-Step Wizard Flow", () => {
 
     expect(screen.getByRole("button", { name: /Name required/ }).getAttribute("aria-pressed")).toBe("true");
     expect(screen.getByRole("button", { name: /Sign-in required/ }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("exposes the selected task type to assistive technology", async () => {
+    render(<CreateExperiment />);
+    await waitFor(() => {
+      expect(screen.getByLabelText("Experiment name")).toBeDefined();
+    });
+
+    fireEvent.change(screen.getByLabelText("Experiment name"), { target: { value: "Speech review" } });
+    fireEvent.change(screen.getByLabelText("Instructions for annotators"), { target: { value: "Choose the clearest sample." } });
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Categorical/ }).getAttribute("aria-pressed")).toBe("true");
+      expect(screen.getByRole("complementary", { name: "Optional gold answer format" })).toBeDefined();
+    });
   });
 });
 
@@ -188,6 +224,7 @@ describe("CreateExperiment - Dataset Upload Flow", () => {
 
     // Default mode is individual files
     expect(screen.getByText("1. Choose audio files")).toBeDefined();
+    expect(screen.getByRole("button", { name: /Individual Media Files/ }).getAttribute("aria-pressed")).toBe("true");
 
     // Switch to bundle archive mode
     const bundleTab = screen.getByText("Single Archive (.zip) for Large Datasets");
@@ -196,6 +233,7 @@ describe("CreateExperiment - Dataset Upload Flow", () => {
     await waitFor(() => {
       expect(screen.getByText("Choose a Dataset Archive (.zip)")).toBeDefined();
       expect(screen.getByText(/Archive must contain a top-level/)).toBeDefined();
+      expect(screen.getByRole("button", { name: /Single Archive/ }).getAttribute("aria-pressed")).toBe("true");
     });
   });
 
@@ -223,6 +261,26 @@ describe("CreateExperiment - Dataset Upload Flow", () => {
     await waitFor(() => {
       expect(screen.getByText("Dataset Archive Processing in Background")).toBeDefined();
       expect(screen.getByText(/Extracting & registering files/)).toBeDefined();
+    });
+  });
+
+  it("renders upload progress with a compositor-friendly transform", async () => {
+    await advanceToDatasetStep();
+    fireEvent.click(screen.getByText("Single Archive (.zip) for Large Datasets"));
+
+    (uploadMultipartFile as any).mockImplementationOnce(async ({ onProgress }: any) => {
+      onProgress({ percent: 25, uploadedBytes: 25, totalBytes: 100, completedParts: 1, totalParts: 4 });
+      return { s3_key: "zip-uploads/exp-bundle-test-123/dataset.zip" };
+    });
+
+    const file = new File(["dummy zip content"], "dataset.zip", { type: "application/zip" });
+    const input = screen.getByText("Choose a Dataset Archive (.zip)").closest("label")!.querySelector("input")!;
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => {
+      const progressFill = document.querySelector<HTMLElement>(".bundle-progress-fill");
+      expect(progressFill?.style.transform).toBe("scaleX(0.25)");
+      expect(progressFill?.style.width).toBe("");
     });
   });
 

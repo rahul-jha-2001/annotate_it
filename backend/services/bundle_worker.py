@@ -7,6 +7,7 @@ import tempfile
 import time
 import uuid
 import zipfile
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 # Ensure backend root and lambda extractor directory are on sys.path
@@ -243,6 +244,19 @@ def run_bundle_worker(poll_interval: float = 2.0, run_once: bool = False):
                 )
                 if job:
                     exp = db.query(Experiment).filter_by(id=job.experiment_id).first()
+                    if not exp or exp.status == "deleted" or exp.deleted_at is not None:
+                        logger.warning(
+                            "bundle_worker.orphaned_job_skipped",
+                            extra={"job_id": str(job.id), "experiment_id": str(job.experiment_id)},
+                        )
+                        job.status = "failed"
+                        job.completed_at = datetime.now(timezone.utc)
+                        job.errors = [{"filename": "system", "error": "Experiment was deleted or not found"}]
+                        db.commit()
+                        if run_once:
+                            break
+                        continue
+
                     job_info = {
                         "experiment_id": str(job.experiment_id),
                         "job_id": str(job.id),
@@ -264,6 +278,17 @@ def run_bundle_worker(poll_interval: float = 2.0, run_once: bool = False):
                 logger.info("bundle_worker.job_completed", extra={"job_id": job_info["job_id"], "result": result})
             except Exception as proc_err:
                 logger.exception("bundle_worker.job_failed", extra={"job_id": job_info["job_id"], "error": str(proc_err)})
+                # Ensure the job does not stay 'queued' in database if an API patch failure occurred
+                try:
+                    with SessionLocal() as db:
+                        failed_job = db.query(BundleUploadJob).filter_by(id=job_info["job_id"]).first()
+                        if failed_job and failed_job.status in ("queued", "processing"):
+                            failed_job.status = "failed"
+                            failed_job.completed_at = datetime.now(timezone.utc)
+                            failed_job.errors = [{"filename": "system", "error": str(proc_err)}]
+                            db.commit()
+                except Exception:
+                    pass
 
             if run_once:
                 break

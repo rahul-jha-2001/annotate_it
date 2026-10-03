@@ -666,7 +666,19 @@ def delete_experiment(
         or 0
     )
     experiment.status = "deleted"
-    experiment.deleted_at = datetime.now(timezone.utc)
+    now_utc = datetime.now(timezone.utc)
+    experiment.deleted_at = now_utc
+    db.query(BundleUploadJob).filter(
+        BundleUploadJob.experiment_id == experiment.id,
+        BundleUploadJob.status.in_(["queued", "processing"]),
+    ).update(
+        {
+            "status": "failed",
+            "completed_at": now_utc,
+            "errors": [{"filename": "system", "error": "Experiment was deleted"}],
+        },
+        synchronize_session=False,
+    )
     db.commit()
     logger.info(
         "experiment.soft_deleted",

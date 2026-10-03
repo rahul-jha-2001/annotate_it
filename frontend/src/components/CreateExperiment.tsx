@@ -4,7 +4,9 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
+  CheckCircle2,
   FileArchive,
+  Files,
   Loader2,
   Pause,
   Play,
@@ -280,6 +282,19 @@ export default function CreateExperiment() {
     return true;
   })();
 
+  const continueGuidance = (() => {
+    if (canContinue) return null;
+    if (step === 0) {
+      if (!form.name.trim() && !form.instructions.trim()) return "Add an experiment name and annotator instructions to continue.";
+      if (!form.name.trim()) return "Add an experiment name to continue.";
+      return "Add annotator instructions to continue.";
+    }
+    if (step === 1) return "Complete the task configuration to continue.";
+    return uploadMode === "bundle"
+      ? "Choose a dataset archive to finish setup."
+      : "Choose at least one media file to finish setup.";
+  })();
+
   const handleFinishSetup = async () => {
     setSubmitting(true);
     setError(null);
@@ -511,6 +526,7 @@ export default function CreateExperiment() {
             key={label}
             className={`wizard-step ${index === step ? "current" : ""} ${index < step ? "complete" : ""}`}
             aria-current={index === step ? "step" : undefined}
+            aria-label={`${label}, ${index === step ? "current" : index < step ? "completed" : "upcoming"} step`}
           >
             <span aria-hidden="true">{index < step ? <Check size={15} /> : index + 1}</span>
             <span className="wizard-step-label">{label}</span>
@@ -599,8 +615,11 @@ export default function CreateExperiment() {
         )}
 
         {step === 0 && <div className="flex-col">
-          <div className="form-group"><label className="form-label" htmlFor="experiment-name">Experiment name</label><input id="experiment-name" className="form-input" value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="Hindi speech quality" /></div>
-          <div className="form-group"><label className="form-label" htmlFor="experiment-instructions">Instructions for annotators</label><textarea id="experiment-instructions" className="form-textarea" value={form.instructions} onChange={event => setForm({ ...form, instructions: event.target.value })} placeholder="Explain what a good annotation looks like…" /></div>
+          <div className="wizard-basics-grid">
+            <div className="form-group"><label className="form-label" htmlFor="experiment-name">Experiment name</label><input id="experiment-name" className="form-input" value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="Hindi speech quality" /></div>
+            <div className="form-group"><label className="form-label" htmlFor="experiment-media-type">Media type</label><select id="experiment-media-type" className="form-select" value={form.modality} onChange={event => { setForm({ ...form, modality: event.target.value }); setFiles([]); }}>{listMediaPlugins().map(plugin => <option key={plugin.key} value={plugin.key}>{plugin.name}</option>)}</select></div>
+          </div>
+          <div className="form-group"><label className="form-label" htmlFor="experiment-instructions">Instructions for annotators</label><textarea id="experiment-instructions" className="form-textarea wizard-instructions" value={form.instructions} onChange={event => setForm({ ...form, instructions: event.target.value })} placeholder="Explain what a good annotation looks like…" /></div>
           <div className="form-group">
             <label className="form-label">How should annotators join?</label>
             <div className="access-mode-grid">
@@ -616,17 +635,16 @@ export default function CreateExperiment() {
                   aria-pressed={form.access_mode === option.value}
                   onClick={() => setForm({ ...form, access_mode: option.value })}
                 >
-                  <strong>{option.title}</strong><span>{option.description}</span>
+                  <span className="selection-card-heading"><strong>{option.title}</strong>{form.access_mode === option.value && <CheckCircle2 size={17} aria-hidden="true" />}</span><span>{option.description}</span>
                 </button>
               ))}
             </div>
           </div>
-          <div className="form-group"><label className="form-label" htmlFor="experiment-media-type">Media type</label><select id="experiment-media-type" className="form-select" value={form.modality} onChange={event => { setForm({ ...form, modality: event.target.value }); setFiles([]); }}>{listMediaPlugins().map(plugin => <option key={plugin.key} value={plugin.key}>{plugin.name}</option>)}</select></div>
         </div>}
 
         {step === 1 && <div className="task-config-layout">
           <div className="flex-col">
-            <div className="task-type-grid">{availableTypes.map(type => { const plugin = getAnnotationPlugin(type.key); return <button type="button" key={type.key} className={`task-type-card ${annotationType === type.key ? "selected" : ""}`} onClick={() => { if (plugin && mediaPlugin) setAnnotationSchema(plugin.defaultSchema(mediaPlugin.moduleContext)); }}><strong>{type.name}</strong><span>{plugin?.description(mediaPlugin?.name ?? "media")}</span></button>; })}</div>
+            <div className="task-type-grid">{availableTypes.map(type => { const plugin = getAnnotationPlugin(type.key); const selected = annotationType === type.key; return <button type="button" key={type.key} className={`task-type-card ${selected ? "selected" : ""}`} aria-pressed={selected} onClick={() => { if (plugin && mediaPlugin) setAnnotationSchema(plugin.defaultSchema(mediaPlugin.moduleContext)); }}><span className="selection-card-heading"><strong>{type.name}</strong>{selected && <CheckCircle2 size={17} aria-hidden="true" />}</span><span>{plugin?.description(mediaPlugin?.name ?? "media")}</span></button>; })}</div>
             {annotationPlugin && <annotationPlugin.ConfigurationEditor schema={annotationSchema} onChange={setAnnotationSchema} />}
             <div className="config-preview">
               <span>Interactive annotator preview</span>
@@ -642,9 +660,8 @@ export default function CreateExperiment() {
               </div>
             </div>
           </div>
-          <aside className="gold-format-panel" aria-label="Required gold dataset format">
-            <span className="gold-format-kicker">Gold data format</span>
-            <h3>JSON file required</h3>
+          <aside className="gold-format-panel" aria-label="Optional gold answer format">
+            <div className="gold-format-heading"><h3>Gold answer format</h3><span>Optional</span></div>
             <p>Upload one JSON array. Each gold sample needs its exact media filename and the known correct answer.</p>
             <div className="gold-format-field"><span>Top level</span><code>Array&lt;GoldSample&gt;</code></div>
             <div className="gold-format-field"><span>Each item</span><code>{`{ filename, answer }`}</code></div>
@@ -663,23 +680,25 @@ export default function CreateExperiment() {
             <button
               type="button"
               className={`upload-mode-card ${uploadMode === "files" ? "active" : ""}`}
+              aria-pressed={uploadMode === "files"}
               onClick={() => {
                 setUploadMode("files");
                 setError(null);
               }}
             >
-              <strong>Individual Media Files</strong>
+              <span className="upload-mode-heading"><Files size={18} aria-hidden="true" /><strong>Individual Media Files</strong>{uploadMode === "files" && <CheckCircle2 size={17} aria-hidden="true" />}</span>
               <span>Upload media files directly from your computer (best for small datasets &lt; 50MB)</span>
             </button>
             <button
               type="button"
               className={`upload-mode-card ${uploadMode === "bundle" ? "active" : ""}`}
+              aria-pressed={uploadMode === "bundle"}
               onClick={() => {
                 setUploadMode("bundle");
                 setError(null);
               }}
             >
-              <strong>Single Archive (.zip) for Large Datasets</strong>
+              <span className="upload-mode-heading"><FileArchive size={18} aria-hidden="true" /><strong>Single Archive (.zip) for Large Datasets</strong>{uploadMode === "bundle" && <CheckCircle2 size={17} aria-hidden="true" />}</span>
               <span>Resumable, chunked parallel upload with background extraction (supports multi-GB)</span>
             </button>
           </div>
@@ -687,9 +706,9 @@ export default function CreateExperiment() {
           {uploadMode === "files" ? (
             <>
               <div className="bundle-grid">
-                <label className="dropzone"><UploadCloud className="dropzone-icon" /><strong>1. {mediaPlugin?.uploadTitle ?? "Choose media files"}</strong><span>{mediaPlugin?.uploadHelp ?? "Choose supported media files"}</span><input type="file" multiple accept={mediaPlugin?.accept} hidden onChange={event => { setFiles(Array.from(event.target.files ?? [])); }} /></label>
-                <label className="dropzone compact"><UploadCloud className="dropzone-icon" /><strong>2. Upload metadata CSV (optional)</strong><span>{metadataCsv ? "CSV loaded — choose another to replace it" : 'Must contain a "filename" column'}</span><input type="file" accept=".csv,text/csv" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setMetadataCsv(await file.text()); } }} /></label>
-                <label className="dropzone compact"><UploadCloud className="dropzone-icon" /><strong>3. Upload gold answers JSON (optional)</strong><span>{goldManifest ? "JSON loaded — choose another to replace it" : "Only include samples used as quality checks"}</span><input type="file" accept=".json,application/json" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setGoldManifest(await file.text()); } }} /></label>
+                <label className={`dropzone ${files.length ? "loaded" : ""}`}>{files.length ? <CheckCircle2 className="dropzone-icon" /> : <UploadCloud className="dropzone-icon" />}<strong>1. {files.length ? `${files.length} media file${files.length === 1 ? "" : "s"} selected` : mediaPlugin?.uploadTitle ?? "Choose media files"}</strong><span>{files.length ? "Choose again to replace this selection" : mediaPlugin?.uploadHelp ?? "Choose supported media files"}</span><input type="file" multiple accept={mediaPlugin?.accept} hidden onChange={event => { setFiles(Array.from(event.target.files ?? [])); }} /></label>
+                <label className={`dropzone compact ${metadataCsv ? "loaded" : ""}`}>{metadataCsv ? <CheckCircle2 className="dropzone-icon" /> : <UploadCloud className="dropzone-icon" />}<strong>2. Upload metadata CSV (optional)</strong><span>{metadataCsv ? "CSV loaded — choose another to replace it" : 'Must contain a "filename" column'}</span><input type="file" accept=".csv,text/csv" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setMetadataCsv(await file.text()); } }} /></label>
+                <label className={`dropzone compact ${goldManifest ? "loaded" : ""}`}>{goldManifest ? <CheckCircle2 className="dropzone-icon" /> : <UploadCloud className="dropzone-icon" />}<strong>3. Upload gold answers JSON (optional)</strong><span>{goldManifest ? "JSON loaded — choose another to replace it" : "Only include samples used as quality checks"}</span><input type="file" accept=".json,application/json" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setGoldManifest(await file.text()); } }} /></label>
               </div>
               {(metadataCsv || goldManifest) && <div className="bundle-actions">{metadataCsv && <button type="button" className="btn btn-secondary" onClick={() => { setMetadataCsv(""); }}>Remove metadata CSV</button>}{goldManifest && <button type="button" className="btn btn-secondary" onClick={() => { setGoldManifest(""); }}>Remove gold JSON</button>}</div>}
               {files.length > 0 && <div className="file-list">{files.map(file => <div key={`${file.name}-${file.size}`}><span>{file.name}</span><span>{uploadStatus[file.name] || `${(file.size / 1024).toFixed(0)} KB`}</span></div>)}</div>}
@@ -699,8 +718,8 @@ export default function CreateExperiment() {
           ) : (
             <>
               {!bundleFile ? (
-                <label className="dropzone" style={{ padding: "40px 20px" }}>
-                  <FileArchive className="dropzone-icon" style={{ width: "48px", height: "48px", color: "var(--accent-strong)" }} />
+                <label className="dropzone archive-dropzone">
+                  <FileArchive className="dropzone-icon archive-icon" />
                   <strong>Choose a Dataset Archive (.zip)</strong>
                   <span>Archive must contain a top-level <code>media/</code> folder. Up to several GB supported.</span>
                   <input
@@ -725,7 +744,7 @@ export default function CreateExperiment() {
                   <div className="bundle-progress-track">
                     <div
                       className="bundle-progress-fill"
-                      style={{ width: `${bundleProgress?.percent ?? 0}%` }}
+                      style={{ transform: `scaleX(${(bundleProgress?.percent ?? 0) / 100})` }}
                     />
                   </div>
 
@@ -750,7 +769,7 @@ export default function CreateExperiment() {
                   </div>
 
                   {error && (bundleUploadStatus === "failed" || bundleJobStatus === "failed") && (
-                    <div style={{ color: "var(--danger)", fontSize: "0.875rem", margin: "10px 0 4px", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <div className="bundle-inline-error">
                       <AlertCircle size={15} />
                       <span>{error}</span>
                     </div>
@@ -787,7 +806,7 @@ export default function CreateExperiment() {
 
                   {bundleJobErrors.length > 0 && (
                     <div className="bundle-error-panel">
-                      <strong style={{ color: "var(--danger)", display: "block", marginBottom: "6px" }}>
+                      <strong className="bundle-error-title">
                         Archive Processing Errors ({bundleJobErrors.length})
                       </strong>
                       <table className="bundle-error-table">
@@ -809,11 +828,11 @@ export default function CreateExperiment() {
                     </div>
                   )}
 
-                  <div style={{ marginTop: "16px" }}>
-                    <p className="help-text" style={{ marginBottom: "8px" }}>
+                  <div className="bundle-followups">
+                    <p className="help-text bundle-followup-intro">
                       <strong>Optional Follow-ups:</strong> Add metadata attributes or gold answers referencing the files in your archive.
                     </p>
-                    <div className="bundle-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                    <div className="bundle-grid bundle-followup-grid">
                       <label className="dropzone compact">
                         <UploadCloud className="dropzone-icon" />
                         <strong>Upload metadata CSV (optional)</strong>
@@ -905,25 +924,30 @@ export default function CreateExperiment() {
           >
             <ArrowLeft size={17} /> Back
           </button>
-          {step < steps.length - 1 ? (
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={!canContinue}
-              onClick={() => setStep(value => value + 1)}
-            >
-              Continue <ArrowRight size={17} />
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-primary"
-              disabled={submitting || !canContinue}
-              onClick={handleFinishSetup}
-            >
-              {submitting ? "Saving & redirecting…" : "Finish setup"} <Check size={17} />
-            </button>
-          )}
+          <div className="wizard-action-primary">
+            {continueGuidance && <p id="wizard-action-guidance" className="wizard-action-guidance" aria-live="polite">{continueGuidance}</p>}
+            {step < steps.length - 1 ? (
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={!canContinue}
+                aria-describedby={!canContinue ? "wizard-action-guidance" : undefined}
+                onClick={() => setStep(value => value + 1)}
+              >
+                Continue <ArrowRight size={17} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={submitting || !canContinue}
+                aria-describedby={!canContinue ? "wizard-action-guidance" : undefined}
+                onClick={handleFinishSetup}
+              >
+                {submitting ? <><Loader2 size={17} className="spin-animate" /> Saving setup…</> : <>Finish setup <Check size={17} /></>}
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>
