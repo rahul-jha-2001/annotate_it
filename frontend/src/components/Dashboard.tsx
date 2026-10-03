@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
-import { Plus, Activity, ExternalLink, Eye, Share2 } from "lucide-react";
+import { Plus, Activity, AlertCircle, CheckCircle, ExternalLink, Eye, Loader2, Share2 } from "lucide-react";
 import { apiFetch } from "../api";
 
 export default function Dashboard() {
@@ -90,25 +90,47 @@ export default function Dashboard() {
               <div>
                 <h3 style={{ margin: "0 0 8px 0", fontSize: "1.25rem" }}>{exp.name}</h3>
                 <div className="flex-row" style={{ gap: "16px", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
-                  <span style={{ display: "flex", alignItems: "center", gap: "4px" }}>
-                    <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "var(--accent-primary)" }}></span>
-                    {exp.status === "draft" ? "Draft" : "Active"}
-                  </span>
+                  {exp.status === "active" ? (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", padding: "2px 8px", borderRadius: "12px", fontSize: "0.78rem", fontWeight: 600, background: "rgba(16, 185, 129, 0.12)", color: "#10b981", border: "1px solid rgba(16, 185, 129, 0.25)" }}>
+                      <CheckCircle size={12} /> Active
+                    </span>
+                  ) : exp.status === "draft_media_processing" ? (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", padding: "2px 8px", borderRadius: "12px", fontSize: "0.78rem", fontWeight: 600, background: "rgba(59, 130, 246, 0.12)", color: "#3b82f6", border: "1px solid rgba(59, 130, 246, 0.25)" }}>
+                      <Loader2 size={12} className="spin-animate" /> Processing dataset
+                    </span>
+                  ) : exp.status === "draft_media_failed" ? (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", padding: "2px 8px", borderRadius: "12px", fontSize: "0.78rem", fontWeight: 600, background: "rgba(239, 68, 68, 0.12)", color: "#ef4444", border: "1px solid rgba(239, 68, 68, 0.25)" }}>
+                      <AlertCircle size={12} /> Dataset failed
+                    </span>
+                  ) : (
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: "5px", padding: "2px 8px", borderRadius: "12px", fontSize: "0.78rem", fontWeight: 600, background: "rgba(148, 163, 184, 0.12)", color: "#94a3b8", border: "1px solid rgba(148, 163, 184, 0.25)" }}>
+                      Draft
+                    </span>
+                  )}
                   <span>Created: {new Date(exp.created_at).toLocaleDateString()}</span>
                   <span>ID: {exp.id.split("-")[0]}...</span>
                 </div>
               </div>
               <div className="flex-row" style={{ gap: "12px" }}>
-                <button className="btn btn-secondary" disabled={exp.status === "draft"} onClick={() => copyLink(exp.share_token)} title="Copy Share Link">
+                <button
+                  className="btn btn-secondary"
+                  disabled={exp.status !== "active"}
+                  onClick={() => copyLink(exp.share_token)}
+                  title={exp.status === "active" ? "Copy Share Link" : "Deploy experiment to enable sharing"}
+                >
                   <Share2 size={16} />
                 </button>
                 <Link href={`/experiments/${exp.id}`}>
                   <button className="btn btn-secondary">
-                    View Stats <ExternalLink size={16} />
+                    {exp.status === "active" ? "View Stats" : "Configure"} <ExternalLink size={16} />
                   </button>
                 </Link>
                 <Link href={`/experiments/${exp.id}/review`}>
-                  <button className="btn btn-secondary">
+                  <button
+                    className="btn btn-secondary"
+                    disabled={exp.status !== "active"}
+                    title={exp.status !== "active" ? "Review is available after deployment" : "Review annotations"}
+                  >
                     Review <Eye size={16} />
                   </button>
                 </Link>

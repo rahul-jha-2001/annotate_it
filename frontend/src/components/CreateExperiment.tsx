@@ -1,25 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
-  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Check,
   FileArchive,
-  Info,
   Loader2,
   Pause,
   Play,
-  Plus,
   RefreshCw,
   Settings,
-  Trash2,
   UploadCloud,
   X,
 } from "lucide-react";
 import AnnotationControl from "./annotator/AnnotationControl";
 import type { AnnotationAnswer, LabelSchema } from "./annotator/types";
-import AnnotationOverlaySelector, { buildOverlayOptions } from "./AnnotationOverlaySelector";
 import { getAnnotationPlugin, supportsAnnotationModule } from "../plugins/annotations/registry";
 import { getMediaPlugin, listMediaPlugins } from "../plugins/media/registry";
 import { apiFetch } from "../api";
@@ -28,18 +23,8 @@ import {
   type MultipartProgress,
   uploadMultipartFile,
 } from "../services/multipartUpload";
-import {
-  parseCsv,
-  parseDatasetBundle,
-  validateGold,
-  type MetadataFieldDefinition,
-  type ParsedDatasetRow,
-} from "./datasetBundle";
-import {
-  isDatasetAssemblyCurrent,
-  schemaFingerprint,
-  resolveExperimentPreset,
-} from "./experimentDraft";
+import { parseCsv } from "./datasetBundle";
+import { resolveExperimentPreset } from "./experimentDraft";
 
 interface AnnotationTypeInfo {
   key: string;
@@ -50,44 +35,7 @@ interface AnnotationTypeInfo {
   required_interaction: string;
 }
 
-interface QualificationQuestion {
-  key: string;
-  label: string;
-  type: "single_choice" | "multi_choice" | "boolean" | "number" | "text";
-  required: boolean;
-  options: string[];
-  minimum?: number;
-  maximum?: number;
-}
-
-interface RoutingRule {
-  metadata_field: string;
-  operator: "equals" | "in" | "gte";
-  question_key: string;
-}
-
-interface TeachingExampleDraft {
-  filename: string;
-  answer: AnnotationAnswer;
-  answerText: string;
-  explanation: string;
-  error?: string | null;
-  keepAsGold?: boolean;
-}
-
-const steps = ["Basics", "Task", "Dataset bundle", "Dataset preview", "Qualifications", "Teaching examples", "Review"];
-
-const routingOperatorFor = (
-  field: MetadataFieldDefinition | undefined,
-  question: QualificationQuestion | undefined,
-): RoutingRule["operator"] | null => {
-  if (!field || !question) return null;
-  if (field.type === "number" && question.type === "number") return "gte";
-  if (field.type === "boolean" && question.type === "boolean") return "equals";
-  if (["text", "choice"].includes(field.type) && question.type === "multi_choice") return "in";
-  if (["text", "choice"].includes(field.type) && question.type === "single_choice") return "equals";
-  return null;
-};
+const steps = ["Basics", "Task", "Dataset upload"];
 
 export default function CreateExperiment() {
   const [step, setStep] = useState(0);
@@ -105,15 +53,7 @@ export default function CreateExperiment() {
   const annotationType = annotationSchema.annotation_type;
   const [previewAnswer, setPreviewAnswer] = useState<AnnotationAnswer>({});
   const [files, setFiles] = useState<File[]>([]);
-  const [metadataFields, setMetadataFields] = useState<MetadataFieldDefinition[]>([]);
   const [metadataCsv, setMetadataCsv] = useState("");
-  const [datasetRows, setDatasetRows] = useState<ParsedDatasetRow[]>([]);
-  const [datasetErrors, setDatasetErrors] = useState<string[]>([]);
-  const [assembledSchemaFingerprint, setAssembledSchemaFingerprint] = useState<string | null>(null);
-  const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
-  const [questions, setQuestions] = useState<QualificationQuestion[]>([]);
-  const [rules, setRules] = useState<RoutingRule[]>([]);
-  const [teachingExamples, setTeachingExamples] = useState<TeachingExampleDraft[]>([]);
   const [goldManifest, setGoldManifest] = useState("");
   const [uploadStatus, setUploadStatus] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -125,6 +65,8 @@ export default function CreateExperiment() {
   const [bundleProgress, setBundleProgress] = useState<MultipartProgress | null>(null);
   const [bundleAbortController, setBundleAbortController] = useState<AbortController | null>(null);
   const [createdExperimentId, setCreatedExperimentId] = useState<string | null>(null);
+  const bundleUploadPromiseRef = useRef<Promise<void> | null>(null);
+  const createdExperimentIdRef = useRef<string | null>(null);
   const [bundleJobId, setBundleJobId] = useState<string | null>(null);
   const [bundleJobStatus, setBundleJobStatus] = useState<"queued" | "processing" | "completed" | "failed" | null>(null);
   const [bundleJobProgress, setBundleJobProgress] = useState<{ files_processed: number; files_total: number } | null>(null);
@@ -171,68 +113,6 @@ export default function CreateExperiment() {
     };
   }, [createdExperimentId, bundleJobId, bundleJobStatus]);
 
-  const [preDeployValidation, setPreDeployValidation] = useState<{
-    can_deploy: boolean;
-    status: string;
-    orphaned_gold_entries: string[];
-    missing_from_extraction: string[];
-    missing_from_metadata: string[];
-    blocker_reason?: string | null;
-    registered_count: number;
-    metadata_count: number;
-    gold_count: number;
-  } | null>(null);
-
-  useEffect(() => {
-    if (step !== 6 || !createdExperimentId) return;
-    let isCancelled = false;
-
-    const fetchValidation = async () => {
-      try {
-        const res = await apiFetch(`/api/experiments/${createdExperimentId}/pre-deploy-validation`);
-        if (res.ok && !isCancelled) {
-          const data = await res.json();
-          setPreDeployValidation(data);
-        }
-      } catch (err) {
-        console.error("Failed to fetch pre-deploy validation", err);
-      }
-    };
-
-    fetchValidation();
-    let interval: number | undefined;
-    if (bundleJobStatus === "processing" || bundleJobStatus === "queued") {
-      interval = window.setInterval(fetchValidation, 3000);
-    }
-    return () => {
-      isCancelled = true;
-      if (interval) clearInterval(interval);
-    };
-  }, [step, createdExperimentId, bundleJobStatus]);
-
-  const handleReuploadMedia = async () => {
-    if (!createdExperimentId) return;
-    setError(null);
-    try {
-      const res = await apiFetch(`/api/experiments/${createdExperimentId}/reupload-media`, { method: "POST" });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || "Failed to reset media upload session");
-      }
-      setBundleFile(null);
-      setBundleUploadStatus("idle");
-      setBundleJobStatus(null);
-      setBundleJobErrors([]);
-      setBundleJobApplied([]);
-      setDatasetRows([]);
-      setMetadataCsv("");
-      setGoldManifest("");
-      setPreDeployValidation(null);
-      setStep(2);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not reset media upload");
-    }
-  };
 
   useEffect(() => {
     apiFetch("/api/annotation-types").then(response => response.json()).then(setAnnotationTypes)
@@ -272,11 +152,7 @@ export default function CreateExperiment() {
     setPreviewAnswer(annotationPlugin?.createInitialAnswer(annotationSchema) ?? {});
   }, [annotationPlugin, annotationSchema]);
 
-  useEffect(() => {
-    const urls = Object.fromEntries(files.map(file => [file.name, URL.createObjectURL(file)]));
-    setMediaUrls(urls);
-    return () => Object.values(urls).forEach(url => URL.revokeObjectURL(url));
-  }, [files]);
+
 
   const goldAnswerShape = annotationPlugin?.goldAnswerShape(annotationSchema) ?? "Unknown answer format";
   const goldFileExample = JSON.stringify([{
@@ -288,248 +164,83 @@ export default function CreateExperiment() {
     const names = files.map(file => file.name);
     return new Set(names.filter((name, index) => names.indexOf(name) !== index));
   }, [files]);
-  const goldCount = datasetRows.filter(row => row.goldAnswer).length;
-  const regularCount = datasetRows.length - goldCount;
-  const datasetAssemblyCurrent = isDatasetAssemblyCurrent(
-    assembledSchemaFingerprint,
-    annotationSchema,
-  );
-
-  const addQuestion = () => {
-    let index = questions.length + 1;
-    while (questions.some(question => question.key === `question_${index}`)) index += 1;
-    const field = metadataFields[0];
-    const metadataValues = field
-      ? [...new Set(datasetRows.map(row => row.metadata[field.key]).filter(value => value !== undefined).map(String))]
-      : [];
-    const isLanguage = field?.key === "language";
-    const type: QualificationQuestion["type"] = field?.type === "number"
-      ? "number"
-      : field?.type === "boolean"
-        ? "boolean"
-        : "multi_choice";
-    const label = !field
-      ? "Which skills or languages do you have?"
-      : isLanguage
-        ? "Which languages can you understand?"
-        : field.type === "number"
-          ? `What is the highest ${field.label.toLowerCase()} you can handle?`
-          : field.type === "boolean"
-            ? `Can you work with samples where ${field.label.toLowerCase()} is required?`
-            : `Which ${field.label.toLowerCase()} options can you work with?`;
-    setQuestions(current => [...current, {
-      key: `question_${index}`,
-      label,
-      type,
-      required: true,
-      options: type.includes("choice") ? (field?.options.length ? field.options : metadataValues) : [],
-      minimum: type === "number" ? 0 : undefined,
-      maximum: type === "number" ? Math.max(5, ...metadataValues.map(Number).filter(Number.isFinite)) : undefined,
-    }]);
-  };
-
-  const updateQuestion = (index: number, patch: Partial<QualificationQuestion>) => {
-    setQuestions(current => current.map((question, position) => position === index ? { ...question, ...patch } : question));
-  };
-
-  const addRule = () => {
-    if (!metadataFields.length || !questions.length) return;
-    const pair = metadataFields.flatMap(field => questions.map(question => ({ field, question })))
-      .find(({ field, question }) => routingOperatorFor(field, question));
-    if (!pair) return;
-    setRules(current => [...current, {
-      metadata_field: pair.field.key,
-      operator: routingOperatorFor(pair.field, pair.question)!,
-      question_key: pair.question.key,
-    }]);
-  };
-
-  const allDatasetFilenames = useMemo(
-    () => datasetRows.map(row => row.filename),
-    [datasetRows]
-  );
 
 
-  const addTeachingExample = (fromGold = false) => {
-    const used = new Set(teachingExamples.map(te => te.filename));
-    const targetRow = fromGold
-      ? (datasetRows.find(r => r.goldAnswer && !used.has(r.filename)) || datasetRows.find(r => r.goldAnswer))
-      : (datasetRows.find(r => !used.has(r.filename)) || datasetRows[0]);
-    if (!targetRow) return;
+  const startBundleUpload = (fileToUpload: File) => {
+    const promise = (async () => {
+      setError(null);
+      setBundleFile(fileToUpload);
+      setBundleJobErrors([]);
+      setBundleJobStatus(null);
 
-    const filename = targetRow.filename;
-    const hasGold = Boolean(targetRow.goldAnswer);
-    const answer = hasGold
-      ? targetRow.goldAnswer!
-      : (annotationPlugin?.createGoldExample(annotationSchema) ?? {});
-
-    setTeachingExamples(current => [
-      ...current,
-      {
-        filename,
-        answer,
-        answerText: JSON.stringify(answer, null, 2),
-        explanation: "",
-        keepAsGold: false,
-      },
-    ]);
-  };
-
-  const updateTeachingExampleFile = (index: number, filename: string) => {
-    const targetRow = datasetRows.find(r => r.filename === filename);
-    const hasGold = Boolean(targetRow?.goldAnswer);
-    setTeachingExamples(current =>
-      current.map((item, pos) => {
-        if (pos !== index) return item;
-        if (hasGold && targetRow?.goldAnswer) {
-          return {
-            ...item,
-            filename,
-            answer: targetRow.goldAnswer,
-            answerText: JSON.stringify(targetRow.goldAnswer, null, 2),
-            error: null,
-            keepAsGold: false,
-          };
-        }
-        return { ...item, filename };
-      })
-    );
-  };
-
-  const useGoldAnswerForExample = (index: number) => {
-    setTeachingExamples(current =>
-      current.map((item, pos) => {
-        if (pos !== index) return item;
-        const targetRow = datasetRows.find(r => r.filename === item.filename);
-        if (!targetRow?.goldAnswer) return item;
-        return {
-          ...item,
-          answer: targetRow.goldAnswer,
-          answerText: JSON.stringify(targetRow.goldAnswer, null, 2),
-          error: null,
-        };
-      })
-    );
-  };
-
-  const updateTeachingExampleKeepAsGold = (index: number, keepAsGold: boolean) => {
-    setTeachingExamples(current =>
-      current.map((item, pos) => (pos === index ? { ...item, keepAsGold } : item))
-    );
-  };
-
-  const updateTeachingExampleAnswer = (index: number, text: string) => {
-    setTeachingExamples(current =>
-      current.map((item, pos) => {
-        if (pos !== index) return item;
-        if (!text.trim()) {
-          return {
-            ...item,
-            answerText: text,
-            answer: {},
-            error: "Answer cannot be empty",
-          };
-        }
+      let expId = createdExperimentId || createdExperimentIdRef.current;
+      if (!expId) {
         try {
-          const parsed = JSON.parse(text) as AnnotationAnswer;
-          const errors = validateGold(parsed, { schema: annotationSchema });
-          return {
-            ...item,
-            answerText: text,
-            answer: parsed,
-            error: errors.length ? errors.join("; ") : null,
-          };
-        } catch {
-          return {
-            ...item,
-            answerText: text,
-            error: "Answer is not valid JSON",
-          };
+          const expRes = await apiFetch("/api/experiments", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ...form,
+              name: form.name.trim() || `Experiment ${new Date().toLocaleDateString()}`,
+              instructions: form.instructions.trim() || "Instructions",
+              status: "draft",
+              label_schema: annotationSchema,
+              metadata_schema: [],
+              qualification_form: [],
+              routing_rules: [],
+            }),
+          });
+          const expData = await expRes.json();
+          if (!expRes.ok) {
+            throw new Error(typeof expData.detail === "string" ? expData.detail : "Could not create initial experiment draft");
+          }
+          expId = expData.id;
+          createdExperimentIdRef.current = expData.id;
+          setCreatedExperimentId(expData.id);
+        } catch (createErr) {
+          setBundleUploadStatus("failed");
+          setError(createErr instanceof Error ? createErr.message : "Failed to initialize experiment for bundle upload");
+          return;
         }
-      })
-    );
-  };
+      }
 
-  const updateTeachingExampleExplanation = (index: number, explanation: string) => {
-    setTeachingExamples(current =>
-      current.map((item, pos) => (pos === index ? { ...item, explanation } : item))
-    );
-  };
+      const controller = new AbortController();
+      setBundleAbortController(controller);
+      setBundleUploadStatus("uploading");
 
-  const removeTeachingExample = (index: number) => {
-    setTeachingExamples(current => current.filter((_, pos) => pos !== index));
-  };
-
-  const startBundleUpload = async (fileToUpload: File) => {
-    setError(null);
-    setBundleFile(fileToUpload);
-    setBundleJobErrors([]);
-    setBundleJobStatus(null);
-
-    let expId = createdExperimentId;
-    if (!expId) {
       try {
-        const expRes = await apiFetch("/api/experiments", {
+        const uploadRes = await uploadMultipartFile({
+          file: fileToUpload,
+          experimentId: expId,
+          onProgress: setBundleProgress,
+          abortSignal: controller.signal,
+        });
+
+        setBundleUploadStatus("completed");
+
+        const jobRes = await apiFetch(`/api/experiments/${expId}/bundle-upload`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...form,
-            name: form.name.trim() || `Experiment ${new Date().toLocaleDateString()}`,
-            instructions: form.instructions.trim() || "Instructions",
-            status: "draft",
-            label_schema: annotationSchema,
-            metadata_schema: [],
-            qualification_form: [],
-            routing_rules: [],
-          }),
+          body: JSON.stringify({ s3_key: uploadRes.s3_key }),
         });
-        const expData = await expRes.json();
-        if (!expRes.ok) {
-          throw new Error(typeof expData.detail === "string" ? expData.detail : "Could not create initial experiment draft");
+        const jobData = await jobRes.json();
+        if (!jobRes.ok) {
+          throw new Error(jobData.detail || "Failed to queue bundle extraction job");
         }
-        expId = expData.id;
-        setCreatedExperimentId(expData.id);
-      } catch (createErr) {
-        setBundleUploadStatus("failed");
-        setError(createErr instanceof Error ? createErr.message : "Failed to initialize experiment for bundle upload");
-        return;
+
+        setBundleJobId(jobData.job_id);
+        setBundleJobStatus("queued");
+      } catch (uploadErr) {
+        if (controller.signal.aborted) {
+          setBundleUploadStatus("paused");
+        } else {
+          setBundleUploadStatus("failed");
+          setError(uploadErr instanceof Error ? uploadErr.message : "Multipart upload failed");
+        }
       }
-    }
-
-    const controller = new AbortController();
-    setBundleAbortController(controller);
-    setBundleUploadStatus("uploading");
-
-    try {
-      const uploadRes = await uploadMultipartFile({
-        file: fileToUpload,
-        experimentId: expId,
-        onProgress: setBundleProgress,
-        abortSignal: controller.signal,
-      });
-
-      setBundleUploadStatus("completed");
-
-      const jobRes = await apiFetch(`/api/experiments/${expId}/bundle-upload`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ s3_key: uploadRes.s3_key }),
-      });
-      const jobData = await jobRes.json();
-      if (!jobRes.ok) {
-        throw new Error(jobData.detail || "Failed to queue bundle extraction job");
-      }
-
-      setBundleJobId(jobData.job_id);
-      setBundleJobStatus("queued");
-    } catch (uploadErr) {
-      if (controller.signal.aborted) {
-        setBundleUploadStatus("paused");
-      } else {
-        setBundleUploadStatus("failed");
-        setError(uploadErr instanceof Error ? uploadErr.message : "Multipart upload failed");
-      }
-    }
+    })();
+    bundleUploadPromiseRef.current = promise;
+    return promise;
   };
 
   const pauseBundleUpload = () => {
@@ -562,213 +273,106 @@ export default function CreateExperiment() {
     if (step === 1) return Boolean(annotationPlugin && currentType && annotationPlugin.validateSchema(annotationSchema).length === 0);
     if (step === 2) {
       if (uploadMode === "bundle") {
-        return Boolean(bundleFile && (bundleUploadStatus === "completed" || bundleJobStatus === "completed"));
+        return Boolean(bundleFile && bundleUploadStatus !== "failed");
       }
       return files.length > 0 && duplicateFiles.size === 0;
-    }
-    if (step === 3) {
-      if (uploadMode === "bundle" && bundleJobStatus !== "completed") {
-        return true;
-      }
-      return datasetAssemblyCurrent && datasetRows.length > 0 && datasetErrors.length === 0 && datasetRows.every(row => row.errors.length === 0);
-    }
-    if (step === 4) return questions.every(question => question.label.trim() && (!question.type.includes("choice") || question.options.length > 0));
-    if (step === 5) {
-      return teachingExamples.every(
-        te => Boolean(te.filename) && !te.error && validateGold(te.answer, { schema: annotationSchema }).length === 0
-      );
     }
     return true;
   })();
 
-  const assembleDataset = () => {
-    setError(null);
-    try {
-      const sourceFilenames = uploadMode === "bundle" && bundleJobApplied.length > 0
-        ? bundleJobApplied
-        : files.map(file => file.name);
-      const allowPending = uploadMode === "bundle" && bundleJobStatus !== "completed";
-      const parsed = parseDatasetBundle(sourceFilenames, metadataCsv, goldManifest, {
-        schema: annotationSchema,
-        allowPendingMedia: allowPending,
-      });
-      setMetadataFields(parsed.metadataFields);
-      setDatasetRows(parsed.rows);
-      setDatasetErrors(parsed.errors);
-      setAssembledSchemaFingerprint(schemaFingerprint(annotationSchema));
-      setRules([]);
-      setStep(3);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not read the dataset bundle");
-    }
-  };
-
-  const updateRowMetadata = (filename: string, key: string, value: string | number | boolean | undefined) => {
-    setDatasetRows(current => current.map(row => {
-      if (row.filename !== filename) return row;
-      const metadata = { ...row.metadata };
-      if (value === undefined) delete metadata[key];
-      else metadata[key] = value;
-      return {
-        ...row,
-        metadata,
-        errors: row.errors.filter(message => message !== "No metadata row matches this media file"),
-      };
-    }));
-  };
-
-  const updateRowGold = (filename: string, text: string) => {
-    setDatasetRows(current => current.map(row => {
-      if (row.filename !== filename) return row;
-      const metadataErrors = row.errors.filter(message => message === "No metadata row matches this media file");
-      if (!text.trim()) return { ...row, goldAnswer: null, errors: metadataErrors };
-      try {
-        const answer = JSON.parse(text) as Record<string, unknown>;
-        return {
-          ...row,
-          goldAnswer: answer,
-          errors: [...metadataErrors, ...validateGold(answer, { schema: annotationSchema })],
-        };
-      } catch {
-        return { ...row, errors: [...metadataErrors, "Gold answer is not valid JSON"] };
-      }
-    }));
-  };
-
-  const deploy = async () => {
+  const handleFinishSetup = async () => {
     setSubmitting(true);
     setError(null);
     try {
-      if (uploadMode === "bundle" && createdExperimentId) {
-        if (bundleJobStatus === "queued" || bundleJobStatus === "processing") {
-          throw new Error("Cannot deploy while media archive is processing");
+      if (uploadMode === "bundle") {
+        if (!bundleFile) {
+          throw new Error("Please select an archive file to upload");
         }
-        if (bundleJobStatus === "failed") {
-          throw new Error("Cannot deploy when media archive processing failed");
+        if (bundleUploadPromiseRef.current) {
+          await bundleUploadPromiseRef.current;
         }
-
-        const settingsRes = await apiFetch(`/api/experiments/${createdExperimentId}/settings`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            name: form.name.trim(),
-            instructions: form.instructions.trim(),
-            overlap_n: form.overlap_n,
-            gold_ratio: form.gold_ratio,
-            access_mode: form.access_mode,
-          }),
-        });
-        if (!settingsRes.ok) {
-          const errData = await settingsRes.json().catch(() => ({}));
-          throw new Error(errData.detail || "Could not update experiment settings");
+        const expId = createdExperimentId || createdExperimentIdRef.current;
+        if (!expId) {
+          throw new Error("Experiment draft was not created yet. Please wait a moment and try again.");
         }
-
-        const unitsRes = await apiFetch(`/api/experiments/${createdExperimentId}/data-units`);
-        const unitsJson = await unitsRes.json();
-        const registeredUnits: any[] = unitsJson.data_units || [];
-        const unitByFilename = new Map<string, string>();
-        for (const u of registeredUnits) {
-          if (u.filename) unitByFilename.set(u.filename, u.id);
-        }
-
-        const teachingMap = new Map(teachingExamples.map(te => [te.filename, te]));
-        const effectiveGoldEntries = new Map<string, AnnotationAnswer>();
-
-        for (const row of datasetRows) {
-          if (row.goldAnswer) {
-            const te = teachingMap.get(row.filename);
-            if (!te || te.keepAsGold) {
-              effectiveGoldEntries.set(row.filename, row.goldAnswer);
-            }
-          }
-        }
-        for (const te of teachingExamples) {
-          if (te.keepAsGold && te.answer) {
-            effectiveGoldEntries.set(te.filename, te.answer);
-          }
-        }
-
-        const goldEntries = Array.from(effectiveGoldEntries.entries()).map(([filename, answer]) => ({
-          filename,
-          answer,
-        }));
-
-        if (form.gold_ratio > 0 && goldEntries.length === 0) {
-          throw new Error('Add at least one scored gold answer or set quality-check frequency to "None"');
-        }
-
-        if (goldEntries.length) {
-          const goldResponse = await apiFetch(`/api/experiments/${createdExperimentId}/gold-manifest`, {
-            method: "POST",
+        try {
+          await apiFetch(`/api/experiments/${expId}/settings`, {
+            method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ manifest: goldEntries }),
+            body: JSON.stringify({
+              name: form.name.trim(),
+              instructions: form.instructions.trim(),
+              overlap_n: form.overlap_n,
+              gold_ratio: form.gold_ratio,
+              access_mode: form.access_mode,
+            }),
           });
-          const result = await goldResponse.json();
-          if (!goldResponse.ok || result.errors?.length) {
-            throw new Error(result.errors?.[0]?.error || "Could not apply gold answers");
-          }
+        } catch (settingsErr) {
+          console.warn("Could not patch settings on finish setup", settingsErr);
         }
-
-        if (teachingExamples.length > 0) {
-          const tePayload = teachingExamples.map(te => ({
-            data_unit_id: unitByFilename.get(te.filename),
-            displayed_answer: te.answer,
-            explanation: te.explanation.trim() || undefined,
-            keep_as_gold: Boolean(te.keepAsGold),
-          }));
-          if (tePayload.some(te => !te.data_unit_id)) {
-            throw new Error("Could not find matching uploaded file for teaching example");
-          }
-          const teResponse = await apiFetch(`/api/experiments/${createdExperimentId}/teaching-examples`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ teaching_examples: tePayload }),
-          });
-          if (!teResponse.ok) {
-            const teErr = await teResponse.json();
-            throw new Error(teErr.detail || "Could not configure teaching examples");
-          }
-        }
-
-        const deployResponse = await apiFetch(`/api/experiments/${createdExperimentId}/deploy`, { method: "POST" });
-        if (!deployResponse.ok) throw new Error((await deployResponse.json()).detail || "Could not deploy experiment");
-        window.location.assign(`/experiments/${createdExperimentId}`);
+        window.location.assign(`/experiments/${expId}`);
         return;
       }
 
-      if (!datasetRows.length || datasetErrors.length || datasetRows.some(row => row.errors.length)) {
-        throw new Error("Return to the dataset preview and resolve its validation errors");
+      // Individual files mode
+      if (!files.length) {
+        throw new Error("Please select at least one media file");
       }
-      if (!datasetAssemblyCurrent) {
-        throw new Error("The annotation task changed. Reassemble the dataset so its gold answers are validated against the current task");
+      if (duplicateFiles.size > 0) {
+        throw new Error(`Duplicate filenames are not allowed: ${[...duplicateFiles].join(", ")}`);
       }
-      if (form.gold_ratio > 0 && goldCount === 0) {
-        throw new Error('Add at least one gold answer or set quality-check frequency to "None"');
-      }
-      const datasetByFilename = new Map(datasetRows.map(row => [row.filename, row]));
 
       const experimentResponse = await apiFetch("/api/experiments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...form,
+          name: form.name.trim(),
+          instructions: form.instructions.trim(),
           status: "draft",
           label_schema: annotationSchema,
-          metadata_schema: metadataFields,
-          qualification_form: questions,
-          routing_rules: rules,
+          metadata_schema: [],
+          qualification_form: [],
+          routing_rules: [],
         }),
       });
       const experimentBody = await experimentResponse.json();
-      if (!experimentResponse.ok) throw new Error(typeof experimentBody.detail === "string" ? experimentBody.detail : "Invalid experiment configuration");
+      if (!experimentResponse.ok) {
+        throw new Error(typeof experimentBody.detail === "string" ? experimentBody.detail : "Invalid experiment configuration");
+      }
+      const expId = experimentBody.id;
 
       const presignResponse = await apiFetch("/api/uploads/presign", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filenames: files.map(file => file.name), experiment_id: experimentBody.id }),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filenames: files.map(file => file.name), experiment_id: expId }),
       });
-
       if (!presignResponse.ok) throw new Error("Could not prepare file uploads");
       const presigned = (await presignResponse.json()).urls;
+
+      const metadataByFilename = new Map<string, Record<string, any>>();
+      if (metadataCsv) {
+        try {
+          const parsed = parseCsv(metadataCsv.replace(/^\uFEFF/, ""));
+          if (parsed.length > 1) {
+            const headers = parsed[0].map(h => h.trim());
+            const fnIdx = headers.indexOf("filename");
+            if (fnIdx >= 0) {
+              parsed.slice(1).forEach(r => {
+                const fn = r[fnIdx]?.trim();
+                if (fn) {
+                  const attrs: Record<string, any> = {};
+                  headers.forEach((h, i) => { if (i !== fnIdx && r[i]) attrs[h] = r[i]; });
+                  metadataByFilename.set(fn, attrs);
+                }
+              });
+            }
+          }
+        } catch (e) {
+          console.error("Error parsing metadata CSV for individual files", e);
+        }
+      }
+
       const dataUnits = await Promise.all(files.map(async file => {
         const target = presigned.find((item: any) => item.filename === file.name);
         if (!target) throw new Error(`Missing upload URL for ${file.name}`);
@@ -776,81 +380,33 @@ export default function CreateExperiment() {
         const response = await fetch(target.upload_url, { method: "PUT", body: file, headers: { "Content-Type": file.type } });
         if (!response.ok) throw new Error(`Upload failed: ${file.name}`);
         setUploadStatus(current => ({ ...current, [file.name]: "Uploaded" }));
-        return { raw_uri: target.s3_uri, metadata: datasetByFilename.get(file.name)?.metadata ?? {} };
+        return { raw_uri: target.s3_uri, metadata: metadataByFilename.get(file.name) ?? {} };
       }));
 
-      const unitsResponse = await apiFetch(`/api/experiments/${experimentBody.id}/data-units`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+      const unitsResponse = await apiFetch(`/api/experiments/${expId}/data-units`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ items: dataUnits }),
       });
       const unitsData = await unitsResponse.json();
       if (!unitsResponse.ok) throw new Error(unitsData.detail || "Could not register dataset");
 
-      const teachingMap = new Map(teachingExamples.map(te => [te.filename, te]));
-      const effectiveGoldEntries = new Map<string, AnnotationAnswer>();
-
-      for (const row of datasetRows) {
-        if (row.goldAnswer) {
-          const te = teachingMap.get(row.filename);
-          if (!te || te.keepAsGold) {
-            effectiveGoldEntries.set(row.filename, row.goldAnswer);
+      if (goldManifest) {
+        try {
+          const manifestObj = JSON.parse(goldManifest);
+          if (Array.isArray(manifestObj) && manifestObj.length > 0) {
+            await apiFetch(`/api/experiments/${expId}/gold-manifest`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ manifest: manifestObj }),
+            });
           }
+        } catch (e) {
+          console.error("Error saving gold manifest", e);
         }
       }
 
-      for (const te of teachingExamples) {
-        if (te.keepAsGold && te.answer) {
-          effectiveGoldEntries.set(te.filename, te.answer);
-        }
-      }
-
-      const goldEntries = Array.from(effectiveGoldEntries.entries()).map(([filename, answer]) => ({
-        filename,
-        answer,
-      }));
-
-      if (form.gold_ratio > 0 && goldEntries.length === 0) {
-        throw new Error('Add at least one scored gold answer or set quality-check frequency to "None"');
-      }
-
-      if (goldEntries.length) {
-        const goldResponse = await apiFetch(`/api/experiments/${experimentBody.id}/gold-manifest`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ manifest: goldEntries }),
-        });
-        const result = await goldResponse.json();
-        if (!goldResponse.ok || result.errors?.length) throw new Error(result.errors?.[0]?.error || "Could not apply gold answers");
-      }
-
-      if (teachingExamples.length > 0) {
-        const unitByFilename = new Map<string, string>();
-        for (const unit of unitsData.data_units || []) {
-          const fn = unit.raw_uri?.split("/").pop();
-          if (fn) unitByFilename.set(fn, unit.id);
-        }
-        const tePayload = teachingExamples.map(te => ({
-          data_unit_id: unitByFilename.get(te.filename),
-          displayed_answer: te.answer,
-          explanation: te.explanation.trim() || undefined,
-          keep_as_gold: Boolean(te.keepAsGold),
-        }));
-        if (tePayload.some(te => !te.data_unit_id)) {
-          throw new Error("Could not find matching uploaded file for teaching example");
-        }
-        const teResponse = await apiFetch(`/api/experiments/${experimentBody.id}/teaching-examples`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ teaching_examples: tePayload }),
-        });
-        if (!teResponse.ok) {
-          const teErr = await teResponse.json();
-          throw new Error(teErr.detail || "Could not configure teaching examples");
-        }
-      }
-
-      const deployResponse = await apiFetch(`/api/experiments/${experimentBody.id}/deploy`, { method: "POST" });
-      if (!deployResponse.ok) throw new Error((await deployResponse.json()).detail || "Could not deploy experiment");
-      window.location.assign(`/experiments/${experimentBody.id}`);
+      window.location.assign(`/experiments/${expId}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not create experiment");
     } finally {
@@ -879,11 +435,7 @@ export default function CreateExperiment() {
         <div className="wizard-title"><Settings size={24} className="app-logo-icon" aria-hidden="true" /><div><span className="wizard-step-count">Step {step + 1} of {steps.length}</span><h2>{steps[step]}</h2><p>{[
           "Name the experiment, explain the work, and choose how annotators join.",
           "Choose what annotators will submit.",
-          "Add media, metadata, and gold answers together.",
-          "Inspect every assembled sample before upload.",
-          "Decide which annotators are eligible for each type of sample.",
-          "Show annotators observational examples with the correct answer before real work begins.",
-          "Confirm quality settings and deploy.",
+          "Add media files or an archive, optional metadata, and gold answers.",
         ][step]}</p></div></div>
 
         {/* Sticky Bundle Status Banner */}
@@ -981,7 +533,7 @@ export default function CreateExperiment() {
               ))}
             </div>
           </div>
-          <div className="form-group"><label className="form-label" htmlFor="experiment-media-type">Media type</label><select id="experiment-media-type" className="form-select" value={form.modality} onChange={event => { setForm({ ...form, modality: event.target.value }); setFiles([]); setDatasetRows([]); }}>{listMediaPlugins().map(plugin => <option key={plugin.key} value={plugin.key}>{plugin.name}</option>)}</select></div>
+          <div className="form-group"><label className="form-label" htmlFor="experiment-media-type">Media type</label><select id="experiment-media-type" className="form-select" value={form.modality} onChange={event => { setForm({ ...form, modality: event.target.value }); setFiles([]); }}>{listMediaPlugins().map(plugin => <option key={plugin.key} value={plugin.key}>{plugin.name}</option>)}</select></div>
         </div>}
 
         {step === 1 && <div className="task-config-layout">
@@ -1047,11 +599,11 @@ export default function CreateExperiment() {
           {uploadMode === "files" ? (
             <>
               <div className="bundle-grid">
-                <label className="dropzone"><UploadCloud className="dropzone-icon" /><strong>1. {mediaPlugin?.uploadTitle ?? "Choose media files"}</strong><span>{mediaPlugin?.uploadHelp ?? "Choose supported media files"}</span><input type="file" multiple accept={mediaPlugin?.accept} hidden onChange={event => { setFiles(Array.from(event.target.files ?? [])); setDatasetRows([]); }} /></label>
-                <label className="dropzone compact"><UploadCloud className="dropzone-icon" /><strong>2. Upload metadata CSV (optional)</strong><span>{metadataCsv ? "CSV loaded — choose another to replace it" : 'Must contain a "filename" column'}</span><input type="file" accept=".csv,text/csv" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setMetadataCsv(await file.text()); setDatasetRows([]); } }} /></label>
-                <label className="dropzone compact"><UploadCloud className="dropzone-icon" /><strong>3. Upload gold answers JSON (optional)</strong><span>{goldManifest ? "JSON loaded — choose another to replace it" : "Only include samples used as quality checks"}</span><input type="file" accept=".json,application/json" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setGoldManifest(await file.text()); setDatasetRows([]); } }} /></label>
+                <label className="dropzone"><UploadCloud className="dropzone-icon" /><strong>1. {mediaPlugin?.uploadTitle ?? "Choose media files"}</strong><span>{mediaPlugin?.uploadHelp ?? "Choose supported media files"}</span><input type="file" multiple accept={mediaPlugin?.accept} hidden onChange={event => { setFiles(Array.from(event.target.files ?? [])); }} /></label>
+                <label className="dropzone compact"><UploadCloud className="dropzone-icon" /><strong>2. Upload metadata CSV (optional)</strong><span>{metadataCsv ? "CSV loaded — choose another to replace it" : 'Must contain a "filename" column'}</span><input type="file" accept=".csv,text/csv" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setMetadataCsv(await file.text()); } }} /></label>
+                <label className="dropzone compact"><UploadCloud className="dropzone-icon" /><strong>3. Upload gold answers JSON (optional)</strong><span>{goldManifest ? "JSON loaded — choose another to replace it" : "Only include samples used as quality checks"}</span><input type="file" accept=".json,application/json" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setGoldManifest(await file.text()); } }} /></label>
               </div>
-              {(metadataCsv || goldManifest) && <div className="bundle-actions">{metadataCsv && <button type="button" className="btn btn-secondary" onClick={() => { setMetadataCsv(""); setDatasetRows([]); }}>Remove metadata CSV</button>}{goldManifest && <button type="button" className="btn btn-secondary" onClick={() => { setGoldManifest(""); setDatasetRows([]); }}>Remove gold JSON</button>}</div>}
+              {(metadataCsv || goldManifest) && <div className="bundle-actions">{metadataCsv && <button type="button" className="btn btn-secondary" onClick={() => { setMetadataCsv(""); }}>Remove metadata CSV</button>}{goldManifest && <button type="button" className="btn btn-secondary" onClick={() => { setGoldManifest(""); }}>Remove gold JSON</button>}</div>}
               {files.length > 0 && <div className="file-list">{files.map(file => <div key={`${file.name}-${file.size}`}><span>{file.name}</span><span>{uploadStatus[file.name] || `${(file.size / 1024).toFixed(0)} KB`}</span></div>)}</div>}
               {duplicateFiles.size > 0 && <p className="form-error">Duplicate filenames are not allowed: {[...duplicateFiles].join(", ")}</p>}
               <details><summary>Input formats</summary><p className="help-text">Metadata CSV example: <code>filename,language,difficulty</code>. Gold JSON uses the format shown on the Task step; for this modality an example filename is <code>{mediaPlugin?.exampleFilename}</code>. Filenames must match the selected media exactly.</p></details>
@@ -1187,7 +739,6 @@ export default function CreateExperiment() {
                             if (file) {
                               const text = await file.text();
                               setMetadataCsv(text);
-                              setDatasetRows([]);
                               if (createdExperimentId) {
                                 try {
                                   const parsed = parseCsv(text.replace(/^\uFEFF/, ""));
@@ -1229,7 +780,6 @@ export default function CreateExperiment() {
                             if (file) {
                               const text = await file.text();
                               setGoldManifest(text);
-                              setDatasetRows([]);
                               if (createdExperimentId) {
                                 try {
                                   const manifestObj = JSON.parse(text);
@@ -1256,407 +806,32 @@ export default function CreateExperiment() {
           )}
           {error && <p className="form-error">{error}</p>}
         </div>}
-
-        {step === 3 && <div className="flex-col">
-          {uploadMode === "bundle" && bundleJobStatus !== "completed" && datasetRows.length === 0 ? (
-            <div className="empty-builder" style={{ padding: "40px 20px" }}>
-              <Loader2 size={32} className="spin-animate text-blue-600" style={{ margin: "0 auto 12px" }} />
-              <strong>Media archive is processing in the background</strong>
-              <span>
-                Processed {bundleJobProgress?.files_processed ?? 0} of {bundleJobProgress?.files_total ?? "?"} files.
-                Upload a metadata CSV in the previous step to preview declared samples immediately, or wait for extraction to finish.
-                You can continue to Qualifications and Teaching Examples now!
-              </span>
-            </div>
-          ) : (
-            <>
-              {uploadMode === "bundle" && bundleJobStatus !== "completed" && (
-                <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "12px 16px", background: "rgba(59, 130, 246, 0.08)", border: "1px solid rgba(59, 130, 246, 0.25)", borderRadius: "8px", marginBottom: "16px", color: "var(--text-main)" }}>
-                  <Loader2 size={18} className="spin-animate" style={{ color: "#3b82f6", flexShrink: 0 }} />
-                  <div>
-                    <strong>Media extracting in background ({bundleJobProgress?.files_processed ?? 0} / {bundleJobProgress?.files_total ?? "?"} files processed)</strong>
-                    <div style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Previewing declared metadata and gold answers. Media thumbnails will appear once extraction completes.</div>
-                  </div>
-                </div>
-              )}
-              {!datasetAssemblyCurrent && <p className="form-error">The annotation task changed after this dataset was assembled. Go back to “Dataset bundle” and select “Assemble &amp; preview” again to revalidate every gold answer.</p>}
-              <div className="dataset-summary">
-                <div><strong>{datasetRows.length}</strong><span>samples</span></div>
-                <div><strong>{metadataFields.length}</strong><span>metadata fields</span></div>
-                <div><strong>{goldCount}</strong><span>gold samples</span></div>
-                <div><strong>{datasetErrors.length + datasetRows.filter(row => row.errors.length).length}</strong><span>issues</span></div>
-              </div>
-              {datasetErrors.map(message => <p className="form-error" key={message}>{message}</p>)}
-              <div className="dataset-table-wrap"><table className="dataset-table"><thead><tr><th style={{ minWidth: "220px" }}>Sample</th>{metadataFields.map(field => <th key={field.key}>{field.label}</th>)}<th>Gold answer</th><th>Status</th></tr></thead><tbody>
-                {datasetRows.map(row => <tr key={row.filename} className={row.errors.length ? "invalid" : ""}>
-                  <td style={{ minWidth: "220px", verticalAlign: "top" }}>
-                    <strong style={{ display: "block", marginBottom: "6px", wordBreak: "break-all" }}>{row.filename}</strong>
-                    <div className="sample-row-preview">
-                      {(!mediaUrls[row.filename] && uploadMode === "bundle" && bundleJobStatus !== "completed") ? (
-                        <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: "var(--text-muted)", fontSize: "0.85rem", background: "var(--surface-hover)", padding: "4px 8px", borderRadius: "4px" }}>
-                          <Loader2 size={13} className="spin-animate" /> Media extracting...
-                        </div>
-                      ) : mediaPlugin && mediaUrls[row.filename] ? (
-                        row.goldAnswer ? (
-                          <AnnotationOverlaySelector modality={form.modality} schema={annotationSchema} mediaUrl={mediaUrls[row.filename]} title={row.filename} options={buildOverlayOptions(row.goldAnswer as AnnotationAnswer, [])} />
-                        ) : (
-                          <mediaPlugin.PreviewRenderer mediaUrl={mediaUrls[row.filename]} title={row.filename} />
-                        )
-                      ) : (
-                        <span>Unsupported or pending media</span>
-                      )}
-                    </div>
-                  </td>
-                  {metadataFields.map(field => <td key={field.key}>
-                    {field.type === "choice" ? <select className="table-input" value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value || undefined)}><option value="">—</option>{field.options.map(option => <option key={option}>{option}</option>)}</select>
-                      : field.type === "boolean" ? <select className="table-input" value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value ? event.target.value === "true" : undefined)}><option value="">—</option><option value="true">Yes</option><option value="false">No</option></select>
-                        : <input className="table-input" type={field.type === "number" ? "number" : "text"} value={String(row.metadata[field.key] ?? "")} onChange={event => updateRowMetadata(row.filename, field.key, event.target.value ? (field.type === "number" ? event.target.valueAsNumber : event.target.value) : undefined)} />}
-                  </td>)}
-                  <td><textarea className="table-input gold-cell" defaultValue={row.goldAnswer ? JSON.stringify(row.goldAnswer) : ""} placeholder="Not gold" onBlur={event => updateRowGold(row.filename, event.target.value)} /></td>
-                  <td>{row.errors.length ? <span className="status-error" title={row.errors.join("; ")}>Needs attention</span> : <span className="status-ready">Ready</span>}{row.errors.map(message => <small className="row-error" key={message}>{message}</small>)}</td>
-                </tr>)}
-              </tbody></table></div>
-              <p className="help-text">Metadata cells and gold JSON can be corrected here. Use “Back” to replace any source file.</p>
-            </>
-          )}
-        </div>}
-
-        {step === 4 && <div className="flex-col">
-          <div className="qualification-guide">
-            <strong>Who is qualified to annotate each sample?</strong>
-            <p>First ask the annotator about a skill, language, or proficiency. Then connect their answer to a metadata column from your dataset.</p>
-            <span>Example: ask “Which languages can you understand?” → only serve a Hindi sample when Hindi is among their answers.</span>
-          </div>
-
-          <div className="section-heading"><div><h3>1. Questions for the annotator</h3><p>These are shown once, before the annotator receives any samples.</p></div><button type="button" className="btn btn-secondary" onClick={addQuestion}><Plus size={16} /> Add question</button></div>
-          {questions.length === 0 && <div className="empty-builder"><strong>No qualification questions yet.</strong><span>Add a question if some samples require a particular language or skill. Otherwise, you can continue and all annotators will be eligible.</span></div>}
-          {questions.map((question, index) => <div className="builder-card qualification-card" key={question.key}>
-            <div className="card-heading"><strong>Question {index + 1}</strong><button type="button" className="icon-button" aria-label={`Delete question ${index + 1}`} onClick={() => { setQuestions(current => current.filter((_, position) => position !== index)); setRules(current => current.filter(rule => rule.question_key !== question.key)); }}><Trash2 size={17} /></button></div>
-            <div className="qualification-question-grid">
-              <div className="form-group"><label className="form-label">Question shown to the annotator</label><input className="form-input" value={question.label} onChange={event => updateQuestion(index, { label: event.target.value })} placeholder="Which languages can you understand?" /></div>
-              <div className="form-group"><label className="form-label">How should they answer?</label><select className="form-select" value={question.type} onChange={event => { const type = event.target.value as QualificationQuestion["type"]; updateQuestion(index, { type, options: type.includes("choice") ? question.options : [] }); setRules(current => current.filter(rule => rule.question_key !== question.key)); }}><option value="single_choice">Choose one option</option><option value="multi_choice">Choose all that apply</option><option value="boolean">Yes or No</option><option value="number">Numeric proficiency level</option><option value="text">Free-text response (not for routing)</option></select></div>
-            </div>
-            {question.type.includes("choice") && <div className="form-group"><label className="form-label">Answer options <span>— separate with commas</span></label><input className="form-input" value={question.options.join(", ")} onChange={event => updateQuestion(index, { options: event.target.value.split(",").map(value => value.trim()).filter(Boolean) })} placeholder="Hindi, English, Marathi" /></div>}
-            {question.type === "number" && <div className="qualification-range"><div className="form-group"><label className="form-label">Lowest answer allowed</label><input className="form-input" type="number" value={question.minimum ?? 0} onChange={event => updateQuestion(index, { minimum: event.target.valueAsNumber })} /></div><div className="form-group"><label className="form-label">Highest answer allowed</label><input className="form-input" type="number" value={question.maximum ?? 5} onChange={event => updateQuestion(index, { maximum: event.target.valueAsNumber })} /></div></div>}
-            {question.type === "text" && <p className="non-routing-note">Free-text answers are collected with the annotator profile for review. They cannot be selected in matching rules.</p>}
-            {!question.label.trim() && <p className="form-error">Write the question that the annotator will see.</p>}
-            {question.type.includes("choice") && question.options.length === 0 && <p className="form-error">Add at least one answer option.</p>}
-            <label className="required-toggle"><input type="checkbox" checked={question.required} onChange={event => updateQuestion(index, { required: event.target.checked })} />Annotator must answer this question</label>
-          </div>)}
-
-          {metadataFields.length === 0 && questions.length > 0 && <div className="routing-note">Your dataset has no metadata columns, so answers cannot be used to route particular samples. The questions will only be recorded as annotator qualifications.</div>}
-          {metadataFields.length > 0 && questions.length > 0 && <>
-            <div className="section-heading"><div><h3>2. Match answers to samples</h3><p>A sample is served only when every rule below matches.</p></div><button type="button" className="btn btn-secondary" onClick={addRule} disabled={!metadataFields.some(field => questions.some(question => routingOperatorFor(field, question)))}><Plus size={16} /> Add matching rule</button></div>
-            {rules.length === 0 && <div className="empty-builder"><strong>No matching rules yet.</strong><span>The questions will be recorded, but they will not restrict which samples an annotator receives.</span></div>}
-            {rules.map((rule, index) => {
-              const selectedField = metadataFields.find(field => field.key === rule.metadata_field);
-              const selectedQuestion = questions.find(question => question.key === rule.question_key);
-              const operatorText = rule.operator === "in" ? "is included in" : rule.operator === "gte" ? "is at or below" : "exactly equals";
-              return <div className="routing-card" key={index}>
-                <div className="card-heading"><strong>Matching rule {index + 1}</strong><button type="button" className="icon-button" aria-label={`Delete matching rule ${index + 1}`} onClick={() => setRules(current => current.filter((_, position) => position !== index))}><Trash2 size={17} /></button></div>
-                <div className="routing-sentence"><span>Serve a sample when its</span><select className="form-select" aria-label="Sample metadata field" value={rule.metadata_field} onChange={event => { const field = metadataFields.find(item => item.key === event.target.value); const compatibleQuestion = questions.find(question => routingOperatorFor(field, question)) ?? selectedQuestion; const operator = routingOperatorFor(field, compatibleQuestion); if (compatibleQuestion && operator) setRules(current => current.map((value, position) => position === index ? { ...value, metadata_field: field!.key, question_key: compatibleQuestion.key, operator } : value)); }}>{metadataFields.map(field => <option key={field.key} value={field.key}>{field.label}</option>)}</select><strong>{operatorText}</strong><span>the annotator’s answer to</span><select className="form-select" aria-label="Qualification question" value={rule.question_key} onChange={event => { const question = questions.find(item => item.key === event.target.value); const compatibleField = metadataFields.find(field => routingOperatorFor(field, question)) ?? selectedField; const operator = routingOperatorFor(compatibleField, question); if (compatibleField && question && operator) setRules(current => current.map((value, position) => position === index ? { ...value, metadata_field: compatibleField.key, question_key: question.key, operator } : value)); }}>{questions.filter(question => routingOperatorFor(selectedField, question)).map(question => <option key={question.key} value={question.key}>{question.label}</option>)}</select></div>
-                <p className="routing-meaning">For example, a sample with <strong>{selectedField?.label ?? "metadata"}</strong> will be served only when it matches the answer to “{selectedQuestion?.label ?? "the selected question"}”.</p>
-              </div>;
-            })}
-          </>}
-        </div>}
-
-        {step === 5 && <div className="flex-col">
-          <div className="qualification-guide teaching-guide">
-            <strong>Teaching examples are optional</strong>
-            <p>
-              Show annotators concrete examples with the correct answer visible before real work starts.
-              Teaching examples are purely observational — not interactive and not scored.
-            </p>
-            <span>
-              Recommendation: Select 2–5 samples. You can use samples with gold answers or regular samples. If using a gold sample, you can choose whether to also keep it in the scored gold queue.
-            </span>
-          </div>
-
-          <div className="section-heading">
-            <div>
-              <h3>Teaching Examples</h3>
-              <p>Configure examples that demonstrate correct annotations.</p>
-            </div>
-            <div className="section-actions">
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={() => addTeachingExample(false)}
-                disabled={allDatasetFilenames.length === 0}
-              >
-                <Plus size={16} /> Add teaching example
-              </button>
-              {/* {goldRows.length > 0 && (
-                <button
-                  type="button"
-                  className="btn btn-secondary"
-                  onClick={() => addTeachingExample(true)}
-                  disabled={allDatasetFilenames.length === 0}
-                >
-                  <Plus size={16} /> Use gold answer as teaching example
-                </button>
-              )} */}
-            </div>
-          </div>
-
-          {allDatasetFilenames.length === 0 && (
-            <p className="form-error" role="alert">
-              No media files found in this dataset. Add media in step 3 to configure teaching examples.
-            </p>
-          )}
-
-          {teachingExamples.length === 0 && allDatasetFilenames.length > 0 && (
-            <div className="empty-builder">
-              <strong>No teaching examples configured.</strong>
-              <span>
-                Annotators will proceed directly to real annotation tasks after joining (and passing any qualifications).
-              </span>
-            </div>
-          )}
-
-          {teachingExamples.map((item, index) => {
-            const rowForFile = datasetRows.find(r => r.filename === item.filename);
-            const hasGoldAnswer = Boolean(rowForFile?.goldAnswer);
-            return (
-              <div className="builder-card teaching-card" key={`${item.filename}-${index}`}>
-                <div className="card-heading">
-                  <div className="teaching-card-title">
-                    <strong>Teaching Example {index + 1}</strong>
-                    {hasGoldAnswer && (
-                      <span className="teaching-badge">
-                        Gold answer source
-                      </span>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    className="icon-button"
-                    aria-label={`Delete teaching example ${index + 1}`}
-                    onClick={() => removeTeachingExample(index)}
-                  >
-                    <Trash2 size={17} />
-                  </button>
-                </div>
-
-                <div className="qualification-question-grid">
-                  <div className="form-group">
-                    <div className="teaching-field-heading">
-                      <label className="form-label" htmlFor={`teaching-file-${index}`}>Sample file</label>
-                      {hasGoldAnswer && (
-                        <button
-                          type="button"
-                          className="btn btn-secondary btn-compact"
-                          onClick={() => useGoldAnswerForExample(index)}
-                        >
-                          Reset to gold answer
-                        </button>
-                      )}
-                    </div>
-                    <select
-                      id={`teaching-file-${index}`}
-                      className="form-select"
-                      value={item.filename}
-                      onChange={event => updateTeachingExampleFile(index, event.target.value)}
-                    >
-                      {allDatasetFilenames.map(fn => {
-                        const isGold = Boolean(datasetRows.find(r => r.filename === fn)?.goldAnswer);
-                        return (
-                          <option key={fn} value={fn}>
-                            {fn} {isGold ? "★ (Gold sample)" : ""}
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-
-                <div className="form-group">
-                  <label className="form-label" htmlFor={`teaching-explanation-${index}`}>Explanation <span>— optional</span></label>
-                  <input
-                    id={`teaching-explanation-${index}`}
-                    className="form-input"
-                    value={item.explanation}
-                    onChange={event => updateTeachingExampleExplanation(index, event.target.value)}
-                    placeholder="One-line note explaining why this is correct"
-                  />
-                </div>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label" htmlFor={`teaching-answer-${index}`}>Correct answer JSON</label>
-                <textarea
-                  id={`teaching-answer-${index}`}
-                  className="table-input gold-cell teaching-answer-input"
-                  aria-invalid={Boolean(item.error)}
-                  aria-describedby={item.error ? `teaching-answer-error-${index}` : undefined}
-                  value={item.answerText}
-                  onChange={event => updateTeachingExampleAnswer(index, event.target.value)}
-                  placeholder="JSON answer"
-                />
-                {item.error && <p className="form-error" id={`teaching-answer-error-${index}`} role="alert">{item.error}</p>}
-              </div>
-
-              <div className="teaching-gold-option">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(item.keepAsGold)}
-                    onChange={e => updateTeachingExampleKeepAsGold(index, e.target.checked)}
-                  />
-                  <div>
-                    <strong>Also keep as scored gold item</strong>
-                    <span className="help-text">
-                      {item.keepAsGold
-                        ? "Annotators will observe this answer upfront in onboarding AND will also encounter it later in the scored queue to test accuracy."
-                        : "Annotators will observe this answer upfront in onboarding only. It will NOT appear in the scored gold queue."}
-                    </span>
-                  </div>
-                </label>
-              </div>
-
-              {item.filename && mediaUrls[item.filename] && (
-                <div className="teaching-preview-wrapper">
-                  <span className="teaching-section-label">
-                    Preview with answer overlay
-                  </span>
-                  <AnnotationOverlaySelector
-                    modality={form.modality}
-                    schema={annotationSchema}
-                    mediaUrl={mediaUrls[item.filename]}
-                    title={item.filename}
-                    options={[
-                      {
-                        id: "teaching-answer",
-                        label: "Example Answer",
-                        answer: item.answer,
-                      },
-                    ]}
-                  />
-                </div>
-              )}
-              </div>
-            );
-          })}
-        </div>}
-
-        {step === 6 && <div className="flex-col">
-          <div className="quality-grid"><div className="form-group"><label className="form-label">People per regular sample</label><input className="form-input" type="number" min="1" max="100" value={form.overlap_n} onChange={event => setForm({ ...form, overlap_n: event.target.valueAsNumber })} /></div><div className="form-group"><label className="form-label">Quality-check frequency</label><select className="form-select" value={form.gold_ratio} onChange={event => setForm({ ...form, gold_ratio: Number(event.target.value) })}><option value="0">None</option><option value="0.05">Light — 5%</option><option value="0.1">Recommended — 10%</option><option value="0.2">Strict — 20%</option></select></div></div>
-          <div className="workload-card"><strong>Estimated regular assignments</strong><span>{regularCount} regular samples × {form.overlap_n} people</span><h2>{regularCount * form.overlap_n}</h2></div>
-          <div className="review-grid">
-            <div><span>Name</span><strong>{form.name}</strong></div>
-            <div><span>Task</span><strong>{currentType?.name}</strong></div>
-            <div><span>Annotator access</span><strong>{form.access_mode === "sign_in_required" ? "Sign-in required" : form.access_mode === "guest_name" ? "Name required" : "Fully anonymous"}</strong></div>
-            <div><span>Samples</span><strong>{datasetRows.length} ({goldCount} gold)</strong></div>
-            <div><span>Teaching examples</span><strong>{teachingExamples.length ? `${teachingExamples.length} (observational)` : "None"}</strong></div>
-            <div><span>Metadata fields</span><strong>{metadataFields.length}</strong></div>
-            <div><span>Qualification questions</span><strong>{questions.length}</strong></div>
-            <div><span>Routing rules</span><strong>{rules.length}</strong></div>
-          </div>
-          {/* Pre-Deploy Validation Feedback */}
-          {preDeployValidation && (
-            <div style={{ marginTop: "16px", display: "flex", flexDirection: "column", gap: "10px" }}>
-              {preDeployValidation.orphaned_gold_entries.length > 0 && (
-                <div style={{ background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.3)", borderRadius: "8px", padding: "12px 16px", display: "flex", gap: "10px", alignItems: "flex-start", color: "var(--danger)" }}>
-                  <AlertCircle size={18} style={{ marginTop: "2px", flexShrink: 0 }} />
-                  <div>
-                    <strong>{preDeployValidation.orphaned_gold_entries.length} gold entries reference files that were never found in the uploaded archive:</strong>
-                    <p style={{ margin: "4px 0", fontSize: "0.85rem", wordBreak: "break-all" }}>{preDeployValidation.orphaned_gold_entries.join(", ")}</p>
-                    <span style={{ fontSize: "0.85rem" }}>Fix the gold manifest or re-check the filenames before deploying.</span>
-                  </div>
-                </div>
-              )}
-              {preDeployValidation.missing_from_extraction.length > 0 && (
-                <div style={{ background: "rgba(245, 158, 11, 0.08)", border: "1px solid rgba(245, 158, 11, 0.3)", borderRadius: "8px", padding: "12px 16px", display: "flex", gap: "10px", alignItems: "flex-start", color: "#d97706" }}>
-                  <AlertTriangle size={18} style={{ marginTop: "2px", flexShrink: 0 }} />
-                  <div>
-                    <strong>{preDeployValidation.missing_from_extraction.length} files listed in your metadata were not found in the archive:</strong>
-                    <p style={{ margin: "4px 0", fontSize: "0.85rem", wordBreak: "break-all" }}>{preDeployValidation.missing_from_extraction.join(", ")}</p>
-                    <span style={{ fontSize: "0.85rem" }}>They will not be part of this experiment.</span>
-                  </div>
-                </div>
-              )}
-              {preDeployValidation.missing_from_metadata.length > 0 && (
-                <div style={{ background: "rgba(59, 130, 246, 0.08)", border: "1px solid rgba(59, 130, 246, 0.3)", borderRadius: "8px", padding: "12px 16px", display: "flex", gap: "10px", alignItems: "flex-start", color: "var(--accent)" }}>
-                  <Info size={18} style={{ marginTop: "2px", flexShrink: 0 }} />
-                  <div>
-                    <strong>{preDeployValidation.missing_from_metadata.length} extracted files have no metadata row.</strong>
-                    <span style={{ display: "block", fontSize: "0.85rem" }}>This is fine if metadata was optional for your use case.</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {uploadMode === "bundle" && bundleJobStatus === "failed" && (
-            <div style={{ background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.3)", borderRadius: "8px", padding: "14px 16px", marginTop: "14px" }}>
-              <strong style={{ color: "var(--danger)", display: "flex", alignItems: "center", gap: "6px" }}>
-                <AlertCircle size={18} /> Media Extraction Failed
-              </strong>
-              <p style={{ margin: "6px 0 10px", fontSize: "0.875rem" }}>
-                The media archive extraction encountered errors. You can re-upload the zip archive or fix your metadata/gold manifest independently.
-              </p>
-              <div style={{ display: "flex", gap: "10px" }}>
-                <button type="button" className="btn btn-secondary" onClick={handleReuploadMedia}>
-                  <RefreshCw size={15} /> Re-upload Media (.zip)
-                </button>
-                <button type="button" className="btn btn-secondary" onClick={() => setStep(2)}>
-                  <UploadCloud size={15} /> Re-upload Metadata / Gold
-                </button>
-              </div>
-            </div>
-          )}
-
-          {uploadMode === "bundle" && (bundleJobStatus === "processing" || bundleJobStatus === "queued") && (
-            <div style={{ background: "rgba(59, 130, 246, 0.08)", border: "1px solid rgba(59, 130, 246, 0.3)", borderRadius: "8px", padding: "12px 16px", marginTop: "14px", display: "flex", alignItems: "center", gap: "10px" }}>
-              <Loader2 size={16} className="spin-animate text-blue-600" />
-              <span>
-                Your dataset is still being processed ({bundleJobProgress?.files_processed ?? 0}/{bundleJobProgress?.files_total ?? "?"} files). Deployment will be enabled once extraction finishes.
-              </span>
-            </div>
-          )}
-
-          {form.gold_ratio > 0 && goldCount === 0 && <p className="form-error">Add at least one gold answer or set quality-check frequency to “None”.</p>}
-          {error && <p className="form-error">{error}</p>}
-        </div>}
-
         <div className="wizard-actions">
-          <button type="button" className="btn btn-secondary" disabled={step === 0 || submitting} onClick={() => setStep(value => value - 1)}><ArrowLeft size={17} /> Back</button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            disabled={step === 0 || submitting}
+            onClick={() => setStep(value => value - 1)}
+          >
+            <ArrowLeft size={17} /> Back
+          </button>
           {step < steps.length - 1 ? (
             <button
               type="button"
               className="btn btn-primary"
               disabled={!canContinue}
-              onClick={step === 2 ? (uploadMode === "bundle" && bundleJobStatus !== "completed" && !metadataCsv && !goldManifest ? () => setStep(3) : assembleDataset) : () => setStep(value => value + 1)}
+              onClick={() => setStep(value => value + 1)}
             >
-              {step === 2
-                ? uploadMode === "bundle" && bundleJobStatus !== "completed" && !metadataCsv && !goldManifest
-                  ? "Continue"
-                  : "Assemble & preview"
-                : "Continue"}{" "}
-              <ArrowRight size={17} />
+              Continue <ArrowRight size={17} />
             </button>
           ) : (
             <button
               type="button"
               className="btn btn-primary"
-              disabled={
-                submitting ||
-                (form.gold_ratio > 0 && goldCount === 0) ||
-                (uploadMode === "bundle" && (bundleJobStatus === "queued" || bundleJobStatus === "processing" || bundleJobStatus === "failed")) ||
-                (preDeployValidation ? !preDeployValidation.can_deploy : false)
-              }
-              title={
-                uploadMode === "bundle" && (bundleJobStatus === "queued" || bundleJobStatus === "processing")
-                  ? "Cannot deploy while media archive is processing"
-                  : uploadMode === "bundle" && bundleJobStatus === "failed"
-                  ? "Cannot deploy when media archive processing failed"
-                  : preDeployValidation && !preDeployValidation.can_deploy
-                  ? preDeployValidation.blocker_reason ?? "Cannot deploy until validation issues are resolved"
-                  : undefined
-              }
-              onClick={deploy}
+              disabled={submitting || !canContinue}
+              onClick={handleFinishSetup}
             >
-              {submitting ? "Creating experiment…" : "Create & deploy"} <Check size={17} />
+              {submitting ? "Saving & redirecting…" : "Finish setup"} <Check size={17} />
             </button>
           )}
         </div>

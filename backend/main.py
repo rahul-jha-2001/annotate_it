@@ -62,7 +62,7 @@ from schemas import (
     BundleUploadErrorItem, BundleUploadPatchRequest,
     BundleUploadProgress, BundleUploadResult, BundleUploadStatusResponse,
     CompleteMultipartRequest, CompleteMultipartResponse, ConsensusPolicySchema,
-    DataUnitBatchCreate, ExperimentCreate, ExperimentDeleteRequest,
+    DataUnitBatchCreate, ExperimentCreate, ExperimentDeleteRequest, ExperimentDetailResponse,
     ExperimentListResponse, ExperimentResponse, ExperimentUpdate,
     ExportDownloadResponse, ExportJobCreateRequest, ExportJobResponse,
     ExportPreflightRequest, ExportPreflightResponse,
@@ -485,6 +485,43 @@ def experiment_settings_response(experiment: Experiment, configuration_locked: b
         "gold_ratio": experiment.gold_ratio,
         "configuration_locked": configuration_locked,
     }
+
+
+@app.get("/experiments/{experiment_id}", response_model=ExperimentDetailResponse)
+def get_experiment_detail(
+    experiment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    ensure_current_schema(experiment)
+    has_annotations = (
+        db.query(Annotation.id)
+        .join(DataUnit, DataUnit.id == Annotation.data_unit_id)
+        .filter(DataUnit.experiment_id == experiment.id)
+        .first()
+        is not None
+    )
+    return ExperimentDetailResponse(
+        id=experiment.id,
+        name=experiment.name,
+        instructions=experiment.instructions or "",
+        modality=experiment.modality,
+        label_schema=experiment.label_schema or {},
+        metadata_schema=experiment.metadata_schema or [],
+        access_mode=experiment.access_mode,
+        overlap_n=experiment.overlap_n,
+        gold_ratio=experiment.gold_ratio,
+        status=experiment.status,
+        share_token=experiment.share_token,
+        qualification_form=experiment.qualification_form or [],
+        routing_rules=experiment.routing_rules or [],
+        teaching_examples=experiment.teaching_examples or [],
+        pending_metadata=experiment.pending_metadata or [],
+        pending_gold_manifest=experiment.pending_gold_manifest or [],
+        configuration_locked=has_annotations,
+        created_at=experiment.created_at,
+    )
 
 
 @app.get("/experiments/{experiment_id}/settings")

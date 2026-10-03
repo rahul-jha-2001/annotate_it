@@ -15,10 +15,14 @@ vi.mock("../services/multipartUpload", () => ({
   clearUploadCache: vi.fn(),
 }));
 
-describe("CreateExperiment - Teaching Examples Step", () => {
+describe("CreateExperiment - 3-Step Wizard Flow", () => {
   afterEach(cleanup);
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(window, "location", {
+      writable: true,
+      value: { ...window.location, assign: vi.fn(), origin: "http://localhost:3000", search: "" },
+    });
     (apiFetch as any).mockImplementation((url: string | URL) => {
       const urlStr = url.toString();
       if (urlStr.includes("/api/annotation-types")) {
@@ -40,26 +44,29 @@ describe("CreateExperiment - Teaching Examples Step", () => {
     });
   });
 
-  it("includes Teaching examples in wizard steps list", async () => {
+  it("includes 3 wizard steps in the setup progress list", async () => {
     render(<CreateExperiment />);
     await waitFor(() => {
-      expect(screen.getByText("Teaching examples")).toBeDefined();
+      expect(screen.getAllByText("Basics").length).toBeGreaterThan(0);
     });
 
-    const stepElements = screen.getAllByText(/Basics|Task|Dataset bundle|Dataset preview|Qualifications|Teaching examples|Review/);
-    expect(stepElements.length).toBeGreaterThanOrEqual(7);
+    const progress = screen.getByRole("navigation", { name: "Experiment setup progress" });
+    expect(progress.getAttribute("aria-label")).toBe("Experiment setup progress");
+    expect(screen.getByText("Step 1 of 3")).toBeDefined();
+    expect(within(progress).getByText("Basics")).toBeDefined();
+    expect(within(progress).getByText("Task")).toBeDefined();
+    expect(within(progress).getByText("Dataset upload")).toBeDefined();
   });
 
   it("renders wizard step navigation correctly", async () => {
     render(<CreateExperiment />);
     await waitFor(() => {
       expect(screen.getAllByText("Basics").length).toBeGreaterThan(0);
-      expect(screen.getByText("Teaching examples")).toBeDefined();
+      expect(screen.getByText("Dataset upload")).toBeDefined();
     });
 
     const progress = screen.getByRole("navigation", { name: "Experiment setup progress" });
-    expect(progress.getAttribute("aria-label")).toBe("Experiment setup progress");
-    expect(screen.getByText("Step 1 of 7")).toBeDefined();
+    expect(screen.getByText("Step 1 of 3")).toBeDefined();
     expect(within(progress).getByText("Basics").closest("li")?.getAttribute("aria-current")).toBe("step");
   });
 
@@ -74,10 +81,14 @@ describe("CreateExperiment - Teaching Examples Step", () => {
   });
 });
 
-describe("CreateExperiment - Large-File Bundle Upload Flow", () => {
+describe("CreateExperiment - Dataset Upload Flow", () => {
   afterEach(cleanup);
   beforeEach(() => {
     vi.clearAllMocks();
+    Object.defineProperty(window, "location", {
+      writable: true,
+      value: { ...window.location, assign: vi.fn(), origin: "http://localhost:3000", search: "" },
+    });
     (apiFetch as any).mockImplementation((url: string | URL, init?: any) => {
       const urlStr = url.toString();
       if (urlStr.includes("/api/annotation-types")) {
@@ -112,60 +123,32 @@ describe("CreateExperiment - Large-File Bundle Upload Flow", () => {
           ok: true,
           json: () => Promise.resolve({
             status: "processing",
-            progress: { files_processed: 12, files_total: 50 },
+            progress: { files_processed: 0, files_total: 10 },
             result: null,
           }),
         });
       }
-      if (urlStr.includes("/pre-deploy-validation")) {
+      if (urlStr.includes("/settings") && init?.method === "PATCH") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ id: "exp-bundle-test-123" }),
+        });
+      }
+      if (urlStr.includes("/api/uploads/presign") && init?.method === "POST") {
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve({
-            can_deploy: false,
-            status: "draft_media_processing",
-            orphaned_gold_entries: [],
-            missing_from_extraction: [],
-            missing_from_metadata: [],
-            blocker_reason: "Cannot deploy while media archive is processing",
-            registered_count: 0,
-            metadata_count: 0,
-            gold_count: 0,
+            urls: [{ filename: "test.wav", upload_url: "http://upload.mock/test.wav", s3_uri: "s3://b/test.wav" }],
           }),
         });
       }
-      if (urlStr.includes("/reupload-media") && init?.method === "POST") {
+      if (urlStr.includes("/data-units") && init?.method === "POST") {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({
-            message: "Media reset and multipart session initialized",
-            upload_id: "fresh-upload-id",
-            key: "zip-uploads/exp-bundle-test-123/dataset.zip",
-          }),
+          json: () => Promise.resolve({ data_units: [{ id: "unit-1", raw_uri: "s3://b/test.wav" }] }),
         });
       }
-      if (urlStr.includes("/metadata-preview") && init?.method === "POST") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            rows: [],
-            columns: [],
-            total_declared: 0,
-          }),
-        });
-      }
-      if (urlStr.includes("/gold-manifest") && init?.method === "POST") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({ message: "Gold manifest saved" }),
-        });
-      }
-      if (urlStr.includes("/data-units")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({ data_units: [] }),
-        });
-      }
-      return Promise.reject(new Error(`Unhandled URL: ${urlStr}`));
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
     });
 
     (uploadMultipartFile as any).mockResolvedValue({
@@ -179,24 +162,24 @@ describe("CreateExperiment - Large-File Bundle Upload Flow", () => {
       expect(screen.getByLabelText("Experiment name")).toBeDefined();
     });
 
-    // Fill Step 0 (Basics)
-    fireEvent.change(screen.getByLabelText("Experiment name"), { target: { value: "Test Large Dataset Experiment" } });
-    fireEvent.change(screen.getByLabelText("Instructions for annotators"), { target: { value: "Test instructions content" } });
+    // Fill in Step 0
+    fireEvent.change(screen.getByLabelText("Experiment name"), { target: { value: "Test Experiment" } });
+    fireEvent.change(screen.getByLabelText("Instructions for annotators"), { target: { value: "Annotate accurately" } });
 
-    const continueBtn = screen.getByRole("button", { name: /Continue/ });
-    expect(continueBtn.hasAttribute("disabled")).toBe(false);
-    fireEvent.click(continueBtn);
+    // Step 0 -> Step 1
+    const continueBtn0 = screen.getByRole("button", { name: /Continue/ });
+    fireEvent.click(continueBtn0);
 
-    // Step 1 (Task)
+    // Step 1 -> Step 2
     await waitFor(() => {
-      expect(screen.getByText("Interactive annotator preview")).toBeDefined();
+      expect(screen.getByRole("button", { name: /Continue/ })).toBeDefined();
     });
-    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+    const continueBtn1 = screen.getByRole("button", { name: /Continue/ });
+    fireEvent.click(continueBtn1);
 
-    // Step 2 (Dataset bundle)
+    // Verify on Step 2
     await waitFor(() => {
       expect(screen.getByText("Individual Media Files")).toBeDefined();
-      expect(screen.getByText("Single Archive (.zip) for Large Datasets")).toBeDefined();
     });
   };
 
@@ -236,14 +219,14 @@ describe("CreateExperiment - Large-File Bundle Upload Flow", () => {
       expect(uploadMultipartFile).toHaveBeenCalled();
     });
 
-    // After upload completes and job is queued/processing, the sticky banner should appear
+    // After upload completes and job is queued/processing, the banner should appear
     await waitFor(() => {
       expect(screen.getByText("Dataset Archive Processing in Background")).toBeDefined();
       expect(screen.getByText(/Extracting & registering files/)).toBeDefined();
     });
   });
 
-  it("allows non-blocking wizard progression while extraction is running and disables deploy on review", async () => {
+  it("allows clicking 'Finish setup' immediately while archive is processing without blocking on extraction", async () => {
     await advanceToDatasetStep();
 
     const bundleTab = screen.getByText("Single Archive (.zip) for Large Datasets");
@@ -257,43 +240,16 @@ describe("CreateExperiment - Large-File Bundle Upload Flow", () => {
       expect(screen.getByText("Dataset Archive Processing in Background")).toBeDefined();
     });
 
-    // Click Continue from Step 2 to Step 3
-    const continueBtn = screen.getByRole("button", { name: /Continue/ });
-    expect(continueBtn.hasAttribute("disabled")).toBe(false);
-    fireEvent.click(continueBtn);
+    // Wizard final action is "Finish setup"
+    const finishBtn = screen.getByRole("button", { name: /Finish setup/ });
+    expect(finishBtn.hasAttribute("disabled")).toBe(false);
 
-    // Step 3 (Dataset preview): notice should indicate media archive is processing in the background
+    fireEvent.click(finishBtn);
+
+    // Immediately redirects to the experiment page
     await waitFor(() => {
-      expect(screen.getByText("Media archive is processing in the background")).toBeDefined();
+      expect(window.location.assign).toHaveBeenCalledWith("/experiments/exp-bundle-test-123");
     });
-
-    // Step 3 can be continued immediately without blocking
-    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
-
-    // Step 4 (Qualifications)
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Add question/ })).toBeDefined();
-    });
-    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
-
-    // Step 5 (Teaching examples)
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Teaching examples" })).toBeDefined();
-    });
-    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
-
-    // Step 6 (Review)
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Review" })).toBeDefined();
-    });
-
-    // Sticky banner is still visible on Review step
-    expect(screen.getByText("Dataset Archive Processing in Background")).toBeDefined();
-
-    // Deploy button must be disabled while media archive is processing
-    const deployBtn = screen.getByRole("button", { name: /Create & deploy/ });
-    expect(deployBtn.hasAttribute("disabled")).toBe(true);
-    expect(deployBtn.getAttribute("title")).toBe("Cannot deploy while media archive is processing");
   });
 
   it("renders Retry Upload button when upload fails and allows retrying", async () => {
@@ -330,146 +286,33 @@ describe("CreateExperiment - Large-File Bundle Upload Flow", () => {
     });
   });
 
-  it("renders metadata preview with media extracting placeholder and displays validation feedback on step 6", async () => {
-    // Override pre-deploy-validation to test warnings and blocking errors
-    (apiFetch as any).mockImplementation((input: any, init?: any) => {
-      const urlStr = typeof input === "string" ? input : input.url || "";
-      if (urlStr.includes("/api/annotation-types")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve([
-            {
-              key: "categorical",
-              name: "Categorical",
-              compatible_modalities: ["audio", "image", "video"],
-              supports_choices: true,
-              supports_multi_select: true,
-              required_interaction: "none",
-            },
-          ]),
-        });
-      }
-      if (urlStr.includes("/experiments") && init?.method === "POST" && !urlStr.includes("/reupload-media") && !urlStr.includes("/metadata-preview") && !urlStr.includes("/gold-manifest")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({ id: "exp-bundle-test-123" }),
-        });
-      }
-      if (urlStr.includes("/bundle-upload") && init?.method === "POST") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({ job_id: "job-bundle-test-456", status: "queued" }),
-        });
-      }
-      if (urlStr.includes("/bundle-upload/job-bundle-test-456")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            status: "processing",
-            progress: { files_processed: 5, files_total: 20 },
-            result: null,
-          }),
-        });
-      }
-      if (urlStr.includes("/metadata-preview") && init?.method === "POST") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            rows: [{ filename: "sample1.wav", attributes: { accent: "Indian" } }],
-            columns: ["accent"],
-            total_declared: 1,
-          }),
-        });
-      }
-      if (urlStr.includes("/pre-deploy-validation")) {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            can_deploy: false,
-            status: "draft_media_processing",
-            orphaned_gold_entries: ["ghost_sample.wav"],
-            missing_from_extraction: ["missing1.wav"],
-            missing_from_metadata: ["extra1.wav"],
-            blocker_reason: "1 gold answer references files never found in the archive",
-            registered_count: 5,
-            metadata_count: 2,
-            gold_count: 1,
-          }),
-        });
-      }
-      if (urlStr.includes("/reupload-media") && init?.method === "POST") {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            message: "Media reset and multipart session initialized",
-            upload_id: "new-upload-id",
-            key: "zip-uploads/exp-bundle-test-123/dataset.zip",
-          }),
-        });
-      }
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
-    });
+  it("individual files path finishes setup and redirects to experiment page", async () => {
+    // Mock global fetch for S3 upload
+    const originalFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue({ ok: true });
 
-    await advanceToDatasetStep();
+    try {
+      await advanceToDatasetStep();
 
-    const bundleTab = screen.getByText("Single Archive (.zip) for Large Datasets");
-    fireEvent.click(bundleTab);
+      // Select individual file
+      const file = new File(["audio-bytes"], "test.wav", { type: "audio/wav" });
+      const dropzoneInput = screen.getByText("1. Choose audio files").closest("label")!.querySelector("input")!;
+      fireEvent.change(dropzoneInput, { target: { files: [file] } });
 
-    const file = new File(["dummy zip content"], "dataset.zip", { type: "application/zip" });
-    const dropzoneInput = screen.getByText("Choose a Dataset Archive (.zip)").closest("label")!.querySelector("input")!;
-    fireEvent.change(dropzoneInput, { target: { files: [file] } });
+      await waitFor(() => {
+        expect(screen.getByText("test.wav")).toBeDefined();
+      });
 
-    await waitFor(() => {
-      expect(screen.getByText("Dataset Archive Processing in Background")).toBeDefined();
-    });
+      const finishBtn = screen.getByRole("button", { name: /Finish setup/ });
+      expect(finishBtn.hasAttribute("disabled")).toBe(false);
 
-    // Upload metadata CSV
-    const csvContent = "filename,accent\nsample1.wav,Indian\nsample2.wav,British";
-    const csvFile = new File([csvContent], "metadata.csv", { type: "text/csv" });
-    const csvInput = screen.getByText("Upload metadata CSV (optional)").closest("label")!.querySelector("input")!;
-    fireEvent.change(csvInput, { target: { files: [csvFile] } });
+      fireEvent.click(finishBtn);
 
-    await waitFor(() => {
-      expect(screen.getByText("CSV loaded — choose another to replace it")).toBeDefined();
-    });
-
-    // Click Assemble & preview
-    const assembleBtn = screen.getByRole("button", { name: /Assemble & preview/ });
-    fireEvent.click(assembleBtn);
-
-    // Step 3 should display table with declared rows and "Media extracting..." placeholder
-    await waitFor(() => {
-      expect(screen.getByText("sample1.wav")).toBeDefined();
-      expect(screen.getByText("sample2.wav")).toBeDefined();
-      expect(screen.getAllByText("Media extracting...").length).toBeGreaterThan(0);
-    });
-
-    // Step 3 -> Step 4
-    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
-
-    // Step 4 -> Step 5
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Add question/ })).toBeDefined();
-    });
-    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
-
-    // Step 5 -> Step 6
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Teaching examples" })).toBeDefined();
-    });
-    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
-
-    // Step 6: Verify validation banners
-    await waitFor(() => {
-      expect(screen.getByText(/1 gold entries reference files that were never found in the uploaded archive/)).toBeDefined();
-      expect(screen.getByText(/ghost_sample\.wav/)).toBeDefined();
-      expect(screen.getByText(/1 files listed in your metadata were not found in the archive/)).toBeDefined();
-      expect(screen.getByText(/missing1\.wav/)).toBeDefined();
-      expect(screen.getByText(/1 extracted files have no metadata row/)).toBeDefined();
-    });
-
-    // Deploy button must be disabled due to orphaned gold entries
-    const deployBtn = screen.getByRole("button", { name: /Create & deploy/ });
-    expect(deployBtn.hasAttribute("disabled")).toBe(true);
+      await waitFor(() => {
+        expect(window.location.assign).toHaveBeenCalledWith("/experiments/exp-bundle-test-123");
+      });
+    } finally {
+      global.fetch = originalFetch;
+    }
   });
 });

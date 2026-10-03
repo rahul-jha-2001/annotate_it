@@ -147,6 +147,30 @@ class ExperimentResponse(BaseModel):
     access_mode: Literal["sign_in_required", "guest_name", "anonymous"]
     created_at: Any = None
 
+
+class ExperimentDetailResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    name: str
+    instructions: str
+    modality: str
+    label_schema: Dict[str, Any]
+    metadata_schema: List[Dict[str, Any]] = Field(default_factory=list)
+    access_mode: Literal["sign_in_required", "guest_name", "anonymous"]
+    overlap_n: int
+    gold_ratio: float
+    status: str
+    share_token: str
+    qualification_form: List[Dict[str, Any]] = Field(default_factory=list)
+    routing_rules: List[Dict[str, Any]] = Field(default_factory=list)
+    teaching_examples: List[Dict[str, Any]] = Field(default_factory=list)
+    pending_metadata: List[Dict[str, Any]] = Field(default_factory=list)
+    pending_gold_manifest: List[Dict[str, Any]] = Field(default_factory=list)
+    configuration_locked: bool
+    created_at: Any = None
+
+
 class ExperimentUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -155,6 +179,9 @@ class ExperimentUpdate(BaseModel):
     access_mode: Optional[Literal["sign_in_required", "guest_name", "anonymous"]] = None
     overlap_n: Optional[int] = Field(default=None, ge=1, le=100)
     gold_ratio: Optional[float] = Field(default=None, ge=0, le=1)
+    qualification_form: Optional[List[QualificationQuestionDefinition]] = None
+    routing_rules: Optional[List[RoutingRuleDefinition]] = None
+    metadata_schema: Optional[List[MetadataFieldDefinition]] = None
 
     @model_validator(mode="after")
     def require_a_change(self):
@@ -162,6 +189,14 @@ class ExperimentUpdate(BaseModel):
             raise ValueError("provide at least one setting to update")
         if any(getattr(self, field) is None for field in self.model_fields_set):
             raise ValueError("experiment settings cannot be null")
+        if self.qualification_form is not None:
+            question_keys = [q.key for q in self.qualification_form]
+            if len(question_keys) != len(set(question_keys)):
+                raise ValueError("qualification question keys must be unique")
+        if self.metadata_schema is not None:
+            metadata_keys = [f.key for f in self.metadata_schema]
+            if len(metadata_keys) != len(set(metadata_keys)):
+                raise ValueError("metadata field keys must be unique")
         return self
 
 class ExperimentDeleteRequest(BaseModel):
