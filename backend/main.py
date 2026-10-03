@@ -545,7 +545,7 @@ def get_experiment_detail(
         teaching_examples=teaching_examples_enriched,
         pending_metadata=experiment.pending_metadata or [],
         pending_gold_manifest=experiment.pending_gold_manifest or [],
-        configuration_locked=has_annotations,
+        configuration_locked=has_annotations or experiment.status == "active",
         created_at=experiment.created_at,
     )
 
@@ -564,7 +564,9 @@ def get_experiment_settings(
         .first()
         is not None
     )
-    return experiment_settings_response(experiment, has_annotations)
+    return experiment_settings_response(
+        experiment, has_annotations or experiment.status == "active"
+    )
 
 
 @app.patch("/experiments/{experiment_id}/settings")
@@ -576,6 +578,11 @@ def update_experiment_settings(
 ):
     experiment = get_owned_experiment(experiment_id, db, user)
     changes = payload.model_dump(exclude_unset=True)
+    if experiment.status == "active" and changes:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot modify configuration while experiment is active. Configuration is locked.",
+        )
     if "name" in changes:
         changes["name"] = (changes["name"] or "").strip()
         if not changes["name"]:
@@ -857,6 +864,8 @@ def create_bundle_upload_job(
     user: User = Depends(get_current_user),
 ):
     experiment = get_owned_experiment(experiment_id, db, user)
+    if experiment.status == "active":
+        raise HTTPException(status_code=409, detail="Cannot upload media bundle while experiment is active. Dataset is locked.")
     if experiment.status == "draft_media_processing":
         raise HTTPException(status_code=409, detail="A bundle upload is already processing for this experiment")
 
@@ -1212,6 +1221,8 @@ def create_data_units(
             )
     else:
         experiment = get_owned_experiment(experiment_id, db, caller.user)
+        if experiment.status == "active":
+            raise HTTPException(status_code=409, detail="Cannot add data units while experiment is active. Dataset is locked.")
 
     ensure_current_schema(experiment)
     spec = get_type(experiment.label_schema["annotation_type"])
@@ -1389,6 +1400,8 @@ def process_metadata_preview(
     user: User = Depends(get_current_user),
 ):
     experiment = get_owned_experiment(experiment_id, db, user, for_update=True)
+    if experiment.status == "active":
+        raise HTTPException(status_code=409, detail="Cannot modify metadata while experiment is active. Dataset is locked.")
 
     rows = payload.rows or []
     cleaned_rows = []
@@ -1442,6 +1455,8 @@ def process_gold_manifest(
     user: User = Depends(get_current_user),
 ):
     experiment = get_owned_experiment(experiment_id, db, user, for_update=True)
+    if experiment.status == "active":
+        raise HTTPException(status_code=409, detail="Cannot modify gold answers while experiment is active. Dataset is locked.")
 
     ensure_current_schema(experiment)
     units = db.query(DataUnit).filter_by(experiment_id=experiment.id).all()
@@ -1570,6 +1585,8 @@ def configure_teaching_examples(
     user: User = Depends(get_current_user),
 ):
     experiment = get_owned_experiment(experiment_id, db, user)
+    if experiment.status == "active":
+        raise HTTPException(status_code=409, detail="Cannot modify teaching examples while experiment is active. Configuration is locked.")
     ensure_current_schema(experiment)
     spec = get_type(experiment.label_schema["annotation_type"])
 

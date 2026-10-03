@@ -43,7 +43,7 @@ class TeachingExamplesTests(unittest.TestCase):
                 "choices": ["Positive", "Negative"],
                 "multi_select": False,
             },
-            status="active",
+            status="draft",
             access_mode="anonymous",
             share_token="share-test-token",
             teaching_examples=[],
@@ -244,6 +244,7 @@ class TeachingExamplesTests(unittest.TestCase):
 
     def test_annotator_onboarding_flow(self):
         """Annotators must see teaching examples before their first item allocation."""
+        self.experiment.status = "active"
         self.experiment.teaching_examples = [
             {"data_unit_id": str(self.unit1.id), "displayed_answer": {"value": "Positive"}, "explanation": "Test note"}
         ]
@@ -287,6 +288,36 @@ class TeachingExamplesTests(unittest.TestCase):
             session_res_after = get_session("share-test-token", session_token="session-token-test", db=db, user=None)
         self.assertFalse(session_res_after.requires_teaching_examples)
 
+    def test_configure_teaching_examples_blocked_when_active(self):
+        self.experiment.status = "active"
+        db = MagicMock()
+        req = TeachingExamplesRequest(
+            teaching_examples=[
+                TeachingExampleItem(
+                    data_unit_id=self.unit1.id,
+                    displayed_answer={"value": "Positive"},
+                )
+            ]
+        )
+        with patch("main.get_owned_experiment", return_value=self.experiment):
+            with self.assertRaises(HTTPException) as ctx:
+                configure_teaching_examples(self.exp_id, req, db, self.user)
+            self.assertEqual(ctx.exception.status_code, 409)
+
+    def test_gold_manifest_blocked_when_active(self):
+        self.experiment.status = "active"
+        db = MagicMock()
+        req = GoldManifestRequest(
+            manifest=[
+                GoldManifestEntry(filename="sample1.wav", answer={"value": "Positive"})
+            ]
+        )
+        with patch("main.get_owned_experiment", return_value=self.experiment):
+            with self.assertRaises(HTTPException) as ctx:
+                process_gold_manifest(self.exp_id, req, db, self.user)
+            self.assertEqual(ctx.exception.status_code, 409)
+
 
 if __name__ == "__main__":
     unittest.main()
+

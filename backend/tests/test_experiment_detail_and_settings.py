@@ -112,3 +112,43 @@ class ExperimentDetailAndSettingsTests(unittest.TestCase):
         self.assertEqual(detail["qualification_form"][0]["key"], "fluency")
         self.assertEqual(len(detail["routing_rules"]), 1)
         self.assertEqual(detail["routing_rules"][0]["question_key"], "fluency")
+
+    def test_active_experiment_blocks_editing_and_locks_configuration(self):
+        # Set experiment to active
+        with SessionLocal() as db:
+            exp = db.query(Experiment).filter_by(id=self.exp_id).first()
+            exp.status = "active"
+            db.commit()
+
+        # Check detail reflects configuration_locked = True
+        res_detail = self.client.get(f"/experiments/{self.exp_id}")
+        self.assertEqual(res_detail.status_code, 200)
+        self.assertTrue(res_detail.json()["configuration_locked"])
+
+        # Check settings endpoint reflects configuration_locked = True
+        res_settings = self.client.get(f"/experiments/{self.exp_id}/settings")
+        self.assertEqual(res_settings.status_code, 200)
+        self.assertTrue(res_settings.json()["configuration_locked"])
+
+        # Check patch settings is rejected with 409
+        res_patch = self.client.patch(
+            f"/experiments/{self.exp_id}/settings",
+            json={"name": "New name while active"},
+        )
+        self.assertEqual(res_patch.status_code, 409)
+        self.assertIn("active", res_patch.json()["detail"].lower())
+
+        # Check data units creation is rejected with 409
+        res_units = self.client.post(
+            f"/experiments/{self.exp_id}/data-units",
+            json={"items": [{"raw_uri": "s3://annotate-it-data/test/extra.wav"}]},
+        )
+        self.assertEqual(res_units.status_code, 409)
+
+        # Check metadata reupload is rejected with 409
+        res_meta = self.client.post(
+            f"/experiments/{self.exp_id}/reupload-metadata",
+            json={"rows": [{"filename": "extra.wav", "attributes": {"k": "v"}}]},
+        )
+        self.assertEqual(res_meta.status_code, 409)
+

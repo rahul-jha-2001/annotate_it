@@ -261,12 +261,14 @@ export function ExperimentDatasetSection({
   modality,
   labelSchema,
   status,
+  isLocked,
   onUpdated,
 }: {
   experimentId: string;
   modality: string;
   labelSchema: LabelSchema;
   status: string;
+  isLocked?: boolean;
   onUpdated?: () => void;
 }) {
   const [metadataCsv, setMetadataCsv] = useState("");
@@ -275,6 +277,8 @@ export function ExperimentDatasetSection({
   const [metadataFields, setMetadataFields] = useState<MetadataFieldDefinition[]>([]);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState<string | null>(null);
+
+  const locked = Boolean(isLocked || status === "active");
 
   const mediaPlugin = getMediaPlugin(modality);
 
@@ -473,20 +477,29 @@ export function ExperimentDatasetSection({
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "20px" }}>
-        <label className="dropzone compact">
-          <UploadCloud className="dropzone-icon" />
-          <strong>Upload / Replace metadata CSV</strong>
-          <span>{metadataCsv ? "CSV loaded — select to replace" : metadataFields.length > 0 ? `${metadataFields.length} field(s) defined — select to replace` : 'Must contain a "filename" column'}</span>
-          <input type="file" accept=".csv,text/csv" hidden onChange={handleUploadMetadataCsv} />
-        </label>
-        <label className="dropzone compact">
-          <UploadCloud className="dropzone-icon" />
-          <strong>Upload / Replace gold answers JSON</strong>
-          <span>{goldManifest ? "JSON loaded — select to replace" : goldCount > 0 ? `${goldCount} gold answer(s) configured — select to replace` : "Declare items used for quality scoring"}</span>
-          <input type="file" accept=".json,application/json" hidden onChange={handleUploadGoldJson} />
-        </label>
-      </div>
+      {locked ? (
+        <div className="settings-lock-notice" style={{ marginBottom: "20px" }}>
+          <LockKeyhole size={18} />
+          <p>
+            <strong>Dataset is locked:</strong> This experiment is currently active. Media files, metadata attributes, and gold answers cannot be modified while annotations are underway.
+          </p>
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "20px" }}>
+          <label className="dropzone compact">
+            <UploadCloud className="dropzone-icon" />
+            <strong>Upload / Replace metadata CSV</strong>
+            <span>{metadataCsv ? "CSV loaded — select to replace" : metadataFields.length > 0 ? `${metadataFields.length} field(s) defined — select to replace` : 'Must contain a "filename" column'}</span>
+            <input type="file" accept=".csv,text/csv" hidden onChange={handleUploadMetadataCsv} />
+          </label>
+          <label className="dropzone compact">
+            <UploadCloud className="dropzone-icon" />
+            <strong>Upload / Replace gold answers JSON</strong>
+            <span>{goldManifest ? "JSON loaded — select to replace" : goldCount > 0 ? `${goldCount} gold answer(s) configured — select to replace` : "Declare items used for quality scoring"}</span>
+            <input type="file" accept=".json,application/json" hidden onChange={handleUploadGoldJson} />
+          </label>
+        </div>
+      )}
 
       {feedback && (
         <div style={{ padding: "10px 14px", background: "rgba(16, 185, 129, 0.08)", border: "1px solid rgba(16, 185, 129, 0.2)", borderRadius: "6px", marginBottom: "16px", color: "#10b981", fontSize: "0.875rem" }}>
@@ -579,12 +592,14 @@ export function ExperimentQualificationsSection({
   initialQuestions,
   initialRules,
   metadataFields,
+  isLocked,
   onSaved,
 }: {
   experimentId: string;
   initialQuestions: QualificationQuestion[];
   initialRules: RoutingRule[];
   metadataFields: MetadataFieldDefinition[];
+  isLocked?: boolean;
   onSaved?: () => void;
 }) {
   const [questions, setQuestions] = useState<QualificationQuestion[]>(initialQuestions || []);
@@ -598,6 +613,7 @@ export function ExperimentQualificationsSection({
   }, [initialQuestions, initialRules]);
 
   const addQuestion = () => {
+    if (isLocked) return;
     setQuestions(current => [
       ...current,
       {
@@ -611,10 +627,12 @@ export function ExperimentQualificationsSection({
   };
 
   const updateQuestion = (index: number, patch: Partial<QualificationQuestion>) => {
+    if (isLocked) return;
     setQuestions(current => current.map((item, i) => (i === index ? { ...item, ...patch } : item)));
   };
 
   const addRule = () => {
+    if (isLocked) return;
     const field = metadataFields[0];
     const compatibleQuestion = questions.find(q => routingOperatorFor(field, q));
     if (!field || !compatibleQuestion) return;
@@ -624,6 +642,7 @@ export function ExperimentQualificationsSection({
   };
 
   const handleSave = async () => {
+    if (isLocked) return;
     setSaving(true);
     setFeedback(null);
     try {
@@ -652,20 +671,43 @@ export function ExperimentQualificationsSection({
     <div className="glass-panel" style={{ padding: "24px", marginBottom: "24px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
         <div>
-          <h3>Annotator Qualifications &amp; Routing</h3>
+          <h3 style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            Annotator Qualifications &amp; Routing
+            {isLocked && <span className="locked-chip"><LockKeyhole size={13} /> Locked</span>}
+          </h3>
           <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--text-muted)" }}>
             Screen annotators and restrict sample distribution by language or proficiency.
           </p>
         </div>
         <div style={{ display: "flex", gap: "10px" }}>
-          <button type="button" className="btn btn-secondary" onClick={addQuestion}>
-            <Plus size={16} /> Add question
-          </button>
-          <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving}>
-            {saving ? <Loader2 size={16} className="spin-animate" /> : <Check size={16} />} Save Qualifications
+          {!isLocked && (
+            <button type="button" className="btn btn-secondary" onClick={addQuestion}>
+              <Plus size={16} /> Add question
+            </button>
+          )}
+          <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving || isLocked}>
+            {isLocked ? (
+              <>
+                <LockKeyhole size={15} /> Locked
+              </>
+            ) : saving ? (
+              <Loader2 size={16} className="spin-animate" />
+            ) : (
+              <Check size={16} />
+            )}
+            {isLocked ? "" : " Save Qualifications"}
           </button>
         </div>
       </div>
+
+      {isLocked && (
+        <div className="settings-lock-notice" style={{ marginBottom: "16px" }}>
+          <LockKeyhole size={18} />
+          <p>
+            <strong>Qualifications are locked:</strong> This experiment is active. Qualification questions and routing rules cannot be edited to preserve consistent eligibility.
+          </p>
+        </div>
+      )}
 
       {feedback && (
         <div style={{ padding: "10px 14px", background: "rgba(16, 185, 129, 0.08)", border: "1px solid rgba(16, 185, 129, 0.2)", borderRadius: "6px", marginBottom: "16px", color: "#10b981", fontSize: "0.875rem" }}>
@@ -683,26 +725,28 @@ export function ExperimentQualificationsSection({
           <div className="builder-card qualification-card" key={question.key} style={{ marginBottom: "12px" }}>
             <div className="card-heading">
               <strong>Question {index + 1}</strong>
-              <button
-                type="button"
-                className="icon-button"
-                aria-label={`Delete question ${index + 1}`}
-                onClick={() => {
-                  setQuestions(current => current.filter((_, i) => i !== index));
-                  setRules(current => current.filter(r => r.question_key !== question.key));
-                }}
-              >
-                <Trash2 size={17} />
-              </button>
+              {!isLocked && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={`Delete question ${index + 1}`}
+                  onClick={() => {
+                    setQuestions(current => current.filter((_, i) => i !== index));
+                    setRules(current => current.filter(r => r.question_key !== question.key));
+                  }}
+                >
+                  <Trash2 size={17} />
+                </button>
+              )}
             </div>
             <div className="qualification-question-grid">
               <div className="form-group">
                 <label className="form-label">Question prompt</label>
-                <input className="form-input" value={question.label} onChange={e => updateQuestion(index, { label: e.target.value })} placeholder="Which languages can you understand?" />
+                <input className="form-input" disabled={isLocked} value={question.label} onChange={e => updateQuestion(index, { label: e.target.value })} placeholder="Which languages can you understand?" />
               </div>
               <div className="form-group">
                 <label className="form-label">Response type</label>
-                <select className="form-select" value={question.type} onChange={e => {
+                <select className="form-select" disabled={isLocked} value={question.type} onChange={e => {
                   const type = e.target.value as QualificationQuestion["type"];
                   updateQuestion(index, { type, options: type.includes("choice") ? question.options : [] });
                   setRules(current => current.filter(r => r.question_key !== question.key));
@@ -718,7 +762,7 @@ export function ExperimentQualificationsSection({
             {question.type.includes("choice") && (
               <div className="form-group">
                 <label className="form-label">Answer options (comma-separated)</label>
-                <input className="form-input" value={question.options.join(", ")} onChange={e => updateQuestion(index, { options: e.target.value.split(",").map(v => v.trim()).filter(Boolean) })} placeholder="Hindi, English, Spanish" />
+                <input className="form-input" disabled={isLocked} value={question.options.join(", ")} onChange={e => updateQuestion(index, { options: e.target.value.split(",").map(v => v.trim()).filter(Boolean) })} placeholder="Hindi, English, Spanish" />
               </div>
             )}
           </div>
@@ -729,9 +773,11 @@ export function ExperimentQualificationsSection({
         <div style={{ marginTop: "24px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
             <h4>Matching Rules</h4>
-            <button type="button" className="btn btn-secondary" onClick={addRule}>
-              <Plus size={15} /> Add matching rule
-            </button>
+            {!isLocked && (
+              <button type="button" className="btn btn-secondary" onClick={addRule}>
+                <Plus size={15} /> Add matching rule
+              </button>
+            )}
           </div>
           {rules.length === 0 ? (
             <p style={{ fontSize: "0.875rem", color: "var(--text-muted)" }}>No routing rules added yet.</p>
@@ -744,13 +790,15 @@ export function ExperimentQualificationsSection({
                 <div className="routing-card" key={index} style={{ marginBottom: "10px" }}>
                   <div className="card-heading">
                     <strong>Rule {index + 1}</strong>
-                    <button type="button" className="icon-button" onClick={() => setRules(current => current.filter((_, i) => i !== index))}>
-                      <Trash2 size={16} />
-                    </button>
+                    {!isLocked && (
+                      <button type="button" className="icon-button" onClick={() => setRules(current => current.filter((_, i) => i !== index))}>
+                        <Trash2 size={16} />
+                      </button>
+                    )}
                   </div>
                   <div className="routing-sentence">
                     <span>Serve sample when its</span>
-                    <select className="form-select" value={rule.metadata_field} onChange={e => {
+                    <select className="form-select" disabled={isLocked} value={rule.metadata_field} onChange={e => {
                       const field = metadataFields.find(f => f.key === e.target.value);
                       const compQ = questions.find(q => routingOperatorFor(field, q)) ?? selectedQuestion;
                       const op = routingOperatorFor(field, compQ);
@@ -762,7 +810,7 @@ export function ExperimentQualificationsSection({
                     </select>
                     <strong>{operatorText}</strong>
                     <span>the annotator’s answer to</span>
-                    <select className="form-select" value={rule.question_key} onChange={e => {
+                    <select className="form-select" disabled={isLocked} value={rule.question_key} onChange={e => {
                       const q = questions.find(item => item.key === e.target.value);
                       const compF = metadataFields.find(f => routingOperatorFor(f, q)) ?? selectedField;
                       const op = routingOperatorFor(compF, q);
@@ -791,12 +839,14 @@ export function ExperimentTeachingSection({
   modality: _modality,
   labelSchema: _labelSchema,
   initialExamples,
+  isLocked,
   onSaved,
 }: {
   experimentId: string;
   modality: string;
   labelSchema: LabelSchema;
   initialExamples: any[];
+  isLocked?: boolean;
   onSaved?: () => void;
 }) {
   const [examples, setExamples] = useState<TeachingExampleDraft[]>([]);
@@ -835,7 +885,7 @@ export function ExperimentTeachingSection({
   const otherUnits = dataUnits.filter(u => !u.is_gold && (!u.gold_answer || Object.keys(u.gold_answer).length === 0));
 
   const addExample = () => {
-    if (dataUnits.length === 0) return;
+    if (isLocked || dataUnits.length === 0) return;
     const usedIds = new Set(examples.map(ex => ex.data_unit_id));
     const targetUnit = goldUnits.find(u => !usedIds.has(u.id)) ||
       dataUnits.find(u => !usedIds.has(u.id)) ||
@@ -857,6 +907,7 @@ export function ExperimentTeachingSection({
   };
 
   const handleSave = async () => {
+    if (isLocked) return;
     setSaving(true);
     setFeedback(null);
     try {
@@ -911,20 +962,43 @@ export function ExperimentTeachingSection({
     <div className="glass-panel" style={{ padding: "24px", marginBottom: "24px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
         <div>
-          <h3>Teaching Examples</h3>
+          <h3 style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            Teaching Examples
+            {isLocked && <span className="locked-chip"><LockKeyhole size={13} /> Locked</span>}
+          </h3>
           <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--text-muted)" }}>
             Show annotators onboarding reference samples with correct answers and explanations before real tasks begin.
           </p>
         </div>
         <div style={{ display: "flex", gap: "10px" }}>
-          <button type="button" className="btn btn-secondary" onClick={addExample} disabled={dataUnits.length === 0}>
-            <Plus size={16} /> Add example
-          </button>
-          <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving || examples.length === 0}>
-            {saving ? <Loader2 size={16} className="spin-animate" /> : <Check size={16} />} Save Examples
+          {!isLocked && (
+            <button type="button" className="btn btn-secondary" onClick={addExample} disabled={dataUnits.length === 0}>
+              <Plus size={16} /> Add example
+            </button>
+          )}
+          <button type="button" className="btn btn-primary" onClick={handleSave} disabled={saving || examples.length === 0 || isLocked}>
+            {isLocked ? (
+              <>
+                <LockKeyhole size={15} /> Locked
+              </>
+            ) : saving ? (
+              <Loader2 size={16} className="spin-animate" />
+            ) : (
+              <Check size={16} />
+            )}
+            {isLocked ? "" : " Save Examples"}
           </button>
         </div>
       </div>
+
+      {isLocked && (
+        <div className="settings-lock-notice" style={{ marginBottom: "16px" }}>
+          <LockKeyhole size={18} />
+          <p>
+            <strong>Teaching examples are locked:</strong> This experiment is active. Onboarding examples and answers cannot be modified while annotators are active.
+          </p>
+        </div>
+      )}
 
       {feedback && (
         <div style={{ padding: "10px 14px", background: "rgba(16, 185, 129, 0.08)", border: "1px solid rgba(16, 185, 129, 0.2)", borderRadius: "6px", marginBottom: "16px", color: "#10b981", fontSize: "0.875rem" }}>
@@ -955,13 +1029,15 @@ export function ExperimentTeachingSection({
             <div className="builder-card" key={index} style={{ marginBottom: "16px", padding: "16px" }}>
               <div className="card-heading">
                 <strong>Teaching Example {index + 1}</strong>
-                <button
-                  type="button"
-                  className="icon-button"
-                  onClick={() => setExamples(current => current.filter((_, i) => i !== index))}
-                >
-                  <Trash2 size={16} />
-                </button>
+                {!isLocked && (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => setExamples(current => current.filter((_, i) => i !== index))}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
               </div>
               <div className="form-group" style={{ marginBottom: "12px" }}>
                 <label className="form-label" style={{ display: "flex", alignItems: "center" }}>
@@ -974,6 +1050,7 @@ export function ExperimentTeachingSection({
                 </label>
                 <select
                   className="form-select"
+                  disabled={isLocked}
                   value={item.data_unit_id}
                   onChange={e => {
                     const unit = dataUnits.find(u => u.id === e.target.value);
@@ -1014,6 +1091,8 @@ export function ExperimentTeachingSection({
               <textarea
                 className="form-input"
                 rows={2}
+                disabled={isLocked}
+                readOnly={isLocked}
                 value={item.answerText}
                 onChange={e => {
                   const val = e.target.value;
@@ -1029,6 +1108,7 @@ export function ExperimentTeachingSection({
               <label className="form-label">Explanation shown to annotator</label>
               <input
                 className="form-input"
+                disabled={isLocked}
                 value={item.explanation}
                 onChange={e => {
                   const val = e.target.value;
@@ -1040,6 +1120,7 @@ export function ExperimentTeachingSection({
             <label className="required-toggle">
               <input
                 type="checkbox"
+                disabled={isLocked}
                 checked={item.keepAsGold}
                 onChange={e => {
                   const checked = e.target.checked;
@@ -1285,7 +1366,11 @@ export function ExperimentQualitySection({
           disabled={saving || configurationLocked}
           onClick={handleSave}
         >
-          {saving ? (
+          {configurationLocked ? (
+            <>
+              <LockKeyhole size={15} /> Locked
+            </>
+          ) : saving ? (
             <>
               <Loader2 size={16} className="spin-animate" /> Saving…
             </>

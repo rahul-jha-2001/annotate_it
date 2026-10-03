@@ -129,9 +129,9 @@ export default function ExperimentSettings({ experimentId }: { experimentId: str
       </div>
 
       <div className="glass-panel settings-form">
-        <div className="wizard-title"><Settings size={23} className="app-logo-icon" /><div><h2>General details</h2><p>The name and instructions can be updated at any time.</p></div></div>
-        <div className="form-group"><label className="form-label">Experiment name</label><input className="form-input" value={settings.name} maxLength={200} onChange={event => setSettings({ ...settings, name: event.target.value })} /></div>
-        <div className="form-group"><label className="form-label">Instructions for annotators</label><textarea className="form-textarea" value={settings.instructions} maxLength={10000} onChange={event => setSettings({ ...settings, instructions: event.target.value })} /></div>
+        <div className="wizard-title"><Settings size={23} className="app-logo-icon" /><div><h2>General details</h2><p>{settings.configuration_locked ? "Configuration is locked because this experiment is active." : "The name and instructions can be updated at any time."}</p></div>{settings.configuration_locked && <span className="locked-chip"><LockKeyhole size={14} /> Locked</span>}</div>
+        <div className="form-group"><label className="form-label">Experiment name</label><input className="form-input" disabled={settings.configuration_locked} value={settings.name} maxLength={200} onChange={event => setSettings({ ...settings, name: event.target.value })} /></div>
+        <div className="form-group"><label className="form-label">Instructions for annotators</label><textarea className="form-textarea" disabled={settings.configuration_locked} value={settings.instructions} maxLength={10000} onChange={event => setSettings({ ...settings, instructions: event.target.value })} /></div>
 
         <div className="settings-section-heading"><div><h2>Annotator access</h2><p>Choose how people identify themselves when opening the share link.</p></div>{settings.configuration_locked && <span className="locked-chip"><LockKeyhole size={14} /> Locked</span>}</div>
         <div className="access-mode-grid">
@@ -143,12 +143,28 @@ export default function ExperimentSettings({ experimentId }: { experimentId: str
           <div className="form-group"><label className="form-label">People per regular sample</label><input className="form-input" type="number" min="1" max="100" disabled={settings.configuration_locked} value={settings.overlap_n} onChange={event => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) setSettings({ ...settings, overlap_n: value }); }} /></div>
           <div className="form-group"><label className="form-label">Gold-check frequency</label><input className="form-input" type="number" min="0" max="1" step="0.01" disabled={settings.configuration_locked} value={settings.gold_ratio} onChange={event => { const value = event.target.valueAsNumber; if (Number.isFinite(value)) setSettings({ ...settings, gold_ratio: value }); }} /><span className="help-text">Use a value from 0 to 1. For example, 0.1 means 10%.</span></div>
         </div>
-        {settings.configuration_locked && <div className="settings-lock-notice"><LockKeyhole size={18} /><p>Access and quality settings are locked because annotations have been submitted. This protects assignment history and score consistency.</p></div>}
+        {settings.configuration_locked && <div className="settings-lock-notice"><LockKeyhole size={18} /><p>This experiment is active. All settings and configurations are locked to protect assignment history and score consistency.</p></div>}
 
         <div className="read-only-summary"><div><span>Media type</span><strong>{settings.modality}</strong></div><div><span>Annotation type</span><strong>{settings.annotation_type}</strong></div></div>
         {error && <p className="form-error">{error}</p>}
         {saved && <p className="form-success">Experiment settings saved.</p>}
-        <div className="settings-actions"><button className="btn btn-primary" disabled={saving || !settings.name.trim()} onClick={save}><Save size={17} /> {saving ? "Saving…" : "Save changes"}</button></div>
+        <div className="settings-actions">
+          <button
+            className="btn btn-primary"
+            disabled={saving || !settings.name.trim() || settings.configuration_locked}
+            onClick={save}
+          >
+            {settings.configuration_locked ? (
+              <>
+                <LockKeyhole size={16} /> Locked
+              </>
+            ) : (
+              <>
+                <Save size={17} /> {saving ? "Saving…" : "Save changes"}
+              </>
+            )}
+          </button>
+        </div>
 
         <section className="danger-zone">
           <div className="danger-zone-heading"><div><h2>Delete experiment</h2><p>Remove this experiment and all collected work from normal product access.</p></div><Trash2 size={22} /></div>

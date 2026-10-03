@@ -345,6 +345,7 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
           modality={experiment.modality}
           labelSchema={experiment.label_schema}
           status={experiment.status}
+          isLocked={isDeployed}
           onUpdated={loadExperiment}
         />
       )}
@@ -356,6 +357,7 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
           initialQuestions={experiment.qualification_form}
           initialRules={experiment.routing_rules}
           metadataFields={experiment.metadata_schema}
+          isLocked={isDeployed}
           onSaved={loadExperiment}
         />
       )}
@@ -367,6 +369,7 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
           modality={experiment.modality}
           labelSchema={experiment.label_schema}
           initialExamples={experiment.teaching_examples}
+          isLocked={isDeployed}
           onSaved={loadExperiment}
         />
       )}
@@ -378,7 +381,7 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
           initialOverlapN={experiment.overlap_n}
           initialGoldRatio={experiment.gold_ratio}
           initialAccessMode={experiment.access_mode}
-          configurationLocked={experiment.configuration_locked}
+          configurationLocked={isDeployed || Boolean(experiment.configuration_locked)}
           experimentSummary={{
             name: experiment.name,
             modality: experiment.modality,
