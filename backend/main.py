@@ -1234,6 +1234,7 @@ def process_gold_manifest(
             "experiment_id": str(experiment.id),
             "applied_count": len(results["applied"]),
             "errors_count": len(results["errors"]),
+            "errors": results["errors"],
         },
     )
     return results

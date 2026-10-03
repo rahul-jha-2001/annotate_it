@@ -110,7 +110,7 @@ export default function ExperimentSettings({ experimentId }: { experimentId: str
         body: JSON.stringify({ experiment_name: deleteConfirmation }),
       });
       if (!response.ok) throw new Error(await errorMessage(response, "Could not delete experiment"));
-      navigate("/");
+      navigate("/dashboard");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not delete experiment");
       setDeleting(false);
