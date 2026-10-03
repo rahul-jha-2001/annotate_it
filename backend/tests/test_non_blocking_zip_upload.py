@@ -256,3 +256,56 @@ class NonBlockingZipUploadTests(unittest.TestCase):
         self.assertTrue(data["can_deploy"])
         self.assertEqual(data["registered_count"], 1)
         self.assertEqual(data["orphaned_gold_entries"], [])
+
+    def test_metadata_and_gold_manifest_persistence_and_listing(self):
+        # 1. Post metadata
+        res = self.client.post(
+            f"/experiments/{self.exp_id}/reupload-metadata",
+            json={
+                "rows": [
+                    {"filename": "audio1.wav", "attributes": {"language": "en", "difficulty": "hard"}},
+                    {"filename": "audio2.wav", "attributes": {"language": "fr", "difficulty": "easy"}},
+                ]
+            },
+        )
+        self.assertEqual(res.status_code, 200)
+
+        # 2. Check experiment metadata_schema and pending_metadata
+        res_exp = self.client.get(f"/experiments/{self.exp_id}")
+        self.assertEqual(res_exp.status_code, 200)
+        exp_data = res_exp.json()
+        self.assertEqual(len(exp_data["pending_metadata"]), 2)
+        schema_keys = [f["key"] for f in exp_data["metadata_schema"]]
+        self.assertIn("language", schema_keys)
+        self.assertIn("difficulty", schema_keys)
+
+        # 3. Post gold manifest
+        res_gold = self.client.post(
+            f"/experiments/{self.exp_id}/gold-manifest",
+            json={
+                "manifest": [
+                    {"filename": "audio1.wav", "answer": {"value": "Positive"}},
+                ]
+            },
+        )
+        self.assertEqual(res_gold.status_code, 200)
+
+        # 4. Add data unit and reconcile
+        with SessionLocal() as db:
+            exp = db.query(Experiment).filter_by(id=self.exp_id).first()
+            u = DataUnit(experiment_id=exp.id, raw_uri=f"s3://bucket/experiments/{self.exp_id}/audio1.wav")
+            db.add(u)
+            db.commit()
+            reconcile_pending_experiment_data(exp, db)
+
+        # 5. Verify GET /data-units returns metadata and gold_answer
+        res_units = self.client.get(f"/experiments/{self.exp_id}/data-units")
+        self.assertEqual(res_units.status_code, 200)
+        units_list = res_units.json()["data_units"]
+        self.assertEqual(len(units_list), 1)
+        unit = units_list[0]
+        self.assertTrue(unit["is_gold"])
+        self.assertEqual(unit["gold_answer"], {"value": "Positive"})
+        self.assertEqual(unit["metadata"]["language"], "en")
+        self.assertEqual(unit["metadata"]["difficulty"], "hard")
+

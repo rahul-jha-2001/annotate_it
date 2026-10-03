@@ -17,7 +17,7 @@ import { apiFetch } from "../api";
 import { getMediaPlugin } from "../plugins/media/registry";
 import AnnotationOverlaySelector, { buildOverlayOptions } from "./AnnotationOverlaySelector";
 import type { AnnotationAnswer, LabelSchema } from "./annotator/types";
-import { parseCsv, parseDatasetBundle, type MetadataFieldDefinition, type ParsedDatasetRow } from "./datasetBundle";
+import { parseCsv, validateGold, type MetadataFieldDefinition, type ParsedDatasetRow } from "./datasetBundle";
 
 export interface QualificationQuestion {
   key: string;
@@ -287,33 +287,125 @@ export function ExperimentDatasetSection({
 
   const loadData = useCallback(async () => {
     try {
+      // 1. Fetch experiment details for pending_metadata, pending_gold_manifest, metadata_schema
+      const expRes = await apiFetch(`/api/experiments/${experimentId}`);
+      let exp: any = null;
+      if (expRes.ok) {
+        exp = await expRes.json();
+      }
+
+      // 2. Fetch registered data units
       const unitsRes = await apiFetch(`/api/experiments/${experimentId}/data-units`);
+      let units: any[] = [];
       if (unitsRes.ok) {
         const unitsData = await unitsRes.json();
-        const units = unitsData.data_units || [];
+        units = Array.isArray(unitsData) ? unitsData : (unitsData.data_units || []);
+      }
 
-        const urls: Record<string, string> = {};
+      const urls: Record<string, string> = {};
+      for (const u of units) {
+        const fn = u.filename || u.raw_uri?.split("/").pop() || u.id;
+        const url = u.media_url || (u.raw_uri?.startsWith("http") ? u.raw_uri : "");
+        if (url) urls[fn] = url;
+      }
+      setMediaUrls(urls);
+
+      // Collect base schema fields
+      const schemaFields: MetadataFieldDefinition[] = (exp?.metadata_schema || []).map((f: any) => ({
+        key: f.key,
+        label: f.label || f.key.replace(/[_-]+/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()),
+        type: f.type || "text",
+        options: f.options || [],
+      }));
+      const schemaKeys = new Set(schemaFields.map(f => f.key));
+
+      if (units.length > 0) {
+        const extraKeys = new Set<string>();
         for (const u of units) {
-          const fn = u.filename || u.raw_uri?.split("/").pop() || u.id;
-          const url = u.media_url || (u.raw_uri?.startsWith("http") ? u.raw_uri : "");
-          if (url) urls[fn] = url;
+          if (u.metadata && typeof u.metadata === "object") {
+            Object.keys(u.metadata).forEach(k => {
+              if (!schemaKeys.has(k)) extraKeys.add(k);
+            });
+          }
         }
-        setMediaUrls(urls);
+        const extraFields: MetadataFieldDefinition[] = Array.from(extraKeys).map(k => ({
+          key: k,
+          label: k.replace(/[_-]+/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()),
+          type: "text",
+          options: [],
+        }));
+        setMetadataFields([...schemaFields, ...extraFields]);
 
-        const filenames = units.map((u: any) => u.filename || u.raw_uri?.split("/").pop() || u.id);
-        const allowPending = status === "draft_media_processing" || filenames.length === 0;
-
-        const parsed = parseDatasetBundle(filenames, metadataCsv, goldManifest, {
-          schema: labelSchema,
-          allowPendingMedia: allowPending,
+        const rows: ParsedDatasetRow[] = units.map(u => {
+          const fn = u.filename || u.raw_uri?.split("/").pop() || u.id;
+          const gold = u.gold_answer || null;
+          const rowErrors: string[] = [];
+          if (gold) {
+            rowErrors.push(...validateGold(gold, { schema: labelSchema }));
+          }
+          return {
+            filename: fn,
+            metadata: (u.metadata && typeof u.metadata === "object") ? u.metadata : {},
+            goldAnswer: gold,
+            errors: rowErrors,
+          };
         });
-        setMetadataFields(parsed.metadataFields);
-        setDatasetRows(parsed.rows);
+        setDatasetRows(rows);
+      } else {
+        // Fallback when data units are extracting or not yet created: show declared pending records
+        const pendingMeta: Array<{ filename: string; attributes: Record<string, any> }> = exp?.pending_metadata || [];
+        const pendingGold: Array<{ filename: string; answer: any }> = exp?.pending_gold_manifest || [];
+
+        const metaByFn = new Map<string, Record<string, any>>();
+        const goldByFn = new Map<string, any>();
+        const filenamesSet = new Set<string>();
+
+        for (const m of pendingMeta) {
+          if (m.filename) {
+            filenamesSet.add(m.filename);
+            metaByFn.set(m.filename, m.attributes || {});
+          }
+        }
+        for (const g of pendingGold) {
+          if (g.filename) {
+            filenamesSet.add(g.filename);
+            goldByFn.set(g.filename, g.answer || null);
+          }
+        }
+
+        const extraKeys = new Set<string>();
+        metaByFn.forEach(attrs => {
+          Object.keys(attrs).forEach(k => {
+            if (!schemaKeys.has(k)) extraKeys.add(k);
+          });
+        });
+        const extraFields: MetadataFieldDefinition[] = Array.from(extraKeys).map(k => ({
+          key: k,
+          label: k.replace(/[_-]+/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase()),
+          type: "text",
+          options: [],
+        }));
+        setMetadataFields([...schemaFields, ...extraFields]);
+
+        const rows: ParsedDatasetRow[] = Array.from(filenamesSet).map(fn => {
+          const gold = goldByFn.get(fn) || null;
+          const rowErrors: string[] = [];
+          if (gold) {
+            rowErrors.push(...validateGold(gold, { schema: labelSchema }));
+          }
+          return {
+            filename: fn,
+            metadata: metaByFn.get(fn) || {},
+            goldAnswer: gold,
+            errors: rowErrors,
+          };
+        });
+        setDatasetRows(rows);
       }
     } catch (e) {
       console.error("Failed to load dataset rows", e);
     }
-  }, [experimentId, status, metadataCsv, goldManifest, labelSchema]);
+  }, [experimentId, labelSchema]);
 
   useEffect(() => {
     loadData();
@@ -343,6 +435,7 @@ export function ExperimentDatasetSection({
             body: JSON.stringify({ rows }),
           });
           setFeedback("Metadata successfully synced.");
+          await loadData();
           onUpdated?.();
         }
       }
@@ -367,6 +460,7 @@ export function ExperimentDatasetSection({
         });
         if (res.ok) {
           setFeedback("Gold answers successfully synced.");
+          await loadData();
           onUpdated?.();
         }
       }
@@ -390,13 +484,13 @@ export function ExperimentDatasetSection({
         <label className="dropzone compact">
           <UploadCloud className="dropzone-icon" />
           <strong>Upload / Replace metadata CSV</strong>
-          <span>{metadataCsv ? "CSV loaded — select to replace" : 'Must contain a "filename" column'}</span>
+          <span>{metadataCsv ? "CSV loaded — select to replace" : metadataFields.length > 0 ? `${metadataFields.length} field(s) defined — select to replace` : 'Must contain a "filename" column'}</span>
           <input type="file" accept=".csv,text/csv" hidden onChange={handleUploadMetadataCsv} />
         </label>
         <label className="dropzone compact">
           <UploadCloud className="dropzone-icon" />
           <strong>Upload / Replace gold answers JSON</strong>
-          <span>{goldManifest ? "JSON loaded — select to replace" : "Declare items used for quality scoring"}</span>
+          <span>{goldManifest ? "JSON loaded — select to replace" : goldCount > 0 ? `${goldCount} gold answer(s) configured — select to replace` : "Declare items used for quality scoring"}</span>
           <input type="file" accept=".json,application/json" hidden onChange={handleUploadGoldJson} />
         </label>
       </div>

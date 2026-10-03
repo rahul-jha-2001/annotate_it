@@ -1298,6 +1298,7 @@ def list_data_units(
                 "raw_uri": unit.raw_uri,
                 "filename": unit.raw_uri.rsplit("/", 1)[-1],
                 "is_gold": unit.is_gold,
+                "gold_answer": unit.gold_answer,
                 "metadata": unit.metadata_json or {},
                 "media_url": generate_media_url(unit.raw_uri),
             }
@@ -1375,6 +1376,24 @@ def process_metadata_preview(
         cleaned_rows.append({"filename": fn, "attributes": attrs})
 
     experiment.pending_metadata = cleaned_rows
+
+    current_schema = list(experiment.metadata_schema or [])
+    existing_schema_keys = {field.get("key") for field in current_schema if isinstance(field, dict)}
+    schema_updated = False
+    for key in sorted(list(sample_keys)):
+        if key not in existing_schema_keys:
+            label = key.replace("_", " ").replace("-", " ").title()
+            current_schema.append({
+                "key": key,
+                "label": label,
+                "type": "text",
+                "options": [],
+            })
+            existing_schema_keys.add(key)
+            schema_updated = True
+    if schema_updated:
+        experiment.metadata_schema = current_schema
+
     # If units exist, reconcile immediately
     units_exist = db.query(DataUnit.id).filter_by(experiment_id=experiment.id).first() is not None
     if units_exist:

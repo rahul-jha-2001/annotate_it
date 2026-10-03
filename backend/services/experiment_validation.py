@@ -109,17 +109,32 @@ def reconcile_pending_experiment_data(experiment: Experiment, db: Session) -> di
 
     applied_metadata = 0
     if experiment.pending_metadata:
+        current_schema = list(experiment.metadata_schema or [])
+        existing_schema_keys = {field.get("key") for field in current_schema if isinstance(field, dict)}
+        schema_updated = False
         for row in experiment.pending_metadata:
             if isinstance(row, dict) and "filename" in row:
                 fn = row["filename"]
+                attrs = row.get("attributes")
+                if attrs is None:
+                    attrs = {k: v for k, v in row.items() if k != "filename"}
+                for k in attrs.keys():
+                    if k not in existing_schema_keys:
+                        current_schema.append({
+                            "key": k,
+                            "label": k.replace("_", " ").replace("-", " ").title(),
+                            "type": "text",
+                            "options": [],
+                        })
+                        existing_schema_keys.add(k)
+                        schema_updated = True
                 if fn in by_filename:
-                    attrs = row.get("attributes")
-                    if attrs is None:
-                        attrs = {k: v for k, v in row.items() if k != "filename"}
                     existing_meta = dict(by_filename[fn].metadata_json or {})
                     existing_meta.update(attrs)
                     by_filename[fn].metadata_json = existing_meta
                     applied_metadata += 1
+        if schema_updated:
+            experiment.metadata_schema = current_schema
 
     applied_gold = 0
     if experiment.pending_gold_manifest:

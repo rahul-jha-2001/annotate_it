@@ -245,4 +245,91 @@ describe("ExperimentDashboard", () => {
       expect(screen.getByText("12")).toBeDefined();
     });
   });
+
+  it("displays persisted metadata fields and gold answers in dataset tab", async () => {
+    const experiment = {
+      id: "exp-meta",
+      name: "Metadata Experiment",
+      instructions: "Label images",
+      modality: "image",
+      label_schema: { annotation_type: "classification", classes: ["cat", "dog"] },
+      metadata_schema: [{ key: "scene", label: "Scene", type: "text", options: [] }],
+      access_mode: "anonymous",
+      overlap_n: 1,
+      gold_ratio: 0.1,
+      status: "draft",
+      share_token: "token-meta",
+      qualification_form: [],
+      routing_rules: [],
+      teaching_examples: [],
+      pending_metadata: [],
+      pending_gold_manifest: [],
+      configuration_locked: false,
+      created_at: new Date().toISOString(),
+    };
+
+    const units = [
+      {
+        id: "unit-1",
+        raw_uri: "s3://bucket/experiments/exp-meta/photo1.jpg",
+        filename: "photo1.jpg",
+        is_gold: true,
+        gold_answer: { value: "cat" },
+        metadata: { scene: "outdoor", weather: "sunny" },
+        media_url: "http://localhost:9000/photo1.jpg",
+      },
+    ];
+
+    mockApiFetch.mockImplementation(async (input: any) => {
+      const url = String(input);
+      if (url === "/api/experiments/exp-meta") {
+        return {
+          ok: true,
+          json: async () => experiment,
+        } as Response;
+      }
+      if (url === "/api/experiments/exp-meta/pre-deploy-validation") {
+        return {
+          ok: true,
+          json: async () => ({
+            can_deploy: true,
+            status: "draft",
+            blocker_reason: null,
+            orphaned_gold_entries: [],
+            missing_from_extraction: [],
+            missing_from_metadata: [],
+          }),
+        } as Response;
+      }
+      if (url === "/api/experiments/exp-meta/data-units") {
+        return {
+          ok: true,
+          json: async () => ({
+            experiment_id: "exp-meta",
+            status: "draft",
+            data_units: units,
+          }),
+        } as Response;
+      }
+      return { ok: false, status: 404 } as Response;
+    });
+
+    render(<ExperimentDashboard experimentId="exp-meta" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Metadata Experiment")).toBeDefined();
+    });
+
+    // Should display sample filename
+    await waitFor(() => {
+      expect(screen.getByText("photo1.jpg")).toBeDefined();
+    });
+
+    // Should display metadata field values
+    expect(screen.getByText("outdoor")).toBeDefined();
+    expect(screen.getByText("sunny")).toBeDefined();
+
+    // Summary counts
+    expect(screen.getAllByText("1").length).toBeGreaterThanOrEqual(1);
+  });
 });

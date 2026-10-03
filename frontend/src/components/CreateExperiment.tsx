@@ -310,6 +310,49 @@ export default function CreateExperiment() {
         } catch (settingsErr) {
           console.warn("Could not patch settings on finish setup", settingsErr);
         }
+
+        // Ensure metadata CSV is synced
+        if (metadataCsv) {
+          try {
+            const parsed = parseCsv(metadataCsv.replace(/^\uFEFF/, ""));
+            if (parsed.length > 1) {
+              const headers = parsed[0].map(h => h.trim());
+              const fnIdx = headers.indexOf("filename");
+              if (fnIdx >= 0) {
+                const rows = parsed.slice(1).map(r => {
+                  const fn = r[fnIdx]?.trim();
+                  const attrs: Record<string, any> = {};
+                  headers.forEach((h, i) => { if (i !== fnIdx && r[i]) attrs[h] = r[i]; });
+                  return { filename: fn, attributes: attrs };
+                }).filter(r => Boolean(r.filename));
+                await apiFetch(`/api/experiments/${expId}/reupload-metadata`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ rows }),
+                });
+              }
+            }
+          } catch (metaErr) {
+            console.warn("Could not sync metadata CSV on finish setup", metaErr);
+          }
+        }
+
+        // Ensure gold manifest is synced
+        if (goldManifest) {
+          try {
+            const manifestObj = JSON.parse(goldManifest);
+            if (Array.isArray(manifestObj) && manifestObj.length > 0) {
+              await apiFetch(`/api/experiments/${expId}/gold-manifest`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ manifest: manifestObj }),
+              });
+            }
+          } catch (goldErr) {
+            console.warn("Could not sync gold manifest on finish setup", goldErr);
+          }
+        }
+
         window.location.assign(`/experiments/${expId}`);
         return;
       }
@@ -410,6 +453,31 @@ export default function CreateExperiment() {
       });
       const unitsData = await unitsResponse.json();
       if (!unitsResponse.ok) throw new Error(unitsData.detail || "Could not register dataset");
+
+      if (metadataCsv) {
+        try {
+          const parsed = parseCsv(metadataCsv.replace(/^\uFEFF/, ""));
+          if (parsed.length > 1) {
+            const headers = parsed[0].map(h => h.trim());
+            const fnIdx = headers.indexOf("filename");
+            if (fnIdx >= 0) {
+              const rows = parsed.slice(1).map(r => {
+                const fn = r[fnIdx]?.trim();
+                const attrs: Record<string, any> = {};
+                headers.forEach((h, i) => { if (i !== fnIdx && r[i]) attrs[h] = r[i]; });
+                return { filename: fn, attributes: attrs };
+              }).filter(r => Boolean(r.filename));
+              await apiFetch(`/api/experiments/${expId}/reupload-metadata`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ rows }),
+              });
+            }
+          }
+        } catch (e) {
+          console.error("Error saving pending metadata for individual files", e);
+        }
+      }
 
       if (goldManifest) {
         try {
@@ -759,7 +827,8 @@ export default function CreateExperiment() {
                             if (file) {
                               const text = await file.text();
                               setMetadataCsv(text);
-                              if (createdExperimentId) {
+                              const targetExpId = createdExperimentId || createdExperimentIdRef.current;
+                              if (targetExpId) {
                                 try {
                                   const parsed = parseCsv(text.replace(/^\uFEFF/, ""));
                                   if (parsed.length > 1) {
@@ -772,7 +841,7 @@ export default function CreateExperiment() {
                                         headers.forEach((h, i) => { if (i !== fnIdx && r[i]) attrs[h] = r[i]; });
                                         return { filename: fn, attributes: attrs };
                                       }).filter(r => Boolean(r.filename));
-                                      await apiFetch(`/api/experiments/${createdExperimentId}/metadata-preview`, {
+                                      await apiFetch(`/api/experiments/${targetExpId}/reupload-metadata`, {
                                         method: "POST",
                                         headers: { "Content-Type": "application/json" },
                                         body: JSON.stringify({ rows }),
@@ -780,7 +849,7 @@ export default function CreateExperiment() {
                                     }
                                   }
                                 } catch (e) {
-                                  console.error("Failed to sync metadata-preview", e);
+                                  console.error("Failed to sync reupload-metadata", e);
                                 }
                               }
                             }
@@ -800,11 +869,12 @@ export default function CreateExperiment() {
                             if (file) {
                               const text = await file.text();
                               setGoldManifest(text);
-                              if (createdExperimentId) {
+                              const targetExpId = createdExperimentId || createdExperimentIdRef.current;
+                              if (targetExpId) {
                                 try {
                                   const manifestObj = JSON.parse(text);
                                   if (Array.isArray(manifestObj)) {
-                                    await apiFetch(`/api/experiments/${createdExperimentId}/gold-manifest`, {
+                                    await apiFetch(`/api/experiments/${targetExpId}/gold-manifest`, {
                                       method: "POST",
                                       headers: { "Content-Type": "application/json" },
                                       body: JSON.stringify({ manifest: manifestObj }),
