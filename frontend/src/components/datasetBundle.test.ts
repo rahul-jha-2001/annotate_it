@@ -49,4 +49,28 @@ describe("dataset bundle parsing", () => {
     expect(bundle.rows[0].errors).toContain("Unknown gold label: Unknown");
     expect(bundle.rows[1].errors).toContain("No metadata row matches this media file");
   });
+
+  it("supports allowPendingMedia for non-blocking bundle preview before extraction completes", () => {
+    const bundle = parseDatasetBundle(
+      [],
+      "filename,language,difficulty\npending1.wav,Hindi,3\npending2.wav,Tamil,5",
+      '[{"filename":"pending1.wav","answer":{"value":"Good"}}]',
+      { ...task, allowPendingMedia: true },
+    );
+
+    expect(bundle.errors).toEqual([]);
+    expect(bundle.rows).toHaveLength(2);
+    expect(bundle.rows[0]).toMatchObject({
+      filename: "pending1.wav",
+      metadata: { language: "Hindi", difficulty: 3 },
+      goldAnswer: { value: "Good" },
+      errors: [],
+    });
+    expect(bundle.rows[1]).toMatchObject({
+      filename: "pending2.wav",
+      metadata: { language: "Tamil", difficulty: 5 },
+      goldAnswer: null,
+      errors: [],
+    });
+  });
 });

@@ -17,6 +17,7 @@ export interface ParsedDatasetRow {
 
 interface BundleOptions {
   schema: LabelSchema;
+  allowPendingMedia?: boolean;
 }
 
 export interface ParsedDatasetBundle {
@@ -106,11 +107,12 @@ export function parseDatasetBundle(
   options: BundleOptions,
 ): ParsedDatasetBundle {
   const errors: string[] = [];
-  const duplicateFiles = filenames.filter((filename, index) => filenames.indexOf(filename) !== index);
-  if (duplicateFiles.length) errors.push(`Duplicate media filename: ${[...new Set(duplicateFiles)].join(", ")}`);
+  const allowPending = Boolean(options.allowPendingMedia);
 
   let metadataFields: MetadataFieldDefinition[] = [];
   const metadataByFilename = new Map<string, Record<string, string | number | boolean>>();
+  const metadataSeen = new Set<string>();
+
   if (metadataCsv.trim()) {
     const csvRows = parseCsv(metadataCsv.replace(/^\uFEFF/, ""));
     if (!csvRows.length) throw new Error("Metadata CSV is empty");
@@ -130,15 +132,15 @@ export function parseDatasetBundle(
     if (new Set(metadataFields.map(field => field.key)).size !== metadataFields.length) {
       throw new Error("Metadata CSV column names produce duplicate field keys");
     }
-    const seen = new Set<string>();
+
     dataRows.forEach((row, rowIndex) => {
       const filename = row[filenameIndex]?.trim();
       if (!filename) {
         errors.push(`Metadata row ${rowIndex + 2} has no filename`);
         return;
       }
-      if (seen.has(filename)) errors.push(`Duplicate metadata row: ${filename}`);
-      seen.add(filename);
+      if (metadataSeen.has(filename)) errors.push(`Duplicate metadata row: ${filename}`);
+      metadataSeen.add(filename);
       const metadata: Record<string, string | number | boolean> = {};
       metadataFields.forEach((fieldDefinition, fieldIndex) => {
         const sourceIndex = headers.map((_, index) => index).filter(index => index !== filenameIndex)[fieldIndex];
@@ -146,9 +148,6 @@ export function parseDatasetBundle(
         if (value !== "") metadata[fieldDefinition.key] = coerce(value, fieldDefinition);
       });
       metadataByFilename.set(filename, metadata);
-    });
-    seen.forEach(filename => {
-      if (!filenames.includes(filename)) errors.push(`Metadata has no matching media file: ${filename}`);
     });
   }
 
@@ -169,7 +168,6 @@ export function parseDatasetBundle(
       }
       if (seen.has(candidate.filename)) errors.push(`Duplicate gold row: ${candidate.filename}`);
       seen.add(candidate.filename);
-      if (!filenames.includes(candidate.filename)) errors.push(`Gold answer has no matching media file: ${candidate.filename}`);
       if (candidate.answer && typeof candidate.answer === "object" && !Array.isArray(candidate.answer)) {
         goldByFilename.set(candidate.filename, candidate.answer as Record<string, unknown>);
       } else {
@@ -178,9 +176,28 @@ export function parseDatasetBundle(
     });
   }
 
-  const rows = filenames.map(filename => {
+  const effectiveFilenames = (allowPending && filenames.length === 0)
+    ? Array.from(new Set([...metadataSeen, ...goldByFilename.keys()]))
+    : filenames;
+
+  const duplicateFiles = effectiveFilenames.filter((filename, index) => effectiveFilenames.indexOf(filename) !== index);
+  if (duplicateFiles.length) errors.push(`Duplicate media filename: ${[...new Set(duplicateFiles)].join(", ")}`);
+
+  if (metadataCsv.trim() && !allowPending) {
+    metadataSeen.forEach(filename => {
+      if (!effectiveFilenames.includes(filename)) errors.push(`Metadata has no matching media file: ${filename}`);
+    });
+  }
+
+  if (goldJson.trim() && !allowPending) {
+    goldByFilename.forEach((_, filename) => {
+      if (!effectiveFilenames.includes(filename)) errors.push(`Gold answer has no matching media file: ${filename}`);
+    });
+  }
+
+  const rows = effectiveFilenames.map(filename => {
     const goldAnswer = goldByFilename.get(filename) ?? null;
-    const rowErrors = metadataCsv.trim() && !metadataByFilename.has(filename)
+    const rowErrors = (!allowPending && metadataCsv.trim() && !metadataByFilename.has(filename))
       ? ["No metadata row matches this media file"]
       : [];
     return {
@@ -192,3 +209,4 @@ export function parseDatasetBundle(
   });
   return { rows, metadataFields, errors };
 }
+

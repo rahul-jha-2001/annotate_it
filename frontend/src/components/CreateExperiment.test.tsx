@@ -117,6 +117,48 @@ describe("CreateExperiment - Large-File Bundle Upload Flow", () => {
           }),
         });
       }
+      if (urlStr.includes("/pre-deploy-validation")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            can_deploy: false,
+            status: "draft_media_processing",
+            orphaned_gold_entries: [],
+            missing_from_extraction: [],
+            missing_from_metadata: [],
+            blocker_reason: "Cannot deploy while media archive is processing",
+            registered_count: 0,
+            metadata_count: 0,
+            gold_count: 0,
+          }),
+        });
+      }
+      if (urlStr.includes("/reupload-media") && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            message: "Media reset and multipart session initialized",
+            upload_id: "fresh-upload-id",
+            key: "zip-uploads/exp-bundle-test-123/dataset.zip",
+          }),
+        });
+      }
+      if (urlStr.includes("/metadata-preview") && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            rows: [],
+            columns: [],
+            total_declared: 0,
+          }),
+        });
+      }
+      if (urlStr.includes("/gold-manifest") && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ message: "Gold manifest saved" }),
+        });
+      }
       if (urlStr.includes("/data-units")) {
         return Promise.resolve({
           ok: true,
@@ -286,5 +328,148 @@ describe("CreateExperiment - Large-File Bundle Upload Flow", () => {
       expect(uploadMultipartFile).toHaveBeenCalledTimes(2);
       expect(screen.getByText("Dataset Archive Processing in Background")).toBeDefined();
     });
+  });
+
+  it("renders metadata preview with media extracting placeholder and displays validation feedback on step 6", async () => {
+    // Override pre-deploy-validation to test warnings and blocking errors
+    (apiFetch as any).mockImplementation((input: any, init?: any) => {
+      const urlStr = typeof input === "string" ? input : input.url || "";
+      if (urlStr.includes("/api/annotation-types")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve([
+            {
+              key: "categorical",
+              name: "Categorical",
+              compatible_modalities: ["audio", "image", "video"],
+              supports_choices: true,
+              supports_multi_select: true,
+              required_interaction: "none",
+            },
+          ]),
+        });
+      }
+      if (urlStr.includes("/experiments") && init?.method === "POST" && !urlStr.includes("/reupload-media") && !urlStr.includes("/metadata-preview") && !urlStr.includes("/gold-manifest")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ id: "exp-bundle-test-123" }),
+        });
+      }
+      if (urlStr.includes("/bundle-upload") && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ job_id: "job-bundle-test-456", status: "queued" }),
+        });
+      }
+      if (urlStr.includes("/bundle-upload/job-bundle-test-456")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            status: "processing",
+            progress: { files_processed: 5, files_total: 20 },
+            result: null,
+          }),
+        });
+      }
+      if (urlStr.includes("/metadata-preview") && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            rows: [{ filename: "sample1.wav", attributes: { accent: "Indian" } }],
+            columns: ["accent"],
+            total_declared: 1,
+          }),
+        });
+      }
+      if (urlStr.includes("/pre-deploy-validation")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            can_deploy: false,
+            status: "draft_media_processing",
+            orphaned_gold_entries: ["ghost_sample.wav"],
+            missing_from_extraction: ["missing1.wav"],
+            missing_from_metadata: ["extra1.wav"],
+            blocker_reason: "1 gold answer references files never found in the archive",
+            registered_count: 5,
+            metadata_count: 2,
+            gold_count: 1,
+          }),
+        });
+      }
+      if (urlStr.includes("/reupload-media") && init?.method === "POST") {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            message: "Media reset and multipart session initialized",
+            upload_id: "new-upload-id",
+            key: "zip-uploads/exp-bundle-test-123/dataset.zip",
+          }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    });
+
+    await advanceToDatasetStep();
+
+    const bundleTab = screen.getByText("Single Archive (.zip) for Large Datasets");
+    fireEvent.click(bundleTab);
+
+    const file = new File(["dummy zip content"], "dataset.zip", { type: "application/zip" });
+    const dropzoneInput = screen.getByText("Choose a Dataset Archive (.zip)").closest("label")!.querySelector("input")!;
+    fireEvent.change(dropzoneInput, { target: { files: [file] } });
+
+    await waitFor(() => {
+      expect(screen.getByText("Dataset Archive Processing in Background")).toBeDefined();
+    });
+
+    // Upload metadata CSV
+    const csvContent = "filename,accent\nsample1.wav,Indian\nsample2.wav,British";
+    const csvFile = new File([csvContent], "metadata.csv", { type: "text/csv" });
+    const csvInput = screen.getByText("Upload metadata CSV (optional)").closest("label")!.querySelector("input")!;
+    fireEvent.change(csvInput, { target: { files: [csvFile] } });
+
+    await waitFor(() => {
+      expect(screen.getByText("CSV loaded — choose another to replace it")).toBeDefined();
+    });
+
+    // Click Assemble & preview
+    const assembleBtn = screen.getByRole("button", { name: /Assemble & preview/ });
+    fireEvent.click(assembleBtn);
+
+    // Step 3 should display table with declared rows and "Media extracting..." placeholder
+    await waitFor(() => {
+      expect(screen.getByText("sample1.wav")).toBeDefined();
+      expect(screen.getByText("sample2.wav")).toBeDefined();
+      expect(screen.getAllByText("Media extracting...").length).toBeGreaterThan(0);
+    });
+
+    // Step 3 -> Step 4
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+
+    // Step 4 -> Step 5
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Add question/ })).toBeDefined();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+
+    // Step 5 -> Step 6
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Teaching examples" })).toBeDefined();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Continue/ }));
+
+    // Step 6: Verify validation banners
+    await waitFor(() => {
+      expect(screen.getByText(/1 gold entries reference files that were never found in the uploaded archive/)).toBeDefined();
+      expect(screen.getByText(/ghost_sample\.wav/)).toBeDefined();
+      expect(screen.getByText(/1 files listed in your metadata were not found in the archive/)).toBeDefined();
+      expect(screen.getByText(/missing1\.wav/)).toBeDefined();
+      expect(screen.getByText(/1 extracted files have no metadata row/)).toBeDefined();
+    });
+
+    // Deploy button must be disabled due to orphaned gold entries
+    const deployBtn = screen.getByRole("button", { name: /Create & deploy/ });
+    expect(deployBtn.hasAttribute("disabled")).toBe(true);
   });
 });

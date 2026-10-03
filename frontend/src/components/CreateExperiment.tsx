@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Check,
   FileArchive,
+  Info,
   Loader2,
   Pause,
   Play,
@@ -27,6 +29,7 @@ import {
   uploadMultipartFile,
 } from "../services/multipartUpload";
 import {
+  parseCsv,
   parseDatasetBundle,
   validateGold,
   type MetadataFieldDefinition,
@@ -167,6 +170,69 @@ export default function CreateExperiment() {
       clearInterval(interval);
     };
   }, [createdExperimentId, bundleJobId, bundleJobStatus]);
+
+  const [preDeployValidation, setPreDeployValidation] = useState<{
+    can_deploy: boolean;
+    status: string;
+    orphaned_gold_entries: string[];
+    missing_from_extraction: string[];
+    missing_from_metadata: string[];
+    blocker_reason?: string | null;
+    registered_count: number;
+    metadata_count: number;
+    gold_count: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (step !== 6 || !createdExperimentId) return;
+    let isCancelled = false;
+
+    const fetchValidation = async () => {
+      try {
+        const res = await apiFetch(`/api/experiments/${createdExperimentId}/pre-deploy-validation`);
+        if (res.ok && !isCancelled) {
+          const data = await res.json();
+          setPreDeployValidation(data);
+        }
+      } catch (err) {
+        console.error("Failed to fetch pre-deploy validation", err);
+      }
+    };
+
+    fetchValidation();
+    let interval: number | undefined;
+    if (bundleJobStatus === "processing" || bundleJobStatus === "queued") {
+      interval = window.setInterval(fetchValidation, 3000);
+    }
+    return () => {
+      isCancelled = true;
+      if (interval) clearInterval(interval);
+    };
+  }, [step, createdExperimentId, bundleJobStatus]);
+
+  const handleReuploadMedia = async () => {
+    if (!createdExperimentId) return;
+    setError(null);
+    try {
+      const res = await apiFetch(`/api/experiments/${createdExperimentId}/reupload-media`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || "Failed to reset media upload session");
+      }
+      setBundleFile(null);
+      setBundleUploadStatus("idle");
+      setBundleJobStatus(null);
+      setBundleJobErrors([]);
+      setBundleJobApplied([]);
+      setDatasetRows([]);
+      setMetadataCsv("");
+      setGoldManifest("");
+      setPreDeployValidation(null);
+      setStep(2);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not reset media upload");
+    }
+  };
 
   useEffect(() => {
     apiFetch("/api/annotation-types").then(response => response.json()).then(setAnnotationTypes)
@@ -521,7 +587,11 @@ export default function CreateExperiment() {
       const sourceFilenames = uploadMode === "bundle" && bundleJobApplied.length > 0
         ? bundleJobApplied
         : files.map(file => file.name);
-      const parsed = parseDatasetBundle(sourceFilenames, metadataCsv, goldManifest, { schema: annotationSchema });
+      const allowPending = uploadMode === "bundle" && bundleJobStatus !== "completed";
+      const parsed = parseDatasetBundle(sourceFilenames, metadataCsv, goldManifest, {
+        schema: annotationSchema,
+        allowPendingMedia: allowPending,
+      });
       setMetadataFields(parsed.metadataFields);
       setDatasetRows(parsed.rows);
       setDatasetErrors(parsed.errors);
@@ -1099,35 +1169,87 @@ export default function CreateExperiment() {
                     </div>
                   )}
 
-                  {bundleJobStatus !== "completed" ? (
-                    <div className="bundle-disabled-notice">
-                      <Loader2 size={18} className="spin-animate" />
-                      <span>
-                        Metadata CSV and gold answers can be uploaded once media extraction finishes.
-                        You can continue configuring qualifications and routing in the meantime.
-                      </span>
+                  <div style={{ marginTop: "16px" }}>
+                    <p className="help-text" style={{ marginBottom: "8px" }}>
+                      <strong>Optional Follow-ups:</strong> Add metadata attributes or gold answers referencing the files in your archive.
+                    </p>
+                    <div className="bundle-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+                      <label className="dropzone compact">
+                        <UploadCloud className="dropzone-icon" />
+                        <strong>Upload metadata CSV (optional)</strong>
+                        <span>{metadataCsv ? "CSV loaded — choose another to replace it" : 'Must contain a "filename" column'}</span>
+                        <input
+                          type="file"
+                          accept=".csv,text/csv"
+                          hidden
+                          onChange={async event => {
+                            const file = event.target.files?.[0];
+                            if (file) {
+                              const text = await file.text();
+                              setMetadataCsv(text);
+                              setDatasetRows([]);
+                              if (createdExperimentId) {
+                                try {
+                                  const parsed = parseCsv(text.replace(/^\uFEFF/, ""));
+                                  if (parsed.length > 1) {
+                                    const headers = parsed[0].map(h => h.trim());
+                                    const fnIdx = headers.indexOf("filename");
+                                    if (fnIdx >= 0) {
+                                      const rows = parsed.slice(1).map(r => {
+                                        const fn = r[fnIdx]?.trim();
+                                        const attrs: Record<string, any> = {};
+                                        headers.forEach((h, i) => { if (i !== fnIdx && r[i]) attrs[h] = r[i]; });
+                                        return { filename: fn, attributes: attrs };
+                                      }).filter(r => Boolean(r.filename));
+                                      await apiFetch(`/api/experiments/${createdExperimentId}/metadata-preview`, {
+                                        method: "POST",
+                                        headers: { "Content-Type": "application/json" },
+                                        body: JSON.stringify({ rows }),
+                                      });
+                                    }
+                                  }
+                                } catch (e) {
+                                  console.error("Failed to sync metadata-preview", e);
+                                }
+                              }
+                            }
+                          }}
+                        />
+                      </label>
+                      <label className="dropzone compact">
+                        <UploadCloud className="dropzone-icon" />
+                        <strong>Upload gold answers JSON (optional)</strong>
+                        <span>{goldManifest ? "JSON loaded — choose another to replace it" : "Only include samples used as quality checks"}</span>
+                        <input
+                          type="file"
+                          accept=".json,application/json"
+                          hidden
+                          onChange={async event => {
+                            const file = event.target.files?.[0];
+                            if (file) {
+                              const text = await file.text();
+                              setGoldManifest(text);
+                              setDatasetRows([]);
+                              if (createdExperimentId) {
+                                try {
+                                  const manifestObj = JSON.parse(text);
+                                  if (Array.isArray(manifestObj)) {
+                                    await apiFetch(`/api/experiments/${createdExperimentId}/gold-manifest`, {
+                                      method: "POST",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ manifest: manifestObj }),
+                                    });
+                                  }
+                                } catch (e) {
+                                  console.error("Failed to sync gold manifest", e);
+                                }
+                              }
+                            }
+                          }}
+                        />
+                      </label>
                     </div>
-                  ) : (
-                    <div style={{ marginTop: "16px" }}>
-                      <p className="help-text" style={{ marginBottom: "8px" }}>
-                        <strong>Optional Follow-ups:</strong> Add metadata attributes or gold answers referencing the files in your archive.
-                      </p>
-                      <div className="bundle-grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
-                        <label className="dropzone compact">
-                          <UploadCloud className="dropzone-icon" />
-                          <strong>Upload metadata CSV (optional)</strong>
-                          <span>{metadataCsv ? "CSV loaded — choose another to replace it" : 'Must contain a "filename" column'}</span>
-                          <input type="file" accept=".csv,text/csv" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setMetadataCsv(await file.text()); setDatasetRows([]); } }} />
-                        </label>
-                        <label className="dropzone compact">
-                          <UploadCloud className="dropzone-icon" />
-                          <strong>Upload gold answers JSON (optional)</strong>
-                          <span>{goldManifest ? "JSON loaded — choose another to replace it" : "Only include samples used as quality checks"}</span>
-                          <input type="file" accept=".json,application/json" hidden onChange={async event => { const file = event.target.files?.[0]; if (file) { setGoldManifest(await file.text()); setDatasetRows([]); } }} />
-                        </label>
-                      </div>
-                    </div>
-                  )}
+                  </div>
                 </div>
               )}
             </>
@@ -1136,18 +1258,27 @@ export default function CreateExperiment() {
         </div>}
 
         {step === 3 && <div className="flex-col">
-          {uploadMode === "bundle" && bundleJobStatus !== "completed" ? (
+          {uploadMode === "bundle" && bundleJobStatus !== "completed" && datasetRows.length === 0 ? (
             <div className="empty-builder" style={{ padding: "40px 20px" }}>
               <Loader2 size={32} className="spin-animate text-blue-600" style={{ margin: "0 auto 12px" }} />
               <strong>Media archive is processing in the background</strong>
               <span>
                 Processed {bundleJobProgress?.files_processed ?? 0} of {bundleJobProgress?.files_total ?? "?"} files.
-                Dataset preview and metadata association will be available once extraction finishes.
+                Upload a metadata CSV in the previous step to preview declared samples immediately, or wait for extraction to finish.
                 You can continue to Qualifications and Teaching Examples now!
               </span>
             </div>
           ) : (
             <>
+              {uploadMode === "bundle" && bundleJobStatus !== "completed" && (
+                <div style={{ display: "flex", alignItems: "center", gap: "10px", padding: "12px 16px", background: "rgba(59, 130, 246, 0.08)", border: "1px solid rgba(59, 130, 246, 0.25)", borderRadius: "8px", marginBottom: "16px", color: "var(--text-main)" }}>
+                  <Loader2 size={18} className="spin-animate" style={{ color: "#3b82f6", flexShrink: 0 }} />
+                  <div>
+                    <strong>Media extracting in background ({bundleJobProgress?.files_processed ?? 0} / {bundleJobProgress?.files_total ?? "?"} files processed)</strong>
+                    <div style={{ fontSize: "0.85rem", color: "var(--text-muted)" }}>Previewing declared metadata and gold answers. Media thumbnails will appear once extraction completes.</div>
+                  </div>
+                </div>
+              )}
               {!datasetAssemblyCurrent && <p className="form-error">The annotation task changed after this dataset was assembled. Go back to “Dataset bundle” and select “Assemble &amp; preview” again to revalidate every gold answer.</p>}
               <div className="dataset-summary">
                 <div><strong>{datasetRows.length}</strong><span>samples</span></div>
@@ -1161,10 +1292,19 @@ export default function CreateExperiment() {
                   <td style={{ minWidth: "220px", verticalAlign: "top" }}>
                     <strong style={{ display: "block", marginBottom: "6px", wordBreak: "break-all" }}>{row.filename}</strong>
                     <div className="sample-row-preview">
-                      {mediaPlugin ? row.goldAnswer
-                        ? <AnnotationOverlaySelector modality={form.modality} schema={annotationSchema} mediaUrl={mediaUrls[row.filename]} title={row.filename} options={buildOverlayOptions(row.goldAnswer as AnnotationAnswer, [])} />
-                        : <mediaPlugin.PreviewRenderer mediaUrl={mediaUrls[row.filename]} title={row.filename} />
-                        : <span>Unsupported media</span>}
+                      {(!mediaUrls[row.filename] && uploadMode === "bundle" && bundleJobStatus !== "completed") ? (
+                        <div style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: "var(--text-muted)", fontSize: "0.85rem", background: "var(--surface-hover)", padding: "4px 8px", borderRadius: "4px" }}>
+                          <Loader2 size={13} className="spin-animate" /> Media extracting...
+                        </div>
+                      ) : mediaPlugin && mediaUrls[row.filename] ? (
+                        row.goldAnswer ? (
+                          <AnnotationOverlaySelector modality={form.modality} schema={annotationSchema} mediaUrl={mediaUrls[row.filename]} title={row.filename} options={buildOverlayOptions(row.goldAnswer as AnnotationAnswer, [])} />
+                        ) : (
+                          <mediaPlugin.PreviewRenderer mediaUrl={mediaUrls[row.filename]} title={row.filename} />
+                        )
+                      ) : (
+                        <span>Unsupported or pending media</span>
+                      )}
                     </div>
                   </td>
                   {metadataFields.map(field => <td key={field.key}>
@@ -1412,6 +1552,69 @@ export default function CreateExperiment() {
             <div><span>Qualification questions</span><strong>{questions.length}</strong></div>
             <div><span>Routing rules</span><strong>{rules.length}</strong></div>
           </div>
+          {/* Pre-Deploy Validation Feedback */}
+          {preDeployValidation && (
+            <div style={{ marginTop: "16px", display: "flex", flexDirection: "column", gap: "10px" }}>
+              {preDeployValidation.orphaned_gold_entries.length > 0 && (
+                <div style={{ background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.3)", borderRadius: "8px", padding: "12px 16px", display: "flex", gap: "10px", alignItems: "flex-start", color: "var(--danger)" }}>
+                  <AlertCircle size={18} style={{ marginTop: "2px", flexShrink: 0 }} />
+                  <div>
+                    <strong>{preDeployValidation.orphaned_gold_entries.length} gold entries reference files that were never found in the uploaded archive:</strong>
+                    <p style={{ margin: "4px 0", fontSize: "0.85rem", wordBreak: "break-all" }}>{preDeployValidation.orphaned_gold_entries.join(", ")}</p>
+                    <span style={{ fontSize: "0.85rem" }}>Fix the gold manifest or re-check the filenames before deploying.</span>
+                  </div>
+                </div>
+              )}
+              {preDeployValidation.missing_from_extraction.length > 0 && (
+                <div style={{ background: "rgba(245, 158, 11, 0.08)", border: "1px solid rgba(245, 158, 11, 0.3)", borderRadius: "8px", padding: "12px 16px", display: "flex", gap: "10px", alignItems: "flex-start", color: "#d97706" }}>
+                  <AlertTriangle size={18} style={{ marginTop: "2px", flexShrink: 0 }} />
+                  <div>
+                    <strong>{preDeployValidation.missing_from_extraction.length} files listed in your metadata were not found in the archive:</strong>
+                    <p style={{ margin: "4px 0", fontSize: "0.85rem", wordBreak: "break-all" }}>{preDeployValidation.missing_from_extraction.join(", ")}</p>
+                    <span style={{ fontSize: "0.85rem" }}>They will not be part of this experiment.</span>
+                  </div>
+                </div>
+              )}
+              {preDeployValidation.missing_from_metadata.length > 0 && (
+                <div style={{ background: "rgba(59, 130, 246, 0.08)", border: "1px solid rgba(59, 130, 246, 0.3)", borderRadius: "8px", padding: "12px 16px", display: "flex", gap: "10px", alignItems: "flex-start", color: "var(--accent)" }}>
+                  <Info size={18} style={{ marginTop: "2px", flexShrink: 0 }} />
+                  <div>
+                    <strong>{preDeployValidation.missing_from_metadata.length} extracted files have no metadata row.</strong>
+                    <span style={{ display: "block", fontSize: "0.85rem" }}>This is fine if metadata was optional for your use case.</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {uploadMode === "bundle" && bundleJobStatus === "failed" && (
+            <div style={{ background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.3)", borderRadius: "8px", padding: "14px 16px", marginTop: "14px" }}>
+              <strong style={{ color: "var(--danger)", display: "flex", alignItems: "center", gap: "6px" }}>
+                <AlertCircle size={18} /> Media Extraction Failed
+              </strong>
+              <p style={{ margin: "6px 0 10px", fontSize: "0.875rem" }}>
+                The media archive extraction encountered errors. You can re-upload the zip archive or fix your metadata/gold manifest independently.
+              </p>
+              <div style={{ display: "flex", gap: "10px" }}>
+                <button type="button" className="btn btn-secondary" onClick={handleReuploadMedia}>
+                  <RefreshCw size={15} /> Re-upload Media (.zip)
+                </button>
+                <button type="button" className="btn btn-secondary" onClick={() => setStep(2)}>
+                  <UploadCloud size={15} /> Re-upload Metadata / Gold
+                </button>
+              </div>
+            </div>
+          )}
+
+          {uploadMode === "bundle" && (bundleJobStatus === "processing" || bundleJobStatus === "queued") && (
+            <div style={{ background: "rgba(59, 130, 246, 0.08)", border: "1px solid rgba(59, 130, 246, 0.3)", borderRadius: "8px", padding: "12px 16px", marginTop: "14px", display: "flex", alignItems: "center", gap: "10px" }}>
+              <Loader2 size={16} className="spin-animate text-blue-600" />
+              <span>
+                Your dataset is still being processed ({bundleJobProgress?.files_processed ?? 0}/{bundleJobProgress?.files_total ?? "?"} files). Deployment will be enabled once extraction finishes.
+              </span>
+            </div>
+          )}
+
           {form.gold_ratio > 0 && goldCount === 0 && <p className="form-error">Add at least one gold answer or set quality-check frequency to “None”.</p>}
           {error && <p className="form-error">{error}</p>}
         </div>}
@@ -1423,10 +1626,10 @@ export default function CreateExperiment() {
               type="button"
               className="btn btn-primary"
               disabled={!canContinue}
-              onClick={step === 2 ? (uploadMode === "bundle" && bundleJobStatus !== "completed" ? () => setStep(3) : assembleDataset) : () => setStep(value => value + 1)}
+              onClick={step === 2 ? (uploadMode === "bundle" && bundleJobStatus !== "completed" && !metadataCsv && !goldManifest ? () => setStep(3) : assembleDataset) : () => setStep(value => value + 1)}
             >
               {step === 2
-                ? uploadMode === "bundle" && bundleJobStatus !== "completed"
+                ? uploadMode === "bundle" && bundleJobStatus !== "completed" && !metadataCsv && !goldManifest
                   ? "Continue"
                   : "Assemble & preview"
                 : "Continue"}{" "}
@@ -1439,13 +1642,16 @@ export default function CreateExperiment() {
               disabled={
                 submitting ||
                 (form.gold_ratio > 0 && goldCount === 0) ||
-                (uploadMode === "bundle" && (bundleJobStatus === "queued" || bundleJobStatus === "processing" || bundleJobStatus === "failed"))
+                (uploadMode === "bundle" && (bundleJobStatus === "queued" || bundleJobStatus === "processing" || bundleJobStatus === "failed")) ||
+                (preDeployValidation ? !preDeployValidation.can_deploy : false)
               }
               title={
                 uploadMode === "bundle" && (bundleJobStatus === "queued" || bundleJobStatus === "processing")
                   ? "Cannot deploy while media archive is processing"
                   : uploadMode === "bundle" && bundleJobStatus === "failed"
                   ? "Cannot deploy when media archive processing failed"
+                  : preDeployValidation && !preDeployValidation.can_deploy
+                  ? preDeployValidation.blocker_reason ?? "Cannot deploy until validation issues are resolved"
                   : undefined
               }
               onClick={deploy}

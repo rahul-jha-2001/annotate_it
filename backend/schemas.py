@@ -358,6 +358,40 @@ class AnnotatorConfigurationResponse(BaseModel):
     access_mode: Literal["sign_in_required", "guest_name", "anonymous"]
 
 
+class MetadataPreviewRow(BaseModel):
+    filename: str
+    attributes: Dict[str, Any] = Field(default_factory=dict)
+
+
+class MetadataPreviewRequest(BaseModel):
+    rows: Optional[List[MetadataPreviewRow]] = None
+
+
+class MetadataPreviewResponse(BaseModel):
+    total_rows: int
+    rows: List[MetadataPreviewRow]
+    sample_keys: List[str] = Field(default_factory=list)
+
+
+class PreDeployValidationResponse(BaseModel):
+    can_deploy: bool
+    status: str
+    orphaned_gold_entries: List[str]
+    missing_from_extraction: List[str]
+    missing_from_metadata: List[str]
+    blocker_reason: Optional[str] = None
+    registered_count: int
+    metadata_count: int
+    gold_count: int
+
+
+class ReuploadMediaResponse(BaseModel):
+    upload_id: str
+    s3_key: str
+    experiment_id: str
+    status: str
+
+
 class ConsensusPolicySchema(BaseModel):
     min_annotations_for_consensus: int = Field(default=2, ge=1)
     low_evidence_threshold: int = Field(default=3, ge=1)

@@ -66,14 +66,15 @@ from schemas import (
     ExperimentListResponse, ExperimentResponse, ExperimentUpdate,
     ExportDownloadResponse, ExportJobCreateRequest, ExportJobResponse,
     ExportPreflightRequest, ExportPreflightResponse,
-    GoldManifestRequest, ModalityResponse,
-    NextItemResponse, PresignMultipartPartRequest, PresignMultipartPartResponse,
+    GoldManifestRequest, MetadataPreviewRequest, MetadataPreviewResponse, ModalityResponse,
+    NextItemResponse, PreDeployValidationResponse, PresignMultipartPartRequest, PresignMultipartPartResponse,
     PresignMultipartRequest, PresignMultipartResponse, PresignRequest,
-    PresignResponse, PresignResponseItem, QualificationSubmission, SessionResponse,
+    PresignResponse, PresignResponseItem, QualificationSubmission, ReuploadMediaResponse, SessionResponse,
     SessionStartRequest, TeachingExampleItem, TeachingExampleItemResponse,
     TeachingExamplesRequest, TeachingExamplesResponse,
 )
 from schema_compat import normalize_label_schema
+from services.experiment_validation import validate_experiment_for_deploy, reconcile_pending_experiment_data
 from services.allocation import allocate_next_item, has_pending_unseen_items
 from services.scoring import recompute_after_annotation
 from services.qualifications import validate_qualification_answers, validate_sample_metadata
@@ -267,6 +268,18 @@ if AWS_SESSION_TOKEN:
 s3_client = boto3.client("s3", **s3_kwargs)
 
 
+def delete_s3_prefix(bucket: str, prefix: str):
+    try:
+        paginator = s3_client.get_paginator('list_objects_v2')
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            objects = page.get('Contents', [])
+            if objects:
+                delete_keys = [{'Key': obj['Key']} for obj in objects]
+                s3_client.delete_objects(Bucket=bucket, Delete={'Objects': delete_keys})
+    except Exception as exc:
+        logger.warning("Error deleting S3 prefix %s in bucket %s: %s", prefix, bucket, exc)
+
+
 def generate_share_token() -> str:
     return secrets.token_urlsafe(8)
 
@@ -275,12 +288,16 @@ def get_owned_experiment(
     experiment_id: uuid.UUID,
     db: Session,
     user: User,
+    for_update: bool = False,
 ) -> Experiment:
     current_experiment_id.set(str(experiment_id))
-    experiment = db.query(Experiment).filter(
+    query = db.query(Experiment).filter(
         Experiment.id == experiment_id,
         Experiment.status != "deleted",
-    ).first()
+    )
+    if for_update:
+        query = query.with_for_update()
+    experiment = query.first()
     if experiment is None:
         logger.info(
             "authorization.resource_missing",
@@ -947,7 +964,7 @@ def patch_bundle_upload_status(
     experiment = db.query(Experiment).filter(
         Experiment.id == experiment_id,
         Experiment.status != "deleted",
-    ).first()
+    ).with_for_update().first()
     if not experiment or experiment.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Experiment not found")
 
@@ -966,6 +983,7 @@ def patch_bundle_upload_status(
         if payload.status == "completed":
             job.completed_at = now_utc
             experiment.status = "draft"
+            reconcile_pending_experiment_data(experiment, db)
         elif payload.status == "failed":
             job.completed_at = now_utc
             experiment.status = "draft_media_failed"
@@ -999,19 +1017,44 @@ def patch_bundle_upload_status(
     )
 
 
+@app.get("/experiments/{experiment_id}/pre-deploy-validation", response_model=PreDeployValidationResponse)
+def get_pre_deploy_validation(
+    experiment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user)
+    res = validate_experiment_for_deploy(experiment, db)
+    return PreDeployValidationResponse(
+        can_deploy=res.can_deploy,
+        status=res.status,
+        orphaned_gold_entries=res.orphaned_gold_entries,
+        missing_from_extraction=res.missing_from_extraction,
+        missing_from_metadata=res.missing_from_metadata,
+        blocker_reason=res.blocker_reason,
+        registered_count=res.registered_count,
+        metadata_count=res.metadata_count,
+        gold_count=res.gold_count,
+    )
+
+
 @app.post("/experiments/{experiment_id}/deploy")
 def deploy_experiment(
     experiment_id: uuid.UUID,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    experiment = get_owned_experiment(experiment_id, db, user)
-    if experiment.status == "draft_media_processing":
-        raise HTTPException(status_code=409, detail="Cannot deploy while media archive is processing")
-    if experiment.status == "draft_media_failed":
-        raise HTTPException(status_code=409, detail="Cannot deploy when media archive processing failed")
-    if not db.query(DataUnit).filter_by(experiment_id=experiment.id).first():
-        raise HTTPException(status_code=409, detail="Upload at least one sample before deployment")
+    experiment = get_owned_experiment(experiment_id, db, user, for_update=True)
+
+    res = validate_experiment_for_deploy(experiment, db)
+    if not res.can_deploy:
+        raise HTTPException(
+            status_code=409,
+            detail=res.blocker_reason or "Cannot deploy experiment",
+        )
+
+    # Reconcile pending metadata and pending gold manifest onto DataUnits
+    reconcile_pending_experiment_data(experiment, db)
     experiment.status = "active"
     db.commit()
     logger.info(
@@ -1023,6 +1066,57 @@ def deploy_experiment(
         },
     )
     return {"id": experiment.id, "status": experiment.status}
+
+
+@app.post("/experiments/{experiment_id}/reupload-media", response_model=ReuploadMediaResponse)
+def reupload_media(
+    experiment_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user, for_update=True)
+
+    if experiment.status not in ("draft_media_failed", "draft_media_processing", "draft"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot re-upload media when experiment status is '{experiment.status}'",
+        )
+
+    exp_str = str(experiment.id)
+    # 1. Full S3 cleanup
+    delete_s3_prefix(S3_BUCKET, f"experiments/{exp_str}/")
+    delete_s3_prefix(S3_BUCKET, f"zip-uploads/{exp_str}/")
+
+    # 2. Full DB DataUnit cleanup
+    db.query(DataUnit).filter_by(experiment_id=experiment.id).delete()
+
+    # 3. Mark existing bundle jobs superseded
+    db.query(BundleUploadJob).filter_by(experiment_id=experiment.id).update({"status": "superseded"})
+
+    # 4. Clean slate reset of pending_* fields
+    experiment.pending_metadata = []
+    experiment.pending_gold_manifest = []
+
+    # 5. Reset status
+    experiment.status = "draft_media_processing"
+    db.commit()
+    db.refresh(experiment)
+
+    # 6. Generate fresh multipart upload session for new zip
+    s3_key = f"zip-uploads/{exp_str}/{uuid.uuid4()}.zip"
+    resp = s3_client.create_multipart_upload(
+        Bucket=S3_BUCKET,
+        Key=s3_key,
+        ContentType="application/zip",
+    )
+    upload_id = resp["UploadId"]
+
+    return ReuploadMediaResponse(
+        upload_id=upload_id,
+        s3_key=s3_key,
+        experiment_id=exp_str,
+        status=experiment.status,
+    )
 
 
 @app.post("/experiments/{experiment_id}/data-units")
@@ -1222,13 +1316,51 @@ def get_annotator_item_media_url(
     }
 
 
+@app.post("/experiments/{experiment_id}/metadata-preview", response_model=MetadataPreviewResponse)
+@app.post("/experiments/{experiment_id}/reupload-metadata", response_model=MetadataPreviewResponse)
+def process_metadata_preview(
+    experiment_id: uuid.UUID,
+    payload: MetadataPreviewRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    experiment = get_owned_experiment(experiment_id, db, user, for_update=True)
+
+    rows = payload.rows or []
+    cleaned_rows = []
+    sample_keys = set()
+    for row in rows:
+        fn = (row.filename or "").strip()
+        if not fn:
+            continue
+        attrs = dict(row.attributes or {})
+        sample_keys.update(attrs.keys())
+        cleaned_rows.append({"filename": fn, "attributes": attrs})
+
+    experiment.pending_metadata = cleaned_rows
+    # If units exist, reconcile immediately
+    units_exist = db.query(DataUnit.id).filter_by(experiment_id=experiment.id).first() is not None
+    if units_exist:
+        reconcile_pending_experiment_data(experiment, db)
+    else:
+        db.commit()
+
+    return MetadataPreviewResponse(
+        total_rows=len(cleaned_rows),
+        rows=cleaned_rows[:100],
+        sample_keys=sorted(list(sample_keys)),
+    )
+
+
 @app.post("/experiments/{experiment_id}/gold-manifest")
+@app.post("/experiments/{experiment_id}/reupload-gold-manifest")
 def process_gold_manifest(
     experiment_id: uuid.UUID, request: GoldManifestRequest,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    experiment = get_owned_experiment(experiment_id, db, user)
+    experiment = get_owned_experiment(experiment_id, db, user, for_update=True)
+
     ensure_current_schema(experiment)
     units = db.query(DataUnit).filter_by(experiment_id=experiment.id).all()
     by_filename = {}
@@ -1237,27 +1369,42 @@ def process_gold_manifest(
     spec = get_type(experiment.label_schema["annotation_type"])
     results = {"applied": [], "errors": []}
     seen = set()
+    validated_manifest = []
+
     for entry in request.manifest:
         if entry.filename in seen:
             results["errors"].append({"filename": entry.filename, "error": "Duplicate manifest entry"})
             continue
         seen.add(entry.filename)
-        matches = by_filename.get(entry.filename, [])
-        if not matches:
-            results["errors"].append({"filename": entry.filename, "error": "No uploaded file matches this filename"})
-            continue
-        if len(matches) > 1:
-            results["errors"].append({"filename": entry.filename, "error": "Multiple uploaded files have this filename"})
-            continue
+
         try:
             answer = spec.validate_answer(entry.answer, experiment.label_schema)
         except (ValueError, ValidationError) as exc:
             results["errors"].append({"filename": entry.filename, "error": str(exc)})
             continue
-        matches[0].is_gold = True
-        matches[0].gold_answer = answer
-        results["applied"].append(entry.filename)
-    if experiment.teaching_examples:
+
+        validated_manifest.append({"filename": entry.filename, "answer": answer})
+
+        matches = by_filename.get(entry.filename, [])
+        if len(matches) > 1:
+            results["errors"].append({"filename": entry.filename, "error": "Multiple uploaded files have this filename"})
+            continue
+
+        if matches:
+            matches[0].is_gold = True
+            matches[0].gold_answer = answer
+            results["applied"].append(entry.filename)
+        else:
+            if experiment.status in ("draft_media_processing", "draft_media_failed") or len(units) == 0:
+                # Media is still extracting or pending: save as pending without error
+                results["applied"].append(entry.filename)
+            else:
+                results["errors"].append({"filename": entry.filename, "error": "No uploaded file matches this filename"})
+
+    # Update pending_gold_manifest with validated entries
+    experiment.pending_gold_manifest = validated_manifest
+
+    if experiment.teaching_examples and units:
         applied_units = {u.id for u in units if u.raw_uri.rsplit("/", 1)[-1] in results["applied"]}
         updated_te = []
         changed = False
@@ -1274,6 +1421,7 @@ def process_gold_manifest(
             updated_te.append(te)
         if changed:
             experiment.teaching_examples = updated_te
+
     db.commit()
     logger.info(
         "gold_manifest.processed",

@@ -43,6 +43,8 @@ class Experiment(Base):
     qualification_form = Column(JSONB, nullable=False, default=list)
     routing_rules = Column(JSONB, nullable=False, default=list)
     teaching_examples = Column(JSONB, nullable=False, default=list)
+    pending_metadata = Column(JSONB, nullable=False, default=list)
+    pending_gold_manifest = Column(JSONB, nullable=False, default=list)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     deleted_at = Column(DateTime(timezone=True))
 
