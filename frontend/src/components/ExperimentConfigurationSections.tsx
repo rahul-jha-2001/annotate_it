@@ -822,7 +822,7 @@ export function ExperimentTeachingSection({
         const res = await apiFetch(`/api/experiments/${experimentId}/data-units`);
         if (res.ok) {
           const data = await res.json();
-          setDataUnits(data.data_units || []);
+          setDataUnits(Array.isArray(data) ? data : (data.data_units || []));
         }
       } catch (err) {
         console.error("Failed to load data units for teaching examples", err);
@@ -831,18 +831,27 @@ export function ExperimentTeachingSection({
     fetchUnits();
   }, [experimentId]);
 
+  const goldUnits = dataUnits.filter(u => Boolean(u.is_gold) || Boolean(u.gold_answer && Object.keys(u.gold_answer).length > 0));
+  const otherUnits = dataUnits.filter(u => !u.is_gold && (!u.gold_answer || Object.keys(u.gold_answer).length === 0));
+
   const addExample = () => {
     if (dataUnits.length === 0) return;
-    const firstUnit = dataUnits[0];
+    const usedIds = new Set(examples.map(ex => ex.data_unit_id));
+    const targetUnit = goldUnits.find(u => !usedIds.has(u.id)) ||
+      dataUnits.find(u => !usedIds.has(u.id)) ||
+      goldUnits[0] ||
+      dataUnits[0];
+
+    const hasGoldAnswer = targetUnit?.gold_answer && Object.keys(targetUnit.gold_answer).length > 0;
     setExamples(current => [
       ...current,
       {
-        filename: firstUnit.filename || firstUnit.id,
-        data_unit_id: firstUnit.id,
-        answer: {} as AnnotationAnswer,
-        answerText: "{}",
+        filename: targetUnit.filename || targetUnit.id,
+        data_unit_id: targetUnit.id,
+        answer: hasGoldAnswer ? targetUnit.gold_answer : ({} as AnnotationAnswer),
+        answerText: hasGoldAnswer ? JSON.stringify(targetUnit.gold_answer, null, 2) : "{}",
         explanation: "",
-        keepAsGold: false,
+        keepAsGold: Boolean(targetUnit.is_gold),
       },
     ]);
   };
@@ -905,41 +914,83 @@ export function ExperimentTeachingSection({
         </div>
       )}
 
+      {goldUnits.length > 0 ? (
+        <div style={{ padding: "10px 14px", background: "rgba(59, 130, 246, 0.08)", border: "1px solid rgba(59, 130, 246, 0.2)", borderRadius: "6px", marginBottom: "16px", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+          ⭐ <strong>{goldUnits.length} gold quality-check sample(s) available.</strong> When you select a gold sample from the dropdown, its verified answer is automatically pre-filled.
+        </div>
+      ) : (
+        <div style={{ padding: "10px 14px", background: "rgba(100, 116, 139, 0.08)", border: "1px solid rgba(100, 116, 139, 0.2)", borderRadius: "6px", marginBottom: "16px", fontSize: "0.85rem", color: "var(--text-secondary)" }}>
+          ℹ️ <strong>No gold quality-check answers registered yet:</strong> You can define custom answers below, or upload a gold JSON in the <strong>Dataset &amp; Gold Answers</strong> tab to automatically recognize verified gold samples.
+        </div>
+      )}
+
       {examples.length === 0 ? (
         <div className="empty-builder" style={{ margin: "16px 0" }}>
           <strong>No teaching examples configured yet.</strong>
           <span>Add 2–3 reference examples to onboard new annotators effectively.</span>
         </div>
       ) : (
-        examples.map((item, index) => (
-          <div className="builder-card" key={index} style={{ marginBottom: "16px", padding: "16px" }}>
-            <div className="card-heading">
-              <strong>Teaching Example {index + 1}</strong>
-              <button
-                type="button"
-                className="icon-button"
-                onClick={() => setExamples(current => current.filter((_, i) => i !== index))}
-              >
-                <Trash2 size={16} />
-              </button>
-            </div>
-            <div className="form-group" style={{ marginBottom: "12px" }}>
-              <label className="form-label">Select Sample</label>
-              <select
-                className="form-select"
-                value={item.data_unit_id}
-                onChange={e => {
-                  const unit = dataUnits.find(u => u.id === e.target.value);
-                  setExamples(current => current.map((ex, i) => i === index ? { ...ex, data_unit_id: e.target.value, filename: unit?.filename || ex.filename } : ex));
-                }}
-              >
-                {dataUnits.map(u => (
-                  <option key={u.id} value={u.id}>
-                    {u.filename || u.raw_uri?.split("/").pop() || u.id}
-                  </option>
-                ))}
-              </select>
-            </div>
+        examples.map((item, index) => {
+          const selectedUnit = dataUnits.find(u => u.id === item.data_unit_id);
+          const isSelectedGold = Boolean(selectedUnit?.is_gold) || Boolean(selectedUnit?.gold_answer && Object.keys(selectedUnit.gold_answer).length > 0);
+          return (
+            <div className="builder-card" key={index} style={{ marginBottom: "16px", padding: "16px" }}>
+              <div className="card-heading">
+                <strong>Teaching Example {index + 1}</strong>
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => setExamples(current => current.filter((_, i) => i !== index))}
+                >
+                  <Trash2 size={16} />
+                </button>
+              </div>
+              <div className="form-group" style={{ marginBottom: "12px" }}>
+                <label className="form-label" style={{ display: "flex", alignItems: "center" }}>
+                  Select Sample
+                  {isSelectedGold && (
+                    <span style={{ marginLeft: "8px", fontSize: "0.75rem", padding: "2px 7px", borderRadius: "10px", background: "rgba(245, 158, 11, 0.15)", color: "#d97706", fontWeight: 600 }}>
+                      ⭐ Gold Quality Check
+                    </span>
+                  )}
+                </label>
+                <select
+                  className="form-select"
+                  value={item.data_unit_id}
+                  onChange={e => {
+                    const unit = dataUnits.find(u => u.id === e.target.value);
+                    const hasGoldAnswer = unit?.gold_answer && Object.keys(unit.gold_answer).length > 0;
+                    setExamples(current => current.map((ex, i) => {
+                      if (i !== index) return ex;
+                      return {
+                        ...ex,
+                        data_unit_id: e.target.value,
+                        filename: unit?.filename || ex.filename,
+                        answer: hasGoldAnswer ? unit.gold_answer : ex.answer,
+                        answerText: hasGoldAnswer ? JSON.stringify(unit.gold_answer, null, 2) : ex.answerText,
+                        keepAsGold: unit?.is_gold ?? ex.keepAsGold,
+                      };
+                    }));
+                  }}
+                >
+                  {goldUnits.length > 0 && (
+                    <optgroup label={`⭐ Gold Quality-Check Samples (${goldUnits.length})`}>
+                      {goldUnits.map(u => (
+                        <option key={u.id} value={u.id}>
+                          ⭐ {u.filename || u.raw_uri?.split("/").pop() || u.id} (Gold answer available)
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <optgroup label={goldUnits.length > 0 ? `Other Uploaded Samples (${otherUnits.length})` : "All Uploaded Samples"}>
+                    {otherUnits.map(u => (
+                      <option key={u.id} value={u.id}>
+                        {u.filename || u.raw_uri?.split("/").pop() || u.id}
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+              </div>
             <div className="form-group" style={{ marginBottom: "12px" }}>
               <label className="form-label">Displayed Answer (JSON)</label>
               <textarea
@@ -980,7 +1031,8 @@ export function ExperimentTeachingSection({
               Also keep this item in the scored gold queue
             </label>
           </div>
-        ))
+        );
+      })
       )}
     </div>
   );
