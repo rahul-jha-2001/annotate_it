@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 from auth import get_current_user
 from config import S3_BUCKET
 from database import SessionLocal
+import main
 from main import app
 from models import BundleUploadJob, DataUnit, Experiment, User
 from services.experiment_validation import validate_experiment_for_deploy, reconcile_pending_experiment_data
@@ -142,6 +143,28 @@ class NonBlockingZipUploadTests(unittest.TestCase):
             exp = db.query(Experiment).filter_by(id=self.exp_id).first()
             self.assertEqual(len(exp.pending_metadata), 2)
             self.assertEqual(exp.pending_metadata[0]["filename"], "track1.wav")
+
+            # Add data units and verify /reupload-metadata reconciles them with for_update lock
+            u1 = DataUnit(experiment_id=exp.id, raw_uri="s3://bucket/experiments/u1/track1.wav")
+            db.add(u1)
+            db.commit()
+
+        reupload_payload = {
+            "rows": [
+                {"filename": "track1.wav", "attributes": {"genre": "ambient", "bpm": 128}},
+            ]
+        }
+        with patch("main.get_owned_experiment", wraps=main.get_owned_experiment) as mock_get_owned:
+            res2 = self.client.post(f"/experiments/{self.exp_id}/reupload-metadata", json=reupload_payload)
+            self.assertEqual(res2.status_code, 200)
+            mock_get_owned.assert_called_once()
+            self.assertTrue(mock_get_owned.call_args[1].get("for_update"))
+
+        # Verify DataUnit metadata was reconciled
+        with SessionLocal() as db:
+            u1_refreshed = db.query(DataUnit).filter_by(experiment_id=self.exp_id).first()
+            self.assertEqual(u1_refreshed.metadata_json.get("bpm"), 128)
+            self.assertEqual(u1_refreshed.metadata_json.get("genre"), "ambient")
 
     def test_gold_manifest_allows_pending_during_media_processing(self):
         payload = {
