@@ -72,5 +72,5 @@ sample/bundle_upload_tests/
 sample/*.zip
 !sample/sample_dataset.zip
 taskglass-*.zip
-
+*.zip   
 
