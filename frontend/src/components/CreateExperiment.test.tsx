@@ -253,4 +253,38 @@ describe("CreateExperiment - Large-File Bundle Upload Flow", () => {
     expect(deployBtn.hasAttribute("disabled")).toBe(true);
     expect(deployBtn.getAttribute("title")).toBe("Cannot deploy while media archive is processing");
   });
+
+  it("renders Retry Upload button when upload fails and allows retrying", async () => {
+    (uploadMultipartFile as any).mockRejectedValueOnce(new Error("Network disconnect during upload"));
+
+    await advanceToDatasetStep();
+
+    const bundleTab = screen.getByText("Single Archive (.zip) for Large Datasets");
+    fireEvent.click(bundleTab);
+
+    const file = new File(["dummy zip content"], "dataset.zip", { type: "application/zip" });
+    const dropzoneInput = screen.getByText("Choose a Dataset Archive (.zip)").closest("label")!.querySelector("input")!;
+    fireEvent.change(dropzoneInput, { target: { files: [file] } });
+
+    // Expect upload error to be rendered
+    await waitFor(() => {
+      expect(screen.getByText("Upload encountered an error")).toBeDefined();
+      expect(screen.getAllByText("Network disconnect during upload").length).toBeGreaterThan(0);
+      expect(screen.getByRole("button", { name: /Retry Upload/ })).toBeDefined();
+      expect(screen.getByRole("button", { name: /Select Another Archive/ })).toBeDefined();
+    });
+
+    // Now make upload succeed on retry
+    (uploadMultipartFile as any).mockResolvedValueOnce({
+      s3_key: "zip-uploads/exp-bundle-test-123/dataset.zip",
+    });
+
+    const retryBtn = screen.getByRole("button", { name: /Retry Upload/ });
+    fireEvent.click(retryBtn);
+
+    await waitFor(() => {
+      expect(uploadMultipartFile).toHaveBeenCalledTimes(2);
+      expect(screen.getByText("Dataset Archive Processing in Background")).toBeDefined();
+    });
+  });
 });

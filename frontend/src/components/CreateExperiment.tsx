@@ -397,6 +397,8 @@ export default function CreateExperiment() {
   const startBundleUpload = async (fileToUpload: File) => {
     setError(null);
     setBundleFile(fileToUpload);
+    setBundleJobErrors([]);
+    setBundleJobStatus(null);
 
     let expId = createdExperimentId;
     if (!expId) {
@@ -422,6 +424,7 @@ export default function CreateExperiment() {
         expId = expData.id;
         setCreatedExperimentId(expData.id);
       } catch (createErr) {
+        setBundleUploadStatus("failed");
         setError(createErr instanceof Error ? createErr.message : "Failed to initialize experiment for bundle upload");
         return;
       }
@@ -870,7 +873,11 @@ export default function CreateExperiment() {
                   type="button"
                   className="btn btn-primary"
                   onClick={() => {
-                    cancelBundleUpload();
+                    if (bundleFile) {
+                      startBundleUpload(bundleFile);
+                    } else {
+                      cancelBundleUpload();
+                    }
                     setStep(2);
                   }}
                 >
@@ -1016,14 +1023,28 @@ export default function CreateExperiment() {
                     <span>
                       {bundleUploadStatus === "uploading" && `Uploading: ${bundleProgress?.percent.toFixed(1) ?? "0"}%`}
                       {bundleUploadStatus === "paused" && "Upload paused"}
-                      {bundleUploadStatus === "completed" && (bundleJobStatus === "processing" || bundleJobStatus === "queued" ? "Archive uploaded. Extracting files in background..." : "Upload completed")}
+                      {bundleUploadStatus === "completed" && (
+                        bundleJobStatus === "processing" || bundleJobStatus === "queued"
+                          ? "Archive uploaded. Extracting files in background..."
+                          : bundleJobStatus === "failed"
+                            ? "Archive extraction encountered errors"
+                            : "Upload completed"
+                      )}
                       {bundleUploadStatus === "failed" && "Upload encountered an error"}
+                      {bundleUploadStatus === "idle" && "Ready to upload"}
                     </span>
                     <span>
                       {((bundleProgress?.uploadedBytes ?? 0) / (1024 * 1024)).toFixed(1)} MB / {(bundleFile.size / (1024 * 1024)).toFixed(1)} MB
                       {bundleProgress ? ` (${bundleProgress.completedParts}/${bundleProgress.totalParts} chunks)` : ""}
                     </span>
                   </div>
+
+                  {error && (bundleUploadStatus === "failed" || bundleJobStatus === "failed") && (
+                    <div style={{ color: "var(--danger)", fontSize: "0.875rem", margin: "10px 0 4px", display: "flex", alignItems: "center", gap: "6px" }}>
+                      <AlertCircle size={15} />
+                      <span>{error}</span>
+                    </div>
+                  )}
 
                   <div className="bundle-upload-controls">
                     {bundleUploadStatus === "uploading" && (
@@ -1036,15 +1057,21 @@ export default function CreateExperiment() {
                         <Play size={15} /> Resume Upload
                       </button>
                     )}
-                    {(bundleUploadStatus === "uploading" || bundleUploadStatus === "paused" || bundleUploadStatus === "failed") && (
-                      <button type="button" className="btn btn-secondary" onClick={cancelBundleUpload}>
-                        <X size={15} /> Cancel
+                    {(bundleUploadStatus === "failed" || bundleJobStatus === "failed" || bundleUploadStatus === "idle") && (
+                      <button type="button" className="btn btn-primary" onClick={resumeBundleUpload}>
+                        <RefreshCw size={15} /> Retry Upload
                       </button>
                     )}
-                    {bundleUploadStatus === "completed" && bundleJobStatus === "failed" && (
-                      <button type="button" className="btn btn-primary" onClick={() => { cancelBundleUpload(); }}>
-                        <RefreshCw size={15} /> Select Another Archive
+                    {(bundleUploadStatus === "failed" || bundleJobStatus === "failed" || bundleUploadStatus === "idle") ? (
+                      <button type="button" className="btn btn-secondary" onClick={cancelBundleUpload}>
+                        <X size={15} /> Select Another Archive
                       </button>
+                    ) : (
+                      (bundleUploadStatus === "uploading" || bundleUploadStatus === "paused") && (
+                        <button type="button" className="btn btn-secondary" onClick={cancelBundleUpload}>
+                          <X size={15} /> Cancel
+                        </button>
+                      )
                     )}
                   </div>
 
