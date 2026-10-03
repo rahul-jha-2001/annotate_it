@@ -1,5 +1,7 @@
 import datetime
 import io
+import json
+import logging
 import os
 import unittest
 import uuid
@@ -16,7 +18,14 @@ from models import BundleUploadJob, DataUnit, Experiment, MediaUpload, User
 from services.bundle_worker import process_bundle_upload
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "lambda", "bundle_extractor")))
-from lambda_function import lambda_handler
+from lambda_function import (
+    LambdaJsonLogFormatter,
+    current_aws_request_id,
+    current_experiment_id,
+    current_job_id,
+    lambda_handler,
+    logger as lambda_logger,
+)
 
 
 class BundleUploadTests(unittest.TestCase):
@@ -483,3 +492,103 @@ class BundleUploadTests(unittest.TestCase):
             self.assertEqual(refreshed_exp.status, "draft")
             units = db.query(DataUnit).filter_by(experiment_id=exp.id).all()
             self.assertEqual(len(units), 2)
+
+    def test_lambda_json_log_formatter(self):
+        formatter = LambdaJsonLogFormatter()
+        record = logging.LogRecord(
+            name="bundle_extractor",
+            level=logging.INFO,
+            pathname="lambda_function.py",
+            lineno=100,
+            msg="bundle_extractor.test_event",
+            args=(),
+            exc_info=None,
+        )
+        record.job_id = "test-job-uuid"
+        record.experiment_id = "test-exp-uuid"
+        record.custom_metric = 42
+        record.secret_token = "super-secret-value"
+
+        formatted = formatter.format(record)
+        data = json.loads(formatted)
+
+        self.assertEqual(data["level"], "INFO")
+        self.assertEqual(data["logger"], "bundle_extractor")
+        self.assertEqual(data["message"], "bundle_extractor.test_event")
+        self.assertEqual(data["job_id"], "test-job-uuid")
+        self.assertEqual(data["experiment_id"], "test-exp-uuid")
+        self.assertEqual(data["custom_metric"], 42)
+        # Sensitive substring "token" should be redacted
+        self.assertEqual(data["secret_token"], "***REDACTED***")
+        self.assertIn("timestamp", data)
+
+    @patch("lambda_function.boto3.client")
+    @patch("lambda_function.make_backend_request")
+    def test_lambda_handler_structured_execution(self, mock_make_backend_request, mock_boto_client):
+        # Create a valid test zip archive in memory
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("media/sample1.wav", b"fake-wav-1")
+            zf.writestr("media/sample2.wav", b"fake-wav-2")
+        zip_bytes = zip_buffer.getvalue()
+
+        mock_s3 = MagicMock()
+        def download_file(bucket, key, target):
+            with open(target, "wb") as f:
+                f.write(zip_bytes)
+        mock_s3.download_file.side_effect = download_file
+        mock_boto_client.return_value = mock_s3
+
+        # Mock backend responses
+        def mock_request(endpoint, method, payload):
+            if "data-units" in endpoint:
+                return 200, {"created": [{"id": str(uuid.uuid4())}]}
+            return 200, {"status": "ok"}
+        mock_make_backend_request.side_effect = mock_request
+
+        event = {
+            "bucket": "test-media-bucket",
+            "s3_key": "zip-uploads/exp-123/archive.zip",
+            "job_id": "job-abc-456",
+            "experiment_id": "exp-123",
+            "modality": "audio",
+        }
+        mock_context = MagicMock()
+        mock_context.aws_request_id = "test-aws-req-999"
+
+        with io.StringIO() as log_capture, patch.object(sys, "stdout", log_capture):
+            # Attach a capturing handler to lambda_logger
+            string_io = io.StringIO()
+            capture_handler = logging.StreamHandler(string_io)
+            capture_handler.setFormatter(LambdaJsonLogFormatter())
+            lambda_logger.addHandler(capture_handler)
+            try:
+                response = lambda_handler(event, mock_context)
+            finally:
+                lambda_logger.removeHandler(capture_handler)
+
+        self.assertEqual(response["statusCode"], 200)
+        resp_body = json.loads(response["body"])
+        self.assertEqual(resp_body["status"], "completed")
+        self.assertEqual(resp_body["applied_count"], 2)
+
+        # Inspect captured JSON logs
+        captured_lines = [line.strip() for line in string_io.getvalue().strip().split("\n") if line.strip()]
+        self.assertGreater(len(captured_lines), 5)
+        parsed_logs = [json.loads(line) for line in captured_lines]
+
+        messages = [log["message"] for log in parsed_logs]
+        self.assertIn("bundle_extractor.invocation_started", messages)
+        self.assertIn("bundle_extractor.event_parsed", messages)
+        self.assertIn("bundle_extractor.download_completed", messages)
+        self.assertIn("bundle_extractor.archive_inspection_started", messages)
+        self.assertIn("bundle_extractor.archive_extracted", messages)
+        self.assertIn("bundle_extractor.invocation_completed", messages)
+
+        # Ensure all parsed logs carry the aws_request_id, job_id, and experiment_id
+        for log in parsed_logs:
+            self.assertEqual(log["logger"], "bundle_extractor")
+            if log["message"] not in ("bundle_extractor.invocation_started",):
+                self.assertEqual(log.get("job_id"), "job-abc-456")
+                self.assertEqual(log.get("experiment_id"), "exp-123")
+
