@@ -887,7 +887,12 @@ export function ExperimentTeachingSection({
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(typeof body.detail === "string" ? body.detail : "Failed to save teaching examples");
+        const msg = typeof body.detail === "string"
+          ? body.detail
+          : Array.isArray(body?.detail)
+          ? body.detail.map((d: any) => d.msg || JSON.stringify(d)).join("; ")
+          : "Failed to save teaching examples";
+        throw new Error(msg);
       }
       setFeedback("Teaching examples successfully saved.");
       onSaved?.();
@@ -896,6 +901,10 @@ export function ExperimentTeachingSection({
     } finally {
       setSaving(false);
     }
+  };
+
+  const formatSampleName = (u: any) => {
+    return u.filename || u.raw_uri?.split("/").pop() || (u.id ? `Sample ${u.id.slice(0, 8)}` : "Sample");
   };
 
   return (
@@ -986,7 +995,7 @@ export function ExperimentTeachingSection({
                     <optgroup label={`⭐ Gold Quality-Check Samples (${goldUnits.length})`}>
                       {goldUnits.map(u => (
                         <option key={u.id} value={u.id}>
-                          ⭐ {u.filename || u.raw_uri?.split("/").pop() || u.id} (Gold answer available)
+                          ⭐ {formatSampleName(u)} (Gold answer available)
                         </option>
                       ))}
                     </optgroup>
@@ -994,7 +1003,7 @@ export function ExperimentTeachingSection({
                   <optgroup label={goldUnits.length > 0 ? `Other Uploaded Samples (${otherUnits.length})` : "All Uploaded Samples"}>
                     {otherUnits.map(u => (
                       <option key={u.id} value={u.id}>
-                        {u.filename || u.raw_uri?.split("/").pop() || u.id}
+                        {formatSampleName(u)}
                       </option>
                     ))}
                   </optgroup>
