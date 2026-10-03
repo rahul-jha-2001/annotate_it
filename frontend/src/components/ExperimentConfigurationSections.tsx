@@ -295,11 +295,12 @@ export function ExperimentDatasetSection({
         const urls: Record<string, string> = {};
         for (const u of units) {
           const fn = u.filename || u.raw_uri?.split("/").pop() || u.id;
-          if (u.raw_uri) urls[fn] = u.raw_uri;
+          const url = u.media_url || (u.raw_uri?.startsWith("http") ? u.raw_uri : "");
+          if (url) urls[fn] = url;
         }
         setMediaUrls(urls);
 
-        const filenames = units.map((u: any) => u.filename || u.raw_uri.rsplit?.("/", 1)?.[1] || u.id);
+        const filenames = units.map((u: any) => u.filename || u.raw_uri?.split("/").pop() || u.id);
         const allowPending = status === "draft_media_processing" || filenames.length === 0;
 
         const parsed = parseDatasetBundle(filenames, metadataCsv, goldManifest, {
@@ -847,7 +848,7 @@ export function ExperimentTeachingSection({
               >
                 {dataUnits.map(u => (
                   <option key={u.id} value={u.id}>
-                    {u.filename || u.raw_uri?.rsplit?.("/", 1)?.[1] || u.id}
+                    {u.filename || u.raw_uri?.split("/").pop() || u.id}
                   </option>
                 ))}
               </select>
