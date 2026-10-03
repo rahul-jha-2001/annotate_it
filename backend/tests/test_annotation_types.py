@@ -158,6 +158,15 @@ class QualificationTests(unittest.TestCase):
             validate_sample_metadata({"language": "Hindi", "difficulty": 3}, self.metadata_schema),
             {"language": "Hindi", "difficulty": 3},
         )
+        # Arbitrary fields not defined in schema (or when schema is empty) are accepted as-is
+        self.assertEqual(
+            validate_sample_metadata({"content_type": "podcast", "custom_tag": "val"}, []),
+            {"content_type": "podcast", "custom_tag": "val"},
+        )
+        self.assertEqual(
+            validate_sample_metadata({"language": "Hindi", "extra_info": "123"}, self.metadata_schema),
+            {"language": "Hindi", "extra_info": "123"},
+        )
         with self.assertRaises(ValueError):
             validate_sample_metadata({"language": "French"}, self.metadata_schema)
         with self.assertRaises(ValueError):

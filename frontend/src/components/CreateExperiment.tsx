@@ -322,6 +322,26 @@ export default function CreateExperiment() {
         throw new Error(`Duplicate filenames are not allowed: ${[...duplicateFiles].join(", ")}`);
       }
 
+      const inferredMetadataSchema: Array<{ key: string; label: string; type: string; options: string[] }> = [];
+      if (metadataCsv) {
+        try {
+          const parsed = parseCsv(metadataCsv.replace(/^\uFEFF/, ""));
+          if (parsed.length > 0) {
+            const headers = parsed[0].map(h => h.trim()).filter(h => h && h !== "filename");
+            for (const h of headers) {
+              inferredMetadataSchema.push({
+                key: h,
+                label: h.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+                type: "text",
+                options: [],
+              });
+            }
+          }
+        } catch (e) {
+          console.warn("Could not parse metadata headers for schema", e);
+        }
+      }
+
       const experimentResponse = await apiFetch("/api/experiments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -331,7 +351,7 @@ export default function CreateExperiment() {
           instructions: form.instructions.trim(),
           status: "draft",
           label_schema: annotationSchema,
-          metadata_schema: [],
+          metadata_schema: inferredMetadataSchema,
           qualification_form: [],
           routing_rules: [],
         }),

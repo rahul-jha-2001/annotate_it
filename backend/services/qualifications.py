@@ -5,12 +5,13 @@ def validate_sample_metadata(
     metadata: Dict[str, Any], schema: List[Dict[str, Any]]
 ) -> Dict[str, Any]:
     definitions = {field["key"]: field for field in schema}
-    unknown = sorted(set(metadata) - set(definitions))
-    if unknown:
-        raise ValueError(f"unknown metadata fields: {', '.join(unknown)}")
+    # Only validate fields that have an explicit schema definition.
+    # Arbitrary / open-ended metadata fields are accepted as-is without restriction.
     for key, value in metadata.items():
+        if key not in definitions:
+            continue
         definition = definitions[key]
-        field_type = definition["type"]
+        field_type = definition.get("type")
         if field_type in {"text", "choice"} and not isinstance(value, str):
             raise ValueError(f"metadata '{key}' must be text")
         if field_type == "choice" and value not in definition.get("options", []):
