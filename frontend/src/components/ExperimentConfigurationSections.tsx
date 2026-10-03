@@ -860,6 +860,15 @@ export function ExperimentTeachingSection({
     setSaving(true);
     setFeedback(null);
     try {
+      for (let i = 0; i < examples.length; i++) {
+        const ex = examples[i];
+        const unit = dataUnits.find(u => u.id === ex.data_unit_id) || dataUnits.find(u => u.filename === ex.filename);
+        const name = unit?.filename || ex.filename || `Sample ${i + 1}`;
+        if (!ex.answer || Object.keys(ex.answer).length === 0) {
+          throw new Error(`Teaching Example ${i + 1} ('${name}') has an empty answer. Please provide a valid answer or select a gold sample.`);
+        }
+      }
+
       const payload = examples.map(ex => ({
         data_unit_id: ex.data_unit_id || dataUnits.find(u => u.filename === ex.filename)?.id,
         displayed_answer: ex.answer,
@@ -878,7 +887,7 @@ export function ExperimentTeachingSection({
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.detail || "Failed to save teaching examples");
+        throw new Error(typeof body.detail === "string" ? body.detail : "Failed to save teaching examples");
       }
       setFeedback("Teaching examples successfully saved.");
       onSaved?.();

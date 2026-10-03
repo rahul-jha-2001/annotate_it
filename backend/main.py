@@ -502,6 +502,32 @@ def get_experiment_detail(
         .first()
         is not None
     )
+    teaching_examples_enriched = []
+    if experiment.teaching_examples:
+        te_ids = []
+        for te in experiment.teaching_examples:
+            if isinstance(te, dict) and te.get("data_unit_id"):
+                try:
+                    uid = uuid.UUID(te["data_unit_id"]) if isinstance(te["data_unit_id"], str) else te["data_unit_id"]
+                    te_ids.append(uid)
+                except (ValueError, TypeError):
+                    pass
+        units_by_id = {u.id: u for u in db.query(DataUnit).filter(DataUnit.id.in_(te_ids)).all()} if te_ids else {}
+        for te in experiment.teaching_examples:
+            if isinstance(te, dict):
+                item = dict(te)
+                try:
+                    uid = uuid.UUID(te["data_unit_id"]) if isinstance(te["data_unit_id"], str) else te.get("data_unit_id")
+                    u = units_by_id.get(uid)
+                    if u:
+                        item["filename"] = u.raw_uri.rsplit("/", 1)[-1]
+                        item["media_url"] = generate_media_url(u.raw_uri)
+                except (ValueError, TypeError):
+                    pass
+                teaching_examples_enriched.append(item)
+            else:
+                teaching_examples_enriched.append(te)
+
     return ExperimentDetailResponse(
         id=experiment.id,
         name=experiment.name,
@@ -516,7 +542,7 @@ def get_experiment_detail(
         share_token=experiment.share_token,
         qualification_form=experiment.qualification_form or [],
         routing_rules=experiment.routing_rules or [],
-        teaching_examples=experiment.teaching_examples or [],
+        teaching_examples=teaching_examples_enriched,
         pending_metadata=experiment.pending_metadata or [],
         pending_gold_manifest=experiment.pending_gold_manifest or [],
         configuration_locked=has_annotations,
@@ -1553,18 +1579,19 @@ def configure_teaching_examples(
     seen_ids = set()
     validated_examples = []
     for item in payload.teaching_examples:
-        if item.data_unit_id in seen_ids:
-            raise HTTPException(
-                status_code=422,
-                detail=f"Duplicate teaching example for data unit {item.data_unit_id}",
-            )
-        seen_ids.add(item.data_unit_id)
         unit = units_by_id.get(item.data_unit_id)
         if unit is None:
             raise HTTPException(
                 status_code=404,
-                detail=f"Data unit {item.data_unit_id} not found in this experiment",
+                detail=f"Data unit '{item.data_unit_id}' not found in this experiment",
             )
+        filename = unit.raw_uri.rsplit("/", 1)[-1]
+        if item.data_unit_id in seen_ids:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Duplicate teaching example for sample '{filename}'",
+            )
+        seen_ids.add(item.data_unit_id)
         try:
             validated_answer = spec.validate_answer(
                 item.displayed_answer, experiment.label_schema
@@ -1572,7 +1599,7 @@ def configure_teaching_examples(
         except (ValueError, ValidationError) as exc:
             raise HTTPException(
                 status_code=422,
-                detail=f"Invalid displayed_answer for data unit {item.data_unit_id}: {exc}",
+                detail=f"Invalid displayed answer for sample '{filename}': {exc}",
             ) from exc
 
         keep_as_gold = bool(item.keep_as_gold)
