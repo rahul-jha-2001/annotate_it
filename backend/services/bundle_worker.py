@@ -1,10 +1,18 @@
 import logging
 import os
 import shutil
+import signal
+import sys
 import tempfile
+import time
 import uuid
 import zipfile
 from typing import Any, Dict, List, Optional
+
+# Ensure backend root is on sys.path when executed directly
+_backend_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _backend_root not in sys.path:
+    sys.path.insert(0, _backend_root)
 
 import boto3
 from botocore.client import Config
@@ -227,3 +235,95 @@ def process_bundle_upload(
         shutil.rmtree(tmp_dir, ignore_errors=True)
         if close_client and client:
             client.close()
+
+
+def run_bundle_worker(poll_interval: float = 2.0, run_once: bool = False):
+    """Poll database for queued bundle extraction jobs and process them."""
+    # Ensure backend directory is in sys.path
+    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
+
+    from database import SessionLocal
+    from models import BundleUploadJob, Experiment
+
+    logger.info("bundle_worker.started", extra={"poll_interval": poll_interval})
+    running = True
+
+    def handle_signal(sig, frame):
+        nonlocal running
+        logger.info("bundle_worker.signal_received", extra={"signal": sig})
+        running = False
+
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    while running:
+        job_info = None
+        try:
+            with SessionLocal() as db:
+                job = (
+                    db.query(BundleUploadJob)
+                    .filter_by(status="queued")
+                    .order_by(BundleUploadJob.created_at.asc())
+                    .first()
+                )
+                if job:
+                    exp = db.query(Experiment).filter_by(id=job.experiment_id).first()
+                    job_info = {
+                        "experiment_id": str(job.experiment_id),
+                        "job_id": str(job.id),
+                        "s3_key": job.s3_key,
+                        "modality": exp.modality if exp else None,
+                    }
+        except Exception as db_err:
+            logger.warning("bundle_worker.db_poll_error", extra={"error": str(db_err)})
+
+        if job_info:
+            logger.info("bundle_worker.job_picked", extra=job_info)
+            try:
+                result = process_bundle_upload(
+                    experiment_id=job_info["experiment_id"],
+                    job_id=job_info["job_id"],
+                    s3_key=job_info["s3_key"],
+                    modality=job_info["modality"],
+                )
+                logger.info("bundle_worker.job_completed", extra={"job_id": job_info["job_id"], "result": result})
+            except Exception as proc_err:
+                logger.exception("bundle_worker.job_failed", extra={"job_id": job_info["job_id"], "error": str(proc_err)})
+
+            if run_once:
+                break
+        else:
+            if run_once:
+                break
+            time.sleep(poll_interval)
+
+    logger.info("bundle_worker.stopped")
+
+
+if __name__ == "__main__":
+    import argparse
+    import sys
+
+    # Configure logging for direct execution
+    backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    if backend_dir not in sys.path:
+        sys.path.insert(0, backend_dir)
+
+    try:
+        from logging_config import setup_logging
+        setup_logging(
+            log_level=os.getenv("LOG_LEVEL", "INFO"),
+            log_format=os.getenv("LOG_FORMAT", "json"),
+        )
+    except Exception:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+    parser = argparse.ArgumentParser(description="Dataset Bundle Upload Background Worker")
+    parser.add_argument("--run-once", action="store_true", help="Process queued jobs once and exit")
+    parser.add_argument("--poll-interval", type=float, default=2.0, help="Seconds between poll queries")
+    args = parser.parse_args()
+
+    run_bundle_worker(poll_interval=args.poll_interval, run_once=args.run_once)
+
