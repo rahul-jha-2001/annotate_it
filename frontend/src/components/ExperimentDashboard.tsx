@@ -84,9 +84,12 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
       const exp: ExperimentDetail = await res.json();
       setExperiment(exp);
 
-      if (exp.status !== "active") {
-        setActiveTab("dataset");
-      }
+      setActiveTab(current => {
+        if (exp.status !== "active" && current === "overview") {
+          return "dataset";
+        }
+        return current;
+      });
 
       if (exp.status === "active") {
         const statsRes = await apiFetch(`/api/experiments/${experimentId}/dashboard`);
