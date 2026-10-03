@@ -956,7 +956,8 @@ export function ExperimentQualitySection({
         const res = await apiFetch(`/api/experiments/${experimentId}/data-units`);
         if (res.ok && !cancelled) {
           const data = await res.json();
-          setUnits(data || []);
+          const list = Array.isArray(data) ? data : (data?.data_units || []);
+          setUnits(list);
         }
       } catch (e) {
         console.error("Could not fetch data units for quality view", e);
@@ -970,8 +971,9 @@ export function ExperimentQualitySection({
     };
   }, [experimentId]);
 
-  const totalCount = units.length || (experimentSummary?.sampleCount ?? 0);
-  const goldCount = units.filter(u => u.is_gold).length || (experimentSummary?.goldCount ?? 0);
+  const unitList = Array.isArray(units) ? units : [];
+  const totalCount = unitList.length || (experimentSummary?.sampleCount ?? 0);
+  const goldCount = unitList.filter(u => u.is_gold).length || (experimentSummary?.goldCount ?? 0);
   const regularCount = Math.max(0, totalCount - goldCount);
 
   const handleSave = async () => {
