@@ -5,8 +5,11 @@ import {
   Check,
   Info,
   Loader2,
+  LockKeyhole,
   Plus,
   RefreshCw,
+  Save,
+  ShieldCheck,
   Trash2,
   UploadCloud,
 } from "lucide-react";
@@ -891,6 +894,248 @@ export function ExperimentTeachingSection({
           </div>
         ))
       )}
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+// 6. Quality & Workload Section
+// --------------------------------------------------------------------------
+const accessModes: Array<{ value: "sign_in_required" | "guest_name" | "anonymous"; title: string; description: string }> = [
+  { value: "sign_in_required", title: "Sign-in required", description: "Every annotator must use a verified Clerk account." },
+  { value: "guest_name", title: "Name required", description: "Anyone with the link can join after entering a display name." },
+  { value: "anonymous", title: "Fully anonymous", description: "Anyone with the link can join without giving a name." },
+];
+
+export function ExperimentQualitySection({
+  experimentId,
+  initialOverlapN,
+  initialGoldRatio,
+  initialAccessMode,
+  configurationLocked,
+  experimentSummary,
+  onSaved,
+}: {
+  experimentId: string;
+  initialOverlapN: number;
+  initialGoldRatio: number;
+  initialAccessMode: "sign_in_required" | "guest_name" | "anonymous";
+  configurationLocked: boolean;
+  experimentSummary?: {
+    name?: string;
+    modality?: string;
+    annotationType?: string;
+    sampleCount?: number;
+    goldCount?: number;
+    teachingCount?: number;
+    metadataFieldsCount?: number;
+    questionCount?: number;
+    ruleCount?: number;
+  };
+  onSaved?: () => void;
+}) {
+  const [overlapN, setOverlapN] = useState<number>(initialOverlapN);
+  const [goldRatio, setGoldRatio] = useState<number>(initialGoldRatio);
+  const [accessMode, setAccessMode] = useState<"sign_in_required" | "guest_name" | "anonymous">(initialAccessMode);
+  const [units, setUnits] = useState<Array<{ id: string; is_gold: boolean }>>([]);
+  const [loadingUnits, setLoadingUnits] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    setOverlapN(initialOverlapN);
+    setGoldRatio(initialGoldRatio);
+    setAccessMode(initialAccessMode);
+  }, [initialOverlapN, initialGoldRatio, initialAccessMode]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchUnits = async () => {
+      try {
+        const res = await apiFetch(`/api/experiments/${experimentId}/data-units`);
+        if (res.ok && !cancelled) {
+          const data = await res.json();
+          setUnits(data || []);
+        }
+      } catch (e) {
+        console.error("Could not fetch data units for quality view", e);
+      } finally {
+        if (!cancelled) setLoadingUnits(false);
+      }
+    };
+    fetchUnits();
+    return () => {
+      cancelled = true;
+    };
+  }, [experimentId]);
+
+  const totalCount = units.length || (experimentSummary?.sampleCount ?? 0);
+  const goldCount = units.filter(u => u.is_gold).length || (experimentSummary?.goldCount ?? 0);
+  const regularCount = Math.max(0, totalCount - goldCount);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const res = await apiFetch(`/api/experiments/${experimentId}/settings`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          overlap_n: overlapN,
+          gold_ratio: goldRatio,
+          access_mode: accessMode,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Could not save quality settings");
+      }
+      setSaved(true);
+      onSaved?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save quality settings");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="glass-panel" style={{ padding: "24px" }}>
+      <div className="section-heading-inline" style={{ marginBottom: "20px" }}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: "1.25rem", display: "flex", alignItems: "center", gap: "8px" }}>
+            <ShieldCheck size={20} className="app-logo-icon" /> Quality &amp; Workload Settings
+          </h3>
+          <p style={{ margin: "4px 0 0", color: "var(--text-muted)", fontSize: "0.875rem" }}>
+            Configure annotator overlap, quality-check frequency, and reviewer access mode.
+          </p>
+        </div>
+        {configurationLocked && (
+          <span className="locked-chip">
+            <LockKeyhole size={14} /> Locked
+          </span>
+        )}
+      </div>
+
+      {configurationLocked && (
+        <div className="settings-lock-notice" style={{ marginBottom: "20px" }}>
+          <LockKeyhole size={18} />
+          <p>
+            Access and quality settings are locked because annotations have been submitted. This protects assignment history and score consistency.
+          </p>
+        </div>
+      )}
+
+      {/* Quality Grid */}
+      <div className="quality-grid" style={{ marginBottom: "20px" }}>
+        <div className="form-group">
+          <label className="form-label">People per regular sample</label>
+          <input
+            className="form-input"
+            type="number"
+            min="1"
+            max="100"
+            disabled={configurationLocked}
+            value={overlapN}
+            onChange={event => {
+              const val = event.target.valueAsNumber;
+              if (Number.isFinite(val) && val >= 1) setOverlapN(val);
+            }}
+          />
+          <span className="help-text">Number of independent annotators assigned to each regular sample.</span>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Quality-check frequency</label>
+          <select
+            className="form-select"
+            disabled={configurationLocked}
+            value={goldRatio}
+            onChange={event => setGoldRatio(Number(event.target.value))}
+          >
+            <option value="0">None</option>
+            <option value="0.05">Light — 5%</option>
+            <option value="0.1">Recommended — 10%</option>
+            <option value="0.2">Strict — 20%</option>
+          </select>
+          <span className="help-text">Percentage of items served that are known gold evaluation samples.</span>
+        </div>
+      </div>
+
+      {/* Workload Card */}
+      <div className="workload-card" style={{ marginBottom: "24px" }}>
+        <strong>Estimated regular assignments</strong>
+        <span>
+          {regularCount} regular samples × {overlapN} people
+        </span>
+        <h2>{regularCount * overlapN}</h2>
+      </div>
+
+      {/* Gold ratio warning if gold_ratio > 0 but 0 gold items exist */}
+      {goldRatio > 0 && goldCount === 0 && !loadingUnits && (
+        <p className="form-error" style={{ marginBottom: "20px" }}>
+          Add at least one gold answer in the Dataset &amp; Gold tab or set quality-check frequency to “None”.
+        </p>
+      )}
+
+      {/* Annotator Access Mode */}
+      <div style={{ marginBottom: "24px" }}>
+        <label className="form-label" style={{ marginBottom: "8px" }}>Annotator access mode</label>
+        <div className="access-mode-grid">
+          {accessModes.map(mode => (
+            <button
+              type="button"
+              key={mode.value}
+              disabled={configurationLocked}
+              className={`access-mode-card ${accessMode === mode.value ? "selected" : ""}`}
+              onClick={() => setAccessMode(mode.value)}
+            >
+              <strong>{mode.title}</strong>
+              <span>{mode.description}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Summary Review Grid */}
+      {experimentSummary && (
+        <div style={{ marginBottom: "24px" }}>
+          <h4 style={{ margin: "0 0 10px", fontSize: "0.95rem", color: "var(--text-secondary)" }}>Configuration Overview</h4>
+          <div className="review-grid">
+            <div><span>Name</span><strong>{experimentSummary.name || "—"}</strong></div>
+            <div><span>Task / Modality</span><strong>{experimentSummary.annotationType || experimentSummary.modality || "—"}</strong></div>
+            <div><span>Annotator access</span><strong>{accessMode === "sign_in_required" ? "Sign-in required" : accessMode === "guest_name" ? "Name required" : "Fully anonymous"}</strong></div>
+            <div><span>Samples</span><strong>{totalCount} ({goldCount} gold)</strong></div>
+            <div><span>Teaching examples</span><strong>{experimentSummary.teachingCount ? `${experimentSummary.teachingCount} (observational)` : "None"}</strong></div>
+            <div><span>Metadata fields</span><strong>{experimentSummary.metadataFieldsCount ?? 0}</strong></div>
+            <div><span>Qualification questions</span><strong>{experimentSummary.questionCount ?? 0}</strong></div>
+            <div><span>Routing rules</span><strong>{experimentSummary.ruleCount ?? 0}</strong></div>
+          </div>
+        </div>
+      )}
+
+      {error && <p className="form-error" style={{ marginBottom: "16px" }}>{error}</p>}
+      {saved && <p className="form-success" style={{ marginBottom: "16px" }}>Quality &amp; workload settings saved.</p>}
+
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={saving || configurationLocked}
+          onClick={handleSave}
+        >
+          {saving ? (
+            <>
+              <Loader2 size={16} className="spin-animate" /> Saving…
+            </>
+          ) : (
+            <>
+              <Save size={16} /> Save Quality Settings
+            </>
+          )}
+        </button>
+      </div>
     </div>
   );
 }

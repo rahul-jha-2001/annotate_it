@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Download, Eye, Pause, Play, RefreshCw, Settings, Users, Share2, Layers, BookOpen, Award, CheckCircle } from "lucide-react";
+import { Download, Eye, Pause, Play, RefreshCw, Settings, Users, Share2, Layers, BookOpen, Award, CheckCircle, ShieldCheck } from "lucide-react";
 import { Link } from "wouter";
 import { apiFetch } from "../api";
 import ExportDatasetModal from "./ExportDatasetModal";
@@ -9,6 +9,7 @@ import {
   ExperimentDatasetSection,
   ExperimentQualificationsSection,
   ExperimentTeachingSection,
+  ExperimentQualitySection,
 } from "./ExperimentConfigurationSections";
 
 interface ExperimentDetail {
@@ -74,7 +75,7 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showExportModal, setShowExportModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<"overview" | "dataset" | "qualifications" | "teaching" | "settings">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "dataset" | "quality" | "qualifications" | "teaching" | "settings">("overview");
 
   const loadExperiment = useCallback(async () => {
     try {
@@ -226,6 +227,13 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
         </button>
         <button
           type="button"
+          className={`btn ${activeTab === "quality" ? "btn-primary" : "btn-secondary"}`}
+          onClick={() => setActiveTab("quality")}
+        >
+          <ShieldCheck size={15} /> Quality &amp; Workload
+        </button>
+        <button
+          type="button"
           className={`btn ${activeTab === "qualifications" ? "btn-primary" : "btn-secondary"}`}
           onClick={() => setActiveTab("qualifications")}
         >
@@ -346,6 +354,27 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
           modality={experiment.modality}
           labelSchema={experiment.label_schema}
           initialExamples={experiment.teaching_examples}
+          onSaved={loadExperiment}
+        />
+      )}
+
+      {/* Tab 5: Quality & Workload Settings */}
+      {activeTab === "quality" && (
+        <ExperimentQualitySection
+          experimentId={experimentId}
+          initialOverlapN={experiment.overlap_n}
+          initialGoldRatio={experiment.gold_ratio}
+          initialAccessMode={experiment.access_mode}
+          configurationLocked={experiment.configuration_locked}
+          experimentSummary={{
+            name: experiment.name,
+            modality: experiment.modality,
+            annotationType: experiment.label_schema?.annotation_type,
+            teachingCount: experiment.teaching_examples?.length ?? 0,
+            metadataFieldsCount: experiment.metadata_schema?.length ?? 0,
+            questionCount: experiment.qualification_form?.length ?? 0,
+            ruleCount: experiment.routing_rules?.length ?? 0,
+          }}
           onSaved={loadExperiment}
         />
       )}
