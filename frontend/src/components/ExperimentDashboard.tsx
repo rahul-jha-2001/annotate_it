@@ -76,6 +76,7 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
   const [loading, setLoading] = useState(true);
   const [showExportModal, setShowExportModal] = useState(false);
   const [activeTab, setActiveTab] = useState<"overview" | "dataset" | "quality" | "qualifications" | "teaching" | "settings">("overview");
+  const [refreshing, setRefreshing] = useState(false);
 
   const loadExperiment = useCallback(async () => {
     try {
@@ -102,14 +103,18 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
       setError(caught instanceof Error ? caught.message : "Could not load experiment");
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [experimentId]);
 
   useEffect(() => {
     loadExperiment();
-    const interval = window.setInterval(loadExperiment, 5000);
-    return () => window.clearInterval(interval);
   }, [loadExperiment]);
+
+  const handleManualRefresh = async () => {
+    setRefreshing(true);
+    await loadExperiment();
+  };
 
   const toggleAnnotator = async (id: string, status: "active" | "paused") => {
     const response = await apiFetch(`/api/annotators/${id}`, {
@@ -193,8 +198,13 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
           <Link href={`/experiments/${experimentId}/settings`} className="btn btn-secondary">
             <Settings size={16} /> Settings
           </Link>
-          <button className="btn btn-secondary" onClick={loadExperiment} title="Refresh">
-            <RefreshCw size={16} />
+          <button
+            className="btn btn-secondary"
+            onClick={handleManualRefresh}
+            title="Refresh"
+            disabled={refreshing}
+          >
+            <RefreshCw size={16} className={refreshing ? "spin-animate" : ""} /> Refresh
           </button>
         </div>
       </div>

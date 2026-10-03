@@ -154,13 +154,6 @@ export function ExperimentDeploySection({
 
   useEffect(() => {
     fetchValidation();
-    let interval: number | undefined;
-    if (status === "draft_media_processing") {
-      interval = window.setInterval(fetchValidation, 3000);
-    }
-    return () => {
-      if (interval) clearInterval(interval);
-    };
   }, [fetchValidation, status]);
 
   const handleDeploy = async () => {
