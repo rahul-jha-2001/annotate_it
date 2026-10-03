@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import secrets
@@ -812,6 +813,52 @@ def create_bundle_upload_job(
             "s3_key": job.s3_key,
         },
     )
+
+    lambda_function_name = os.environ.get("LAMBDA_BUNDLE_EXTRACTOR_FUNCTION")
+    if lambda_function_name:
+        try:
+            lambda_client = boto3.client("lambda", region_name=AWS_REGION)
+            lambda_client.invoke(
+                FunctionName=lambda_function_name,
+                InvocationType="Event",  # async -- do not block the HTTP response waiting for completion
+                Payload=json.dumps({
+                    "bucket": BUCKET_NAME,
+                    "s3_key": job.s3_key,
+                    "job_id": str(job.id),
+                    "experiment_id": str(experiment.id),
+                    "modality": experiment.modality,
+                }).encode("utf-8"),
+            )
+            logger.info(
+                "bundle_upload.lambda_invoked",
+                extra={
+                    "function_name": lambda_function_name,
+                    "job_id": str(job.id),
+                    "experiment_id": str(experiment.id),
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "bundle_upload.lambda_invoke_failed",
+                extra={
+                    "function_name": lambda_function_name,
+                    "job_id": str(job.id),
+                    "experiment_id": str(experiment.id),
+                    "error": str(exc),
+                },
+                exc_info=True,
+            )
+    else:
+        logger.info(
+            "bundle_upload.lambda_invoke_skipped",
+            extra={
+                "reason": (
+                    "LAMBDA_BUNDLE_EXTRACTOR_FUNCTION not configured — "
+                    "local dev mode, bundle_worker.py handles this job instead"
+                )
+            },
+        )
+
     return BundleUploadCreateResponse(
         job_id=job.id,
         status=job.status,

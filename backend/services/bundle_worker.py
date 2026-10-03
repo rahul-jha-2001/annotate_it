@@ -9,10 +9,16 @@ import uuid
 import zipfile
 from typing import Any, Dict, List, Optional
 
-# Ensure backend root is on sys.path when executed directly
+# Ensure backend root and lambda extractor directory are on sys.path
 _backend_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _backend_root not in sys.path:
     sys.path.insert(0, _backend_root)
+
+_lambda_extractor_dir = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "lambda", "bundle_extractor")
+)
+if _lambda_extractor_dir not in sys.path:
+    sys.path.insert(0, _lambda_extractor_dir)
 
 import boto3
 from botocore.client import Config
@@ -28,15 +34,15 @@ from config import (
     S3_BUCKET,
     S3_ENDPOINT_URL,
 )
+from guards import (
+    MODALITY_ALLOWED_EXTENSIONS,
+    check_zip_bomb,
+    check_zip_slip_and_structure,
+    discover_candidate_files,
+    filter_by_modality,
+)
 
 logger = logging.getLogger(__name__)
-
-MODALITY_ALLOWED_EXTENSIONS: Dict[str, set[str]] = {
-    "audio": {".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac", ".wma"},
-    "video": {".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v"},
-    "image": {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"},
-    "text": {".txt", ".json", ".csv", ".md"},
-}
 
 
 def get_default_s3_client():
@@ -101,29 +107,12 @@ def process_bundle_upload(
 
         # Inspect central directory for security guardrails
         with zipfile.ZipFile(zip_path, "r") as zf:
-            total_uncompressed = sum(info.file_size for info in zf.infolist())
-            if total_uncompressed > max_bytes:
-                raise ValueError(
-                    f"Uncompressed archive size {total_uncompressed} bytes exceeds limit of {max_bytes} bytes"
-                )
+            check_zip_bomb(zf, max_bytes)
 
             dest_dir = os.path.abspath(os.path.join(tmp_dir, "extracted"))
             os.makedirs(dest_dir, exist_ok=True)
 
-            # Zip-slip protection & structure validation
-            has_media_root = False
-            for member in zf.infolist():
-                norm_name = os.path.normpath(member.filename).replace("\\", "/")
-                if norm_name.startswith("media/") or norm_name == "media":
-                    has_media_root = True
-
-                target_path = os.path.abspath(os.path.join(dest_dir, member.filename))
-                if not (target_path == dest_dir or target_path.startswith(dest_dir + os.sep)):
-                    raise ValueError(f"Zip slip detected: path traversal attempt in {member.filename}")
-
-            if not has_media_root:
-                raise ValueError("Archive must contain a top-level 'media/' directory")
-
+            check_zip_slip_and_structure(zf, dest_dir)
             zf.extractall(dest_dir)
 
         media_dir = os.path.join(dest_dir, "media")
@@ -131,34 +120,18 @@ def process_bundle_upload(
             raise ValueError("Archive must contain a top-level 'media/' directory")
 
         # Discover all candidate files inside media/
-        candidate_files: List[tuple[str, str]] = []  # (abs_path, rel_path)
-        for root, dirs, files in os.walk(media_dir):
-            # Exclude hidden directories
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__MACOSX"]
-            for file in sorted(files):
-                if file.startswith(".") or file == "Thumbs.db":
-                    continue
-                abs_path = os.path.join(root, file)
-                rel_path = os.path.relpath(abs_path, media_dir).replace("\\", "/")
-                candidate_files.append((abs_path, rel_path))
-
+        candidate_files = discover_candidate_files(media_dir)
         files_total = len(candidate_files)
         if files_total == 0:
             raise ValueError("No files found inside 'media/' directory")
 
         patch_job({"files_total": files_total, "files_processed": 0})
 
-        allowed_exts = MODALITY_ALLOWED_EXTENSIONS.get(modality.lower()) if modality else None
+        valid_files, rejected_files = filter_by_modality(candidate_files, modality)
+        errors.extend(rejected_files)
+        files_processed = len(rejected_files)
 
-        for abs_path, rel_path in candidate_files:
-            file_ext = os.path.splitext(rel_path)[1].lower()
-            if allowed_exts and file_ext not in allowed_exts:
-                errors.append({
-                    "filename": rel_path,
-                    "error": f"Invalid extension '{file_ext}' for modality '{modality}'",
-                })
-                files_processed += 1
-                continue
+        for abs_path, rel_path in valid_files:
 
             target_key = f"experiments/{experiment_id}/{uuid.uuid4()}/{os.path.basename(rel_path)}"
             try:

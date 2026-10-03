@@ -255,6 +255,43 @@ class BundleUploadTests(unittest.TestCase):
         )
         self.assertEqual(res_patch_terminal.status_code, 409)
 
+    @patch("main.boto3.client")
+    def test_bundle_upload_direct_lambda_invocation(self, mock_boto_client):
+        exp = self._create_experiment()
+        s3_key = f"zip-uploads/{exp.id}/lambda_job/dataset.zip"
+        mock_lambda = MagicMock()
+        mock_boto_client.return_value = mock_lambda
+
+        with patch.dict(os.environ, {"LAMBDA_BUNDLE_EXTRACTOR_FUNCTION": "taskglass-bundle-extractor"}):
+            res = self.client.post(f"/experiments/{exp.id}/bundle-upload", json={"s3_key": s3_key})
+
+        self.assertEqual(res.status_code, 200)
+        job_id = res.json()["job_id"]
+        mock_boto_client.assert_called_with("lambda", region_name=mock_boto_client.call_args[1]["region_name"])
+        mock_lambda.invoke.assert_called_once()
+        call_kwargs = mock_lambda.invoke.call_args.kwargs
+        self.assertEqual(call_kwargs["FunctionName"], "taskglass-bundle-extractor")
+        self.assertEqual(call_kwargs["InvocationType"], "Event")
+        payload = json.loads(call_kwargs["Payload"].decode("utf-8"))
+        self.assertEqual(payload["s3_key"], s3_key)
+        self.assertEqual(payload["job_id"], job_id)
+        self.assertEqual(payload["experiment_id"], str(exp.id))
+        self.assertEqual(payload["modality"], exp.modality)
+
+    @patch("main.boto3.client")
+    def test_bundle_upload_lambda_invocation_failure_does_not_break_request(self, mock_boto_client):
+        exp = self._create_experiment()
+        s3_key = f"zip-uploads/{exp.id}/lambda_fail_job/dataset.zip"
+        mock_lambda = MagicMock()
+        mock_lambda.invoke.side_effect = Exception("AWS Lambda network timeout")
+        mock_boto_client.return_value = mock_lambda
+
+        with patch.dict(os.environ, {"LAMBDA_BUNDLE_EXTRACTOR_FUNCTION": "taskglass-bundle-extractor"}):
+            res = self.client.post(f"/experiments/{exp.id}/bundle-upload", json={"s3_key": s3_key})
+
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["status"], "queued")
+
     def test_watchdog_timeout_on_get(self):
         exp = self._create_experiment(status="draft_media_processing")
         with SessionLocal() as db:

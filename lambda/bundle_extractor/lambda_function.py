@@ -1,10 +1,10 @@
 """AWS Lambda function for extracting and registering large-file dataset bundle archives.
 
-Triggered by S3 ObjectCreated events on `zip-uploads/` or direct test/orchestration invocations.
+Triggered by direct backend invocation from POST /experiments/{id}/bundle-upload.
 Performs:
-1. Zip slip / Zip bomb security inspection.
-2. Top-level `media/` directory structure validation.
-3. Modality-based file extension filtering.
+1. Zip slip / Zip bomb security inspection via guards.
+2. Top-level `media/` directory structure validation via guards.
+3. Modality-based file extension filtering via guards.
 4. Per-file extraction and upload to `experiments/{id}/{uuid}/{file}`.
 5. Atomic batch registration with the backend using the internal service key.
 6. CloudWatch-ready structured JSON logging with context correlation.
@@ -31,6 +31,14 @@ from typing import Any, Dict, List, Optional
 
 import boto3
 from botocore.client import Config
+
+from guards import (
+    MODALITY_ALLOWED_EXTENSIONS,
+    check_zip_bomb,
+    check_zip_slip_and_structure,
+    discover_candidate_files,
+    filter_by_modality,
+)
 
 # Sensitive substrings to redact in structured logs
 _SENSITIVE_KEY_SUBSTRINGS = ("password", "secret", "session_token", "private_key", "service_key")
@@ -188,13 +196,6 @@ def setup_logger() -> logging.Logger:
 
 logger = setup_logger()
 
-MODALITY_ALLOWED_EXTENSIONS: Dict[str, set[str]] = {
-    "audio": {".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac", ".wma"},
-    "video": {".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v"},
-    "image": {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"},
-    "text": {".txt", ".json", ".csv", ".md"},
-}
-
 BACKEND_API_URL = os.environ.get("BACKEND_API_URL", "http://127.0.0.1:8000")
 INTERNAL_SERVICE_KEY = os.environ.get("INTERNAL_SERVICE_KEY", "taskglass-dev-internal-service-key")
 MAX_UNCOMPRESSED_BYTES = int(
@@ -294,50 +295,11 @@ def lambda_handler(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]
 
     s3 = boto3.client("s3", **s3_kwargs)
 
-    bucket: str = ""
-    s3_key: str = ""
-    job_id: str = ""
-    experiment_id: str = ""
-    modality: Optional[str] = None
-
-    if "Records" in event and len(event["Records"]) > 0:
-        record = event["Records"][0]
-        bucket = record["s3"]["bucket"]["name"]
-        s3_key = urllib.parse.unquote_plus(record["s3"]["object"]["key"])
-        event_source = "s3_notification"
-    else:
-        bucket = event.get("bucket", os.environ.get("S3_BUCKET", "taskglass-media"))
-        s3_key = event.get("s3_key") or event.get("key", "")
-        job_id = event.get("job_id", "")
-        experiment_id = event.get("experiment_id", "")
-        modality = event.get("modality")
-        event_source = "direct_invocation"
-
-    # If experiment_id is not provided, parse from key: zip-uploads/{experiment_id}/{uuid}/{filename}
-    if not experiment_id and s3_key.startswith("zip-uploads/"):
-        parts = s3_key.split("/")
-        if len(parts) >= 2:
-            experiment_id = parts[1]
-
-    # If job_id or modality not provided, fetch from object tags
-    if (not job_id or not modality) and bucket and s3_key:
-        try:
-            logger.debug("bundle_extractor.fetching_tags", extra={"bucket": bucket, "s3_key": s3_key})
-            tag_res = s3.get_object_tagging(Bucket=bucket, Key=s3_key)
-            tag_map = {t["Key"]: t["Value"] for t in tag_res.get("TagSet", [])}
-            if not job_id:
-                job_id = tag_map.get("job_id", "")
-            if not modality:
-                modality = tag_map.get("modality")
-            logger.info(
-                "bundle_extractor.tags_retrieved",
-                extra={"job_id": job_id, "modality": modality, "tag_count": len(tag_map)},
-            )
-        except Exception as tag_err:
-            logger.warning(
-                "bundle_extractor.tags_read_failed",
-                extra={"bucket": bucket, "s3_key": s3_key, "error": str(tag_err)},
-            )
+    bucket = event.get("bucket", os.environ.get("S3_BUCKET", "taskglass-media"))
+    s3_key = event.get("s3_key") or event.get("key", "")
+    job_id = event.get("job_id", "")
+    experiment_id = event.get("experiment_id", "")
+    modality = event.get("modality")
 
     # Bind contextual identifiers for all subsequent log lines
     if job_id:
@@ -352,7 +314,6 @@ def lambda_handler(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]
     logger.info(
         "bundle_extractor.event_parsed",
         extra={
-            "event_source": event_source,
             "bucket": bucket,
             "s3_key": s3_key,
             "job_id": job_id,
@@ -405,11 +366,11 @@ def lambda_handler(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]
             },
         )
 
-        # Inspect central directory
+        # Inspect central directory & extract with security guardrails
         inspect_start = time.monotonic()
         with zipfile.ZipFile(zip_path, "r") as zf:
-            total_uncompressed = sum(info.file_size for info in zf.infolist())
             total_entries = len(zf.infolist())
+            total_uncompressed = sum(info.file_size for info in zf.infolist())
             logger.info(
                 "bundle_extractor.archive_inspection_started",
                 extra={
@@ -419,39 +380,11 @@ def lambda_handler(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]
                 },
             )
 
-            if total_uncompressed > MAX_UNCOMPRESSED_BYTES:
-                logger.error(
-                    "bundle_extractor.security_violation.zip_bomb",
-                    extra={
-                        "total_uncompressed_bytes": total_uncompressed,
-                        "limit_bytes": MAX_UNCOMPRESSED_BYTES,
-                    },
-                )
-                raise ValueError(
-                    f"Uncompressed archive size {total_uncompressed} bytes exceeds limit of {MAX_UNCOMPRESSED_BYTES} bytes"
-                )
+            check_zip_bomb(zf, MAX_UNCOMPRESSED_BYTES)
 
             dest_dir = os.path.abspath(os.path.join(tmp_dir, "extracted"))
             os.makedirs(dest_dir, exist_ok=True)
-
-            has_media_root = False
-            for member in zf.infolist():
-                norm_name = os.path.normpath(member.filename).replace("\\", "/")
-                if norm_name.startswith("media/") or norm_name == "media":
-                    has_media_root = True
-
-                target_path = os.path.abspath(os.path.join(dest_dir, member.filename))
-                if not (target_path == dest_dir or target_path.startswith(dest_dir + os.sep)):
-                    logger.error(
-                        "bundle_extractor.security_violation.zip_slip",
-                        extra={"member_filename": member.filename, "target_path": target_path},
-                    )
-                    raise ValueError(f"Zip slip detected: path traversal attempt in {member.filename}")
-
-            if not has_media_root:
-                logger.error("bundle_extractor.validation_failed.missing_media_root")
-                raise ValueError("Archive must contain a top-level 'media/' directory")
-
+            check_zip_slip_and_structure(zf, dest_dir)
             zf.extractall(dest_dir)
 
         inspect_duration_ms = round((time.monotonic() - inspect_start) * 1000, 2)
@@ -467,16 +400,7 @@ def lambda_handler(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]
         if not os.path.isdir(media_dir):
             raise ValueError("Archive must contain a top-level 'media/' directory")
 
-        candidate_files: List[tuple[str, str]] = []
-        for root, dirs, files in os.walk(media_dir):
-            dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__MACOSX"]
-            for file in sorted(files):
-                if file.startswith(".") or file == "Thumbs.db":
-                    continue
-                abs_p = os.path.join(root, file)
-                rel_p = os.path.relpath(abs_p, media_dir).replace("\\", "/")
-                candidate_files.append((abs_p, rel_p))
-
+        candidate_files = discover_candidate_files(media_dir)
         files_total = len(candidate_files)
         logger.info(
             "bundle_extractor.candidate_files_discovered",
@@ -488,20 +412,21 @@ def lambda_handler(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]
 
         patch_job({"files_total": files_total, "files_processed": 0})
 
-        allowed_exts = MODALITY_ALLOWED_EXTENSIONS.get(modality.lower()) if modality else None
+        valid_files, rejected_files = filter_by_modality(candidate_files, modality)
+        for rej in rejected_files:
+            logger.warning(
+                "bundle_extractor.file_skipped_extension",
+                extra={
+                    "file_name": rej["filename"],
+                    "extension": os.path.splitext(rej["filename"])[1].lower(),
+                    "modality": modality,
+                },
+            )
+        errors.extend(rejected_files)
+        files_processed = len(rejected_files)
         processing_start = time.monotonic()
 
-        for abs_p, rel_p in candidate_files:
-            file_ext = os.path.splitext(rel_p)[1].lower()
-            if allowed_exts and file_ext not in allowed_exts:
-                err_msg = f"Invalid extension '{file_ext}' for modality '{modality}'"
-                logger.warning(
-                    "bundle_extractor.file_skipped_extension",
-                    extra={"filename": rel_p, "extension": file_ext, "modality": modality},
-                )
-                errors.append({"filename": rel_p, "error": err_msg})
-                files_processed += 1
-                continue
+        for abs_p, rel_p in valid_files:
 
             target_key = f"experiments/{experiment_id}/{uuid.uuid4()}/{os.path.basename(rel_p)}"
             try:
@@ -519,19 +444,19 @@ def lambda_handler(event: Dict[str, Any], context: Any = None) -> Dict[str, Any]
                     applied.append(rel_p)
                     logger.debug(
                         "bundle_extractor.file_registered",
-                        extra={"filename": rel_p, "s3_uri": s3_uri, "upload_ms": file_upload_ms},
+                        extra={"file_name": rel_p, "s3_uri": s3_uri, "upload_ms": file_upload_ms},
                     )
                 else:
                     err_msg = f"Registration failed ({status_code}): {resp_data.get('detail', resp_data)}"
                     logger.warning(
                         "bundle_extractor.file_registration_failed",
-                        extra={"filename": rel_p, "status_code": status_code, "error": err_msg},
+                        extra={"file_name": rel_p, "status_code": status_code, "error": err_msg},
                     )
                     errors.append({"filename": rel_p, "error": err_msg})
             except Exception as file_exc:
                 logger.warning(
                     "bundle_extractor.file_processing_exception",
-                    extra={"filename": rel_p, "error": str(file_exc)},
+                    extra={"file_name": rel_p, "error": str(file_exc)},
                     exc_info=True,
                 )
                 errors.append({"filename": rel_p, "error": str(file_exc)})
