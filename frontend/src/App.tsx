@@ -32,21 +32,40 @@ function App() {
   setAuthTokenGetter(() => getToken());
   const ContentWrapper = wrapInAppMain(location) ? "main" : "div";
   const displayName = user?.fullName || user?.username || user?.primaryEmailAddress?.emailAddress || "Account";
+  const isAnnotating = location.startsWith("/annotate");
   return (
     <>
       {showAppHeader(location) && <header className="app-header">
-        <Link href={isSignedIn ? "/dashboard" : "/"} className="app-logo">
-          <Activity className="app-logo-icon" size={28} />
-          TaskGlass
-        </Link>
+        {isAnnotating ? (
+          <div className="app-logo" style={{ cursor: "default" }}>
+            <Activity className="app-logo-icon" size={28} />
+            TaskGlass <span style={{ fontSize: "0.8rem", fontWeight: 500, color: "var(--text-secondary)", marginLeft: "4px" }}>Annotator</span>
+          </div>
+        ) : (
+          <Link href={isSignedIn ? "/dashboard" : "/"} className="app-logo">
+            <Activity className="app-logo-icon" size={28} />
+            TaskGlass
+          </Link>
+        )}
         <nav className="app-nav" aria-label="Main navigation">
-          {isSignedIn ? <>
-            <Link href="/dashboard" className="nav-link"><LayoutDashboard size={17} /> Dashboard</Link>
-            <Link href="/catalog" className="nav-link"><BookOpen size={17} /> Annotation Catalog</Link>
-            <Link href="/experiments/new" className="nav-link nav-link-primary"><Plus size={17} /> New Experiment</Link>
-            <Link href="/profile" className="nav-link"><UserRound size={17} /> {displayName}</Link>
-            <button className="nav-link nav-button" onClick={async () => { await signOut(); navigate("/login"); }}><LogOut size={17} /> Sign out</button>
-          </> : <Link href="/login" className="nav-link nav-link-primary"><LogIn size={17} /> Sign in</Link>}
+          {isAnnotating ? (
+            isSignedIn ? (
+              <>
+                <span className="nav-link" style={{ cursor: "default", opacity: 0.85 }}>
+                  <UserRound size={17} /> {displayName}
+                </span>
+                <button className="nav-link nav-button" onClick={async () => { await signOut(); }}><LogOut size={17} /> Sign out</button>
+              </>
+            ) : null
+          ) : isSignedIn ? (
+            <>
+              <Link href="/dashboard" className="nav-link"><LayoutDashboard size={17} /> Dashboard</Link>
+              <Link href="/catalog" className="nav-link"><BookOpen size={17} /> Annotation Catalog</Link>
+              <Link href="/experiments/new" className="nav-link nav-link-primary"><Plus size={17} /> New Experiment</Link>
+              <Link href="/profile" className="nav-link"><UserRound size={17} /> {displayName}</Link>
+              <button className="nav-link nav-button" onClick={async () => { await signOut(); navigate("/login"); }}><LogOut size={17} /> Sign out</button>
+            </>
+          ) : <Link href="/login" className="nav-link nav-link-primary"><LogIn size={17} /> Sign in</Link>}
         </nav>
       </header>}
 

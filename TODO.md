@@ -16,3 +16,16 @@
        - Log a structured warning (e.g. `bundle_extractor.experiment_unavailable_aborted`).
        - Skip archive download, extraction, and file uploads.
        - Clean up temporary files and return early with an acknowledgment status (e.g. `statusCode: 200` to prevent unnecessary AWS Lambda / SQS event retries).
+
+## User Roles & Permissions (Annotator vs Creator Distinction)
+
+- [ ] **Database Role Distinction (`app_user.role`) & Dedicated Annotator Portal**
+  - **Context**: Currently, any user who creates an account or signs in is treated as a full creator in `app_user` with access to the dashboard and experiment creation.
+  - **Target Areas**:
+    - Backend: `backend/models.py`, `backend/auth.py`, `backend/main.py`
+    - Frontend: `frontend/src/App.tsx`, `frontend/src/components/Annotator.tsx`, `frontend/src/components/Dashboard.tsx`
+  - **Required Implementation**:
+    1. **Data Model**: Add `role` column to `app_user` (`Column(String, nullable=False, default='creator')`, values: `'creator'` | `'annotator'` | `'admin'`).
+    2. **Onboarding / Assignment**: Users signing up from `/annotate/:shareToken` are created with `role='annotator'`. Users signing up from the marketing homepage or `/signup` are created with `role='creator'`.
+    3. **Backend Enforcement**: Protect `POST /experiments` so accounts with `role='annotator'` are rejected with `403 Forbidden: Annotator accounts cannot create experiments`.
+    4. **Dedicated Annotator Dashboard**: Replace the creator experiment table with a worker portal for annotators ("My Assigned Experiments" / "Contribution History" / "Qualification Status") when an annotator logs in directly.

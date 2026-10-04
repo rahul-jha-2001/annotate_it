@@ -218,7 +218,19 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
 
   if (!authLoaded || loading) return <div className="container text-center">Loading…</div>;
   if (configuration?.access_mode === "sign_in_required" && !isSignedIn) {
-    return <div className="container animate-fade-in" style={{ maxWidth: "560px" }}><div className="glass-panel join-experiment-card"><LogIn size={34} className="app-logo-icon" /><h1>Sign in to annotate</h1><p><strong>{configuration.experiment_name}</strong> requires a verified account so your work can be attributed to you.</p><SignInButton mode="modal"><button className="btn btn-primary">Sign in and continue</button></SignInButton></div></div>;
+    const returnUrl = typeof window !== "undefined" ? window.location.href : `/annotate/${shareToken}`;
+    return (
+      <div className="container animate-fade-in" style={{ maxWidth: "560px" }}>
+        <div className="glass-panel join-experiment-card">
+          <LogIn size={34} className="app-logo-icon" />
+          <h1>Sign in to annotate</h1>
+          <p><strong>{configuration.experiment_name}</strong> requires a verified account so your work can be attributed to you.</p>
+          <SignInButton mode="modal" fallbackRedirectUrl={returnUrl} forceRedirectUrl={returnUrl}>
+            <button className="btn btn-primary">Sign in and continue</button>
+          </SignInButton>
+        </div>
+      </div>
+    );
   }
   if (configuration?.access_mode === "guest_name" && !session) {
     return <div className="container animate-fade-in" style={{ maxWidth: "560px" }}><form className="glass-panel join-experiment-card" onSubmit={submitGuestName}><UserRound size={34} className="app-logo-icon" /><h1>Enter your name</h1><p>Your name will be shown to the creator of <strong>{configuration.experiment_name}</strong>. No account is required.</p><div className="form-group"><label className="form-label" htmlFor="guest-name">Display name</label><input id="guest-name" className="form-input" autoFocus maxLength={120} value={guestName} onChange={event => setGuestName(event.target.value)} placeholder="Your name" /></div>{error && <p className="form-error">{error}</p>}<button className="btn btn-primary" type="submit" disabled={!guestName.trim() || submitting}>Continue</button></form></div>;
