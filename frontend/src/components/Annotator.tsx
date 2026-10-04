@@ -237,7 +237,6 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
             forceRedirectUrl={destination}
             signUpFallbackRedirectUrl={destination}
             signUpForceRedirectUrl={destination}
-            redirectUrl={destination}
           >
             <button className="btn btn-primary">Sign in and continue</button>
           </SignInButton>

@@ -153,7 +153,10 @@ export function parseDatasetBundle(
 
   const goldByFilename = new Map<string, Record<string, unknown>>();
   if (goldJson.trim()) {
-    const parsed: unknown = JSON.parse(goldJson);
+    let parsed: unknown = JSON.parse(goldJson);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Array.isArray((parsed as Record<string, unknown>).manifest)) {
+      parsed = (parsed as Record<string, unknown>).manifest;
+    }
     if (!Array.isArray(parsed)) throw new Error("Gold answers must contain a JSON array");
     const seen = new Set<string>();
     parsed.forEach((entry, index) => {

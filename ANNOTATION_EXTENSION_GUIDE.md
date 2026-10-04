@@ -314,7 +314,7 @@ change.
 
 An annotation-type addition is complete when normal answers and gold answers use
 the same documented schema, API validation rejects malformed answers, scoring is
-deterministic, compatible modalities are derived correctly, and all designer,
+deterministic, compatible modalities are derived correctly, has a catalog prompt, and all designer,
 annotator, review, and export paths understand the new plugin through the
 registry.
 

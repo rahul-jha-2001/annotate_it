@@ -3,6 +3,7 @@ import {
   AlertCircle,
   AlertTriangle,
   Check,
+  Copy,
   Info,
   Loader2,
   LockKeyhole,
@@ -18,6 +19,7 @@ import { getMediaPlugin } from "../plugins/media/registry";
 import AnnotationOverlaySelector, { buildOverlayOptions } from "./AnnotationOverlaySelector";
 import type { AnnotationAnswer, LabelSchema } from "./annotator/types";
 import { parseCsv, validateGold, type MetadataFieldDefinition, type ParsedDatasetRow } from "./datasetBundle";
+import { assembleAgentPrompt } from "../catalog/bundlePrompts";
 
 export interface QualificationQuestion {
   key: string;
@@ -277,6 +279,20 @@ export function ExperimentDatasetSection({
   const [metadataFields, setMetadataFields] = useState<MetadataFieldDefinition[]>([]);
   const [mediaUrls, setMediaUrls] = useState<Record<string, string>>({});
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [promptCopied, setPromptCopied] = useState(false);
+
+  const handleCopyPrompt = async () => {
+    try {
+      const promptText = assembleAgentPrompt(labelSchema.annotation_type, {
+        multiSelect: (labelSchema as any)?.multi_select,
+      });
+      await navigator.clipboard.writeText(promptText);
+      setPromptCopied(true);
+      setTimeout(() => setPromptCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy prompt", err);
+    }
+  };
 
   const locked = Boolean(isLocked || status === "active");
 
@@ -449,11 +465,16 @@ export function ExperimentDatasetSection({
     setFeedback(null);
     try {
       const manifestObj = JSON.parse(text);
-      if (Array.isArray(manifestObj)) {
+      const manifestList = Array.isArray(manifestObj)
+        ? manifestObj
+        : (manifestObj && typeof manifestObj === "object" && Array.isArray((manifestObj as any).manifest)
+          ? (manifestObj as any).manifest
+          : null);
+      if (manifestList) {
         const res = await apiFetch(`/api/experiments/${experimentId}/reupload-gold-manifest`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ manifest: manifestObj }),
+          body: JSON.stringify({ manifest: manifestList }),
         });
         if (res.ok) {
           setFeedback("Gold answers successfully synced.");
@@ -475,6 +496,24 @@ export function ExperimentDatasetSection({
           <h3>Dataset &amp; Gold Answers</h3>
           <p>Review uploaded media samples, declared metadata attributes, and quality-check gold answers.</p>
         </div>
+      </div>
+
+      <div className="glass-panel" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", marginBottom: "20px", borderRadius: "10px", background: "var(--surface-subtle)" }}>
+        <div>
+          <strong style={{ fontSize: "0.95rem" }}>Dataset preparation prompt</strong>
+          <p style={{ margin: "2px 0 0", fontSize: "0.88rem", color: "var(--text-secondary)" }}>
+            You'll get three files: a media zip, metadata.csv, and gold_answers.json.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={handleCopyPrompt}
+          style={{ whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: "6px" }}
+        >
+          {promptCopied ? <Check size={16} /> : <Copy size={16} />}
+          {promptCopied ? "Prompt copied!" : "Copy agent prompt"}
+        </button>
       </div>
 
       {locked ? (

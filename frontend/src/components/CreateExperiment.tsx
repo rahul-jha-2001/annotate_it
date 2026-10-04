@@ -5,6 +5,7 @@ import {
   ArrowRight,
   Check,
   CheckCircle2,
+  Copy,
   FileArchive,
   Files,
   Loader2,
@@ -27,6 +28,7 @@ import {
 } from "../services/multipartUpload";
 import { parseCsv } from "./datasetBundle";
 import { resolveExperimentPreset } from "./experimentDraft";
+import { assembleAgentPrompt } from "../catalog/bundlePrompts";
 
 interface AnnotationTypeInfo {
   key: string;
@@ -166,6 +168,35 @@ export default function CreateExperiment() {
     const names = files.map(file => file.name);
     return new Set(names.filter((name, index) => names.indexOf(name) !== index));
   }, [files]);
+
+  const [promptCopied, setPromptCopied] = useState(false);
+
+  const handleCopyPrompt = async () => {
+    if (!annotationPlugin) return;
+    try {
+      const promptText = assembleAgentPrompt(annotationPlugin.key, {
+        multiSelect: (annotationSchema as any)?.multi_select,
+      });
+      await navigator.clipboard.writeText(promptText);
+      setPromptCopied(true);
+      setTimeout(() => setPromptCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy prompt", err);
+    }
+  };
+
+  const parseManifestPayload = (rawJson: string): any[] | null => {
+    try {
+      const parsed = JSON.parse(rawJson);
+      if (Array.isArray(parsed)) return parsed;
+      if (parsed && typeof parsed === "object" && Array.isArray((parsed as any).manifest)) {
+        return (parsed as any).manifest;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  };
 
 
   const startBundleUpload = (fileToUpload: File) => {
@@ -355,12 +386,12 @@ export default function CreateExperiment() {
         // Ensure gold manifest is synced
         if (goldManifest) {
           try {
-            const manifestObj = JSON.parse(goldManifest);
-            if (Array.isArray(manifestObj) && manifestObj.length > 0) {
+            const manifestList = parseManifestPayload(goldManifest);
+            if (manifestList && manifestList.length > 0) {
               await apiFetch(`/api/experiments/${expId}/gold-manifest`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ manifest: manifestObj }),
+                body: JSON.stringify({ manifest: manifestList }),
               });
             }
           } catch (goldErr) {
@@ -496,12 +527,12 @@ export default function CreateExperiment() {
 
       if (goldManifest) {
         try {
-          const manifestObj = JSON.parse(goldManifest);
-          if (Array.isArray(manifestObj) && manifestObj.length > 0) {
+          const manifestList = parseManifestPayload(goldManifest);
+          if (manifestList && manifestList.length > 0) {
             await apiFetch(`/api/experiments/${expId}/gold-manifest`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ manifest: manifestObj }),
+              body: JSON.stringify({ manifest: manifestList }),
             });
           }
         } catch (e) {
@@ -676,6 +707,24 @@ export default function CreateExperiment() {
         </div>}
 
         {step === 2 && <div className="flex-col">
+          <div className="glass-panel" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 18px", marginBottom: "16px", borderRadius: "10px", background: "var(--surface-subtle)" }}>
+            <div>
+              <strong style={{ fontSize: "0.95rem" }}>Dataset preparation prompt</strong>
+              <p style={{ margin: "2px 0 0", fontSize: "0.88rem", color: "var(--text-secondary)" }}>
+                You'll get three files: a media zip, metadata.csv, and gold_answers.json.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handleCopyPrompt}
+              style={{ whiteSpace: "nowrap", display: "inline-flex", alignItems: "center", gap: "6px" }}
+            >
+              {promptCopied ? <Check size={16} /> : <Copy size={16} />}
+              {promptCopied ? "Prompt copied!" : "Copy agent prompt"}
+            </button>
+          </div>
+
           <div className="upload-mode-selector">
             <button
               type="button"
@@ -891,12 +940,12 @@ export default function CreateExperiment() {
                               const targetExpId = createdExperimentId || createdExperimentIdRef.current;
                               if (targetExpId) {
                                 try {
-                                  const manifestObj = JSON.parse(text);
-                                  if (Array.isArray(manifestObj)) {
+                                  const manifestList = parseManifestPayload(text);
+                                  if (manifestList && manifestList.length > 0) {
                                     await apiFetch(`/api/experiments/${targetExpId}/gold-manifest`, {
                                       method: "POST",
                                       headers: { "Content-Type": "application/json" },
-                                      body: JSON.stringify({ manifest: manifestObj }),
+                                      body: JSON.stringify({ manifest: manifestList }),
                                     });
                                   }
                                 } catch (e) {
