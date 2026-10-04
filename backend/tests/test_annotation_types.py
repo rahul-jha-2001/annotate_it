@@ -185,8 +185,11 @@ class QualificationTests(unittest.TestCase):
         ]
         answers = {"languages": ["Hindi"], "proficiency": 4, "experience": "Audio review"}
         self.assertTrue(sample_matches_qualifications({"language": "Hindi", "difficulty": 3}, answers, rules))
+        self.assertTrue(sample_matches_qualifications({"language": "Hindi", "difficulty": "3"}, answers, rules))
         self.assertFalse(sample_matches_qualifications({"language": "English", "difficulty": 3}, answers, rules))
         self.assertFalse(sample_matches_qualifications({"language": "Hindi", "difficulty": 5}, answers, rules))
+        self.assertFalse(sample_matches_qualifications({"language": "Hindi", "difficulty": "5"}, answers, rules))
+        self.assertFalse(sample_matches_qualifications({"language": "Hindi", "difficulty": "invalid"}, answers, rules))
 
 
 if __name__ == "__main__":

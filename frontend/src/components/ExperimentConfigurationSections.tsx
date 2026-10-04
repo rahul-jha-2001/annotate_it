@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   AlertCircle,
   AlertTriangle,
@@ -50,8 +50,8 @@ export const routingOperatorFor = (
   question: QualificationQuestion | undefined,
 ): RoutingRule["operator"] | null => {
   if (!field || !question) return null;
-  if (field.type === "number" && question.type === "number") return "gte";
-  if (field.type === "boolean" && question.type === "boolean") return "equals";
+  if ((field.type === "number" || field.type === "text") && question.type === "number") return "gte";
+  if ((field.type === "boolean" || field.type === "text") && question.type === "boolean") return "equals";
   if (["text", "choice"].includes(field.type) && question.type === "multi_choice") return "in";
   if (["text", "choice"].includes(field.type) && question.type === "single_choice") return "equals";
   return null;
@@ -584,6 +584,59 @@ export function ExperimentDatasetSection({
   );
 }
 
+function QuestionOptionsInput({
+  options,
+  disabled,
+  onChange,
+}: {
+  options: string[];
+  disabled?: boolean;
+  onChange: (options: string[]) => void;
+}) {
+  const [rawText, setRawText] = useState(() => options.join(", "));
+  const lastEmittedKey = useRef(options.join(":::"));
+
+  useEffect(() => {
+    const currentKey = options.join(":::");
+    if (currentKey !== lastEmittedKey.current) {
+      lastEmittedKey.current = currentKey;
+      setRawText(options.join(", "));
+    }
+  }, [options]);
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    setRawText(val);
+    const parsed = val
+      .split(",")
+      .map(v => v.trim())
+      .filter(Boolean);
+    lastEmittedKey.current = parsed.join(":::");
+    onChange(parsed);
+  };
+
+  const handleBlur = () => {
+    const parsed = rawText
+      .split(",")
+      .map(v => v.trim())
+      .filter(Boolean);
+    lastEmittedKey.current = parsed.join(":::");
+    onChange(parsed);
+    setRawText(parsed.join(", "));
+  };
+
+  return (
+    <input
+      className="form-input"
+      disabled={disabled}
+      value={rawText}
+      onChange={handleChange}
+      onBlur={handleBlur}
+      placeholder="Hindi, English, Spanish"
+    />
+  );
+}
+
 // --------------------------------------------------------------------------
 // 4. Qualifications & Routing Section
 // --------------------------------------------------------------------------
@@ -633,12 +686,36 @@ export function ExperimentQualificationsSection({
 
   const addRule = () => {
     if (isLocked) return;
-    const field = metadataFields[0];
-    const compatibleQuestion = questions.find(q => routingOperatorFor(field, q));
-    if (!field || !compatibleQuestion) return;
-    const operator = routingOperatorFor(field, compatibleQuestion);
-    if (!operator) return;
-    setRules(current => [...current, { metadata_field: field.key, question_key: compatibleQuestion.key, operator }]);
+    let selectedField: MetadataFieldDefinition | undefined;
+    let selectedQuestion: QualificationQuestion | undefined;
+    let selectedOperator: RoutingRule["operator"] | null = null;
+
+    for (const f of metadataFields) {
+      for (const q of questions) {
+        const op = routingOperatorFor(f, q);
+        if (op) {
+          selectedField = f;
+          selectedQuestion = q;
+          selectedOperator = op;
+          break;
+        }
+      }
+      if (selectedField) break;
+    }
+
+    if (!selectedField || !selectedQuestion || !selectedOperator) {
+      setFeedback("No compatible metadata field found in your dataset to match with your qualification questions.");
+      return;
+    }
+
+    setRules(current => [
+      ...current,
+      {
+        metadata_field: selectedField!.key,
+        question_key: selectedQuestion!.key,
+        operator: selectedOperator!,
+      },
+    ]);
   };
 
   const handleSave = async () => {
@@ -762,24 +839,32 @@ export function ExperimentQualificationsSection({
             {question.type.includes("choice") && (
               <div className="form-group">
                 <label className="form-label">Answer options (comma-separated)</label>
-                <input className="form-input" disabled={isLocked} value={question.options.join(", ")} onChange={e => updateQuestion(index, { options: e.target.value.split(",").map(v => v.trim()).filter(Boolean) })} placeholder="Hindi, English, Spanish" />
+                <QuestionOptionsInput
+                  disabled={isLocked}
+                  options={question.options}
+                  onChange={opts => updateQuestion(index, { options: opts })}
+                />
               </div>
             )}
           </div>
         ))
       )}
 
-      {metadataFields.length > 0 && questions.length > 0 && (
+      {questions.length > 0 && (
         <div style={{ marginTop: "24px" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
             <h4>Matching Rules</h4>
-            {!isLocked && (
+            {!isLocked && metadataFields.length > 0 && (
               <button type="button" className="btn btn-secondary" onClick={addRule}>
                 <Plus size={15} /> Add matching rule
               </button>
             )}
           </div>
-          {rules.length === 0 ? (
+          {metadataFields.length === 0 ? (
+            <p style={{ fontSize: "0.875rem", color: "var(--text-muted)" }}>
+              To route samples based on qualifications, upload a metadata CSV in the <strong>Dataset &amp; Gold</strong> tab with sample attributes (such as language, dialect, or required proficiency level).
+            </p>
+          ) : rules.length === 0 ? (
             <p style={{ fontSize: "0.875rem", color: "var(--text-muted)" }}>No routing rules added yet.</p>
           ) : (
             rules.map((rule, index) => {

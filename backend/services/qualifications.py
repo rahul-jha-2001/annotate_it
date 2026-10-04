@@ -83,10 +83,13 @@ def sample_matches_qualifications(
             not isinstance(answer_value, list) or sample_value not in answer_value
         ):
             return False
-        if operator == "gte" and (
-            isinstance(answer_value, bool)
-            or not isinstance(answer_value, (int, float))
-            or answer_value < sample_value
-        ):
-            return False
+        if operator == "gte":
+            if isinstance(answer_value, bool) or not isinstance(answer_value, (int, float)):
+                return False
+            try:
+                numeric_sample = float(sample_value)
+            except (ValueError, TypeError):
+                return False
+            if answer_value < numeric_sample:
+                return False
     return True
