@@ -21,6 +21,8 @@ export default function Login({ signup = false }: { signup?: boolean }) {
             signInUrl={`/login${redirectParam}`}
             fallbackRedirectUrl={redirectUrl}
             forceRedirectUrl={redirectUrl}
+            signInFallbackRedirectUrl={redirectUrl}
+            signInForceRedirectUrl={redirectUrl}
           />
         ) : (
           <SignIn
@@ -28,6 +30,8 @@ export default function Login({ signup = false }: { signup?: boolean }) {
             signUpUrl={`/signup${redirectParam}`}
             fallbackRedirectUrl={redirectUrl}
             forceRedirectUrl={redirectUrl}
+            signUpFallbackRedirectUrl={redirectUrl}
+            signUpForceRedirectUrl={redirectUrl}
           />
         )}
       </section>

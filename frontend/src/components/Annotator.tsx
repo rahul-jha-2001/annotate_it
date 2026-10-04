@@ -218,14 +218,20 @@ export default function Annotator({ shareToken }: { shareToken: string }) {
 
   if (!authLoaded || loading) return <div className="container text-center">Loading…</div>;
   if (configuration?.access_mode === "sign_in_required" && !isSignedIn) {
-    const returnUrl = typeof window !== "undefined" ? window.location.href : `/annotate/${shareToken}`;
+    const destination = `/annotate/${shareToken}`;
     return (
       <div className="container animate-fade-in" style={{ maxWidth: "560px" }}>
         <div className="glass-panel join-experiment-card">
           <LogIn size={34} className="app-logo-icon" />
           <h1>Sign in to annotate</h1>
           <p><strong>{configuration.experiment_name}</strong> requires a verified account so your work can be attributed to you.</p>
-          <SignInButton mode="modal" fallbackRedirectUrl={returnUrl} forceRedirectUrl={returnUrl}>
+          <SignInButton
+            mode="modal"
+            fallbackRedirectUrl={destination}
+            forceRedirectUrl={destination}
+            signUpFallbackRedirectUrl={destination}
+            signUpForceRedirectUrl={destination}
+          >
             <button className="btn btn-primary">Sign in and continue</button>
           </SignInButton>
         </div>

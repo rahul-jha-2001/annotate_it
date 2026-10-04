@@ -884,11 +884,17 @@ export function ExperimentQualificationsSection({
                   <div className="routing-sentence">
                     <span>Serve sample when its</span>
                     <select className="form-select" disabled={isLocked} value={rule.metadata_field} onChange={e => {
-                      const field = metadataFields.find(f => f.key === e.target.value);
-                      const compQ = questions.find(q => routingOperatorFor(field, q)) ?? selectedQuestion;
-                      const op = routingOperatorFor(field, compQ);
-                      if (compQ && op) {
-                        setRules(current => current.map((r, i) => (i === index ? { ...r, metadata_field: field!.key, question_key: compQ.key, operator: op } : r)));
+                      const newField = metadataFields.find(f => f.key === e.target.value);
+                      if (!newField) return;
+                      const currentOp = routingOperatorFor(newField, selectedQuestion);
+                      if (selectedQuestion && currentOp) {
+                        setRules(current => current.map((r, i) => (i === index ? { ...r, metadata_field: newField.key, operator: currentOp } : r)));
+                        return;
+                      }
+                      const fallbackQ = questions.find(q => routingOperatorFor(newField, q));
+                      const fallbackOp = fallbackQ ? routingOperatorFor(newField, fallbackQ) : null;
+                      if (fallbackQ && fallbackOp) {
+                        setRules(current => current.map((r, i) => (i === index ? { ...r, metadata_field: newField.key, question_key: fallbackQ.key, operator: fallbackOp } : r)));
                       }
                     }}>
                       {metadataFields.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
@@ -896,11 +902,17 @@ export function ExperimentQualificationsSection({
                     <strong>{operatorText}</strong>
                     <span>the annotator’s answer to</span>
                     <select className="form-select" disabled={isLocked} value={rule.question_key} onChange={e => {
-                      const q = questions.find(item => item.key === e.target.value);
-                      const compF = metadataFields.find(f => routingOperatorFor(f, q)) ?? selectedField;
-                      const op = routingOperatorFor(compF, q);
-                      if (compF && q && op) {
-                        setRules(current => current.map((r, i) => (i === index ? { ...r, metadata_field: compF.key, question_key: q.key, operator: op } : r)));
+                      const newQ = questions.find(item => item.key === e.target.value);
+                      if (!newQ) return;
+                      const currentOp = routingOperatorFor(selectedField, newQ);
+                      if (selectedField && currentOp) {
+                        setRules(current => current.map((r, i) => (i === index ? { ...r, question_key: newQ.key, operator: currentOp } : r)));
+                        return;
+                      }
+                      const fallbackF = metadataFields.find(f => routingOperatorFor(f, newQ));
+                      const fallbackOp = fallbackF ? routingOperatorFor(fallbackF, newQ) : null;
+                      if (fallbackF && fallbackOp) {
+                        setRules(current => current.map((r, i) => (i === index ? { ...r, metadata_field: fallbackF.key, question_key: newQ.key, operator: fallbackOp } : r)));
                       }
                     }}>
                       {questions.filter(q => routingOperatorFor(selectedField, q)).map(q => <option key={q.key} value={q.key}>{q.label}</option>)}
