@@ -2,7 +2,15 @@ import { getAnnotationPlugin } from "../plugins/annotations/registry";
 
 export const MAX_ZIP_GB = 2;
 
-export const SELF_CHECK_SCRIPT = `import csv, json, os, unicodedata, zipfile
+export const BROWSER_SUPPORTED_EXTENSIONS = {
+  audio: [".wav", ".mp3"],
+  video: [".mp4", ".webm"],
+  image: [".png", ".jpg", ".jpeg", ".webp"],
+} as const;
+
+export function buildSelfCheckScript(taskCheckSnippet?: string): string {
+  const customSnippet = taskCheckSnippet?.trim() ? `\n${taskCheckSnippet.trim()}\n` : "";
+  return `import csv, json, os, unicodedata, zipfile
 from collections import Counter
 
 ZIP, CSV, GOLD = "dataset_media.zip", "metadata.csv", "gold_answers.json"
@@ -10,7 +18,7 @@ problems, notes = [], []
 
 with zipfile.ZipFile(ZIP) as z:
     entries = [n for n in z.namelist() if not n.endswith("/")]
-files = set()
+file_counts = Counter()
 for n in entries:
     parts = n.split("/")
     if len(parts) != 2 or parts[0] != "media":
@@ -18,12 +26,13 @@ for n in entries:
     elif parts[1].startswith(".") or parts[1] == "Thumbs.db":
         problems.append(f"hidden/system file in zip: {n}")
     else:
-        files.add(parts[1])
-for f in sorted(files):
+        file_counts[parts[1]] += 1
+for f, count in file_counts.items():
+    if count > 1:
+        problems.append(f"duplicate filename inside media/: {f!r} appears {count} times")
     if not unicodedata.is_normalized("NFC", f):
         problems.append(f"filename is not NFC-normalized (may fail to match): {f!r}")
-if len(files) != len([n for n in entries if n.startswith("media/")]):
-    problems.append("duplicate filenames inside media/")
+files = set(file_counts.keys())
 
 if os.path.exists(CSV):
     with open(CSV, encoding="utf-8", newline="") as fh:  # a BOM will show up below
@@ -59,7 +68,7 @@ if os.path.exists(GOLD):
         for n, c in seen.items():
             if c > 1:
                 problems.append(f"gold_answers.json: duplicate filename {n!r}")
-        notes.append(f"{len(gold)} gold entries")
+        notes.append(f"{len(gold)} gold entries")${customSnippet}
 else:
     notes.append("no gold_answers.json produced (deployment needs at least one gold entry when quality checks are on)")
 
@@ -69,6 +78,9 @@ for p in problems: print("  -", p)
 print("NOTES:")
 for n in notes: print("  -", n)
 raise SystemExit(1 if problems else 0)`;
+}
+
+export const SELF_CHECK_SCRIPT = buildSelfCheckScript();
 
 export const PREAMBLE_TEMPLATE = `You are preparing a dataset for upload to TaskGlass, a data annotation platform.
 The annotation task is: {{TASK_NAME}}. Compatible media: {{MEDIA_TYPES}}.
@@ -88,7 +100,9 @@ STEP 1. ASK THE USER (skip anything already answered):
     when the experiment is created. Never invent or guess them. (See the task section
     below for what to ask for this task.)
   - Which files should be gold (known-correct) examples, and the correct answer for
-    each. If none, skip gold_answers.json.
+    each. Suggest roughly 10% of files, and not fewer than 5 to 10 (each annotator
+    sees each gold file once, and quality monitoring needs enough samples to establish
+    confidence). If none, skip gold_answers.json.
   - Any descriptive columns they want in metadata.csv (language, difficulty, source...).
     Optional.
 
@@ -100,7 +114,7 @@ STEP 2. THE ZIP (dataset_media.zip)
     names (for example Hindi or Sanskrit titles) intact. Do not rename, transliterate,
     or clean them up. Write names in Unicode NFC form consistently across the zip,
     metadata.csv, and gold_answers.json.
-  - Allowed file types: audio .wav .mp3; video .mp4 .webm; image .png .jpg .jpeg .webp.
+  - Allowed file types: audio ${BROWSER_SUPPORTED_EXTENSIONS.audio.join(" ")}; video ${BROWSER_SUPPORTED_EXTENSIONS.video.join(" ")}; image ${BROWSER_SUPPORTED_EXTENSIONS.image.join(" ")}.
     Files of an unsupported type are rejected individually, so leave them out.
   - Put nothing else in the zip: no metadata.csv, no gold_answers.json, no hidden or
     system files (.DS_Store, Thumbs.db, __MACOSX).
@@ -118,11 +132,12 @@ STEP 3. metadata.csv (optional, but if you produce it, it must cover every media
 STEP 4. gold_answers.json (optional)
   - A top-level JSON array. Each element is exactly {"filename": "...", "answer": {...}}
     and nothing else. Extra fields are rejected.
-  - Include entries only for files the user designated as gold.
+  - Include entries only for files the user designated as gold. Aim for roughly 10% of files,
+    and not fewer than 5 to 10 examples so annotators receive adequate quality scoring.
+    While at least one gold entry is the technical minimum to deploy with quality checks,
+    a single gold file yields insufficient evidence for reliability.
   - Every \`filename\` must exactly match a file in the zip. A gold entry that points at
     a file not in the zip blocks deployment.
-  - If the experiment uses quality checks (the default), at least one gold entry is
-    required before it can be deployed. Remind the user of this if they gave none.
   - The shape of "answer" depends on the task. See the task section below.
 
 STEP 5. VERIFY BEFORE DELIVERING
@@ -131,10 +146,16 @@ STEP 5. VERIFY BEFORE DELIVERING
   the file counts and anything listed under NOTES.
 
 \`\`\`python
-${SELF_CHECK_SCRIPT}
+{{SELF_CHECK_SCRIPT}}
 \`\`\`
 
-This script checks structure and filename agreement only. The answer shapes themselves are checked against the rules in each task section below.`;
+This script checks structure, filename agreement, and basic answer shapes against the rules below.
+
+STEP 6. UPLOAD TO TASKGLASS
+  - dataset_media.zip: Select the "Single Archive (.zip) for Large Datasets" upload option
+    on the Dataset step of the experiment wizard (or the Dataset section of the experiment page).
+  - metadata.csv: Upload into the metadata CSV box (can be uploaded while the zip is extracting).
+  - gold_answers.json: Upload into the gold answers JSON box.`;
 
 export const SHARED_FRAGMENTS = {
   TEMPORAL_REGIONS: `TIME RULES
@@ -173,6 +194,7 @@ export interface TaskSectionDefinition {
   exampleAnswer: Record<string, unknown>;
   description: string;
   schemaVersion: number;
+  checkSnippet?: string;
 }
 
 export const TASK_SECTIONS: TaskSectionDefinition[] = [
@@ -186,6 +208,15 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     exampleAnswer: { value: "<one of the user's choices>" },
     description: "`value` must exactly equal one of the choices (case-sensitive).",
     schemaVersion: 1,
+    checkSnippet: `        # Set CHOICES = {"..."} to the user's agreed choices to check for typos/case issues:
+        CHOICES = {"<choice_1>", "<choice_2>"}
+        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            val = ans.get("value")
+            if not isinstance(val, str) or not val.strip():
+                problems.append(f"gold entry {i} ({e.get('filename')}): answer must have non-empty 'value': '<choice>'")
+            elif "<choice_1>" not in CHOICES and val not in CHOICES:
+                problems.append(f"gold entry {i} ({e.get('filename')}): value {val!r} is not in choices {sorted(CHOICES)}")`,
   },
   {
     key: "categorical",
@@ -197,6 +228,19 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     exampleAnswer: { values: ["<choice>", "<another choice>"] },
     description: "The field is `values` (plural). Every value must be one of the choices, with no duplicates inside one answer.",
     schemaVersion: 1,
+    checkSnippet: `        # Set CHOICES = {"..."} to the user's agreed choices to check for typos/case issues:
+        CHOICES = {"<choice_1>", "<choice_2>"}
+        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            vals = ans.get("values")
+            if not isinstance(vals, list) or not all(isinstance(v, str) and v.strip() for v in vals):
+                problems.append(f"gold entry {i} ({e.get('filename')}): answer must have 'values': ['<choice>', ...]")
+            elif len(set(vals)) != len(vals):
+                problems.append(f"gold entry {i} ({e.get('filename')}): 'values' contains duplicate choices")
+            elif "<choice_1>" not in CHOICES:
+                for v in vals:
+                    if v not in CHOICES:
+                        problems.append(f"gold entry {i} ({e.get('filename')}): choice {v!r} is not in choices {sorted(CHOICES)}")`,
   },
   {
     key: "segment",
@@ -210,6 +254,14 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     },
     description: "One label applies to every region in the answer. If a gold file needs different labels on different regions, this task type cannot express it. Tell the user to use sound_event, video_event, or speaker_diarization instead.",
     schemaVersion: 1,
+    checkSnippet: `        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            if "label" not in ans or "regions" not in ans or not isinstance(ans["regions"], list):
+                problems.append(f"gold entry {i} ({e.get('filename')}): answer must have 'label' and 'regions'")
+            else:
+                for r in ans["regions"]:
+                    if not isinstance(r, dict) or r.get("start", 0) < 0 or r.get("end", 0) <= r.get("start", 0):
+                        problems.append(f"gold entry {i} ({e.get('filename')}): invalid region {r}")`,
   },
   {
     key: "transcription",
@@ -222,6 +274,10 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     },
     description: "Do not correct, normalize, or clean up the user's text. The platform applies its own configured normalization when scoring. The text must be non-empty. Non-Latin scripts are fine; keep them as written.",
     schemaVersion: 1,
+    checkSnippet: `        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            if "text" not in ans or not isinstance(ans.get("text"), str) or not ans["text"].strip():
+                problems.append(f"gold entry {i} ({e.get('filename')}): answer must have non-empty 'text'")`,
   },
   {
     key: "speaker_diarization",
@@ -234,6 +290,15 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     },
     description: "Labels are not restricted to a list for this type.",
     schemaVersion: 1,
+    checkSnippet: `        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            regions = ans.get("regions")
+            if not isinstance(regions, list):
+                problems.append(f"gold entry {i} ({e.get('filename')}): 'regions' must be a list")
+            else:
+                for r in regions:
+                    if not isinstance(r, dict) or r.get("start", 0) < 0 or r.get("end", 0) <= r.get("start", 0) or not r.get("label"):
+                        problems.append(f"gold entry {i} ({e.get('filename')}): invalid region {r}")`,
   },
   {
     key: "speaker_identification",
@@ -246,6 +311,15 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     },
     description: "Every label must be exactly one of the listed names.",
     schemaVersion: 1,
+    checkSnippet: `        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            regions = ans.get("regions")
+            if not isinstance(regions, list):
+                problems.append(f"gold entry {i} ({e.get('filename')}): 'regions' must be a list")
+            else:
+                for r in regions:
+                    if not isinstance(r, dict) or r.get("start", 0) < 0 or r.get("end", 0) <= r.get("start", 0) or not r.get("label"):
+                        problems.append(f"gold entry {i} ({e.get('filename')}): invalid region {r}")`,
   },
   {
     key: "sound_event",
@@ -258,6 +332,15 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     },
     description: "Regions may overlap. Every label must be one of the user's labels.",
     schemaVersion: 1,
+    checkSnippet: `        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            regions = ans.get("regions")
+            if not isinstance(regions, list):
+                problems.append(f"gold entry {i} ({e.get('filename')}): 'regions' must be a list")
+            else:
+                for r in regions:
+                    if not isinstance(r, dict) or r.get("start", 0) < 0 or r.get("end", 0) <= r.get("start", 0) or not r.get("label"):
+                        problems.append(f"gold entry {i} ({e.get('filename')}): invalid region {r}")`,
   },
   {
     key: "speech_segmentation",
@@ -270,6 +353,15 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     },
     description: "",
     schemaVersion: 1,
+    checkSnippet: `        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            regions = ans.get("regions")
+            if not isinstance(regions, list):
+                problems.append(f"gold entry {i} ({e.get('filename')}): 'regions' must be a list")
+            else:
+                for r in regions:
+                    if not isinstance(r, dict) or r.get("start", 0) < 0 or r.get("end", 0) <= r.get("start", 0) or not r.get("label"):
+                        problems.append(f"gold entry {i} ({e.get('filename')}): invalid region {r}")`,
   },
   {
     key: "video_event",
@@ -282,6 +374,15 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     },
     description: "",
     schemaVersion: 1,
+    checkSnippet: `        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            regions = ans.get("regions")
+            if not isinstance(regions, list):
+                problems.append(f"gold entry {i} ({e.get('filename')}): 'regions' must be a list")
+            else:
+                for r in regions:
+                    if not isinstance(r, dict) or r.get("start", 0) < 0 or r.get("end", 0) <= r.get("start", 0) or not r.get("label"):
+                        problems.append(f"gold entry {i} ({e.get('filename')}): invalid region {r}")`,
   },
   {
     key: "action_recognition",
@@ -294,6 +395,15 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     },
     description: "",
     schemaVersion: 1,
+    checkSnippet: `        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            regions = ans.get("regions")
+            if not isinstance(regions, list):
+                problems.append(f"gold entry {i} ({e.get('filename')}): 'regions' must be a list")
+            else:
+                for r in regions:
+                    if not isinstance(r, dict) or r.get("start", 0) < 0 or r.get("end", 0) <= r.get("start", 0) or not r.get("label"):
+                        problems.append(f"gold entry {i} ({e.get('filename')}): invalid region {r}")`,
   },
   {
     key: "bounding_box",
@@ -315,6 +425,22 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     },
     description: 'For video, add `"time": <seconds>` to every box. `x` and `y` are the top-left corner. `width` and `height` must be greater than 0.',
     schemaVersion: 1,
+    checkSnippet: `        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            boxes = ans.get("boxes")
+            if not isinstance(boxes, list):
+                problems.append(f"gold entry {i} ({e.get('filename')}): 'boxes' must be a list")
+            else:
+                ids = [b.get("id") for b in boxes if isinstance(b, dict)]
+                if len(ids) != len(set(ids)):
+                    problems.append(f"gold entry {i} ({e.get('filename')}): duplicate shape ids in 'boxes'")
+                for b in boxes:
+                    if not isinstance(b, dict) or not b.get("id") or not b.get("label"):
+                        problems.append(f"gold entry {i} ({e.get('filename')}): box missing id or label")
+                    elif not (0 <= b.get("x", -1) <= 1 and 0 <= b.get("y", -1) <= 1 and 0 < b.get("width", 0) <= 1 and 0 < b.get("height", 0) <= 1):
+                        problems.append(f"gold entry {i} ({e.get('filename')}): box coordinates must be normalized in [0, 1]")
+                    elif b.get("x", 0) + b.get("width", 0) > 1.0001 or b.get("y", 0) + b.get("height", 0) > 1.0001:
+                        problems.append(f"gold entry {i} ({e.get('filename')}): box exceeds image bounds")`,
   },
   {
     key: "polygon",
@@ -337,6 +463,16 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     },
     description: "At least 3 points, in order, forming a valid polygon whose edges do not cross itself. For video, add `time` to every polygon.",
     schemaVersion: 1,
+    checkSnippet: `        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            polys = ans.get("polygons")
+            if not isinstance(polys, list):
+                problems.append(f"gold entry {i} ({e.get('filename')}): 'polygons' must be a list")
+            else:
+                for p in polys:
+                    pts = p.get("points", []) if isinstance(p, dict) else []
+                    if len(pts) < 3:
+                        problems.append(f"gold entry {i} ({e.get('filename')}): polygon requires at least 3 points")`,
   },
   {
     key: "polyline",
@@ -359,6 +495,16 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     },
     description: "At least 2 distinct points. For video, add `time` to every polyline.",
     schemaVersion: 1,
+    checkSnippet: `        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            lines = ans.get("polylines")
+            if not isinstance(lines, list):
+                problems.append(f"gold entry {i} ({e.get('filename')}): 'polylines' must be a list")
+            else:
+                for line in lines:
+                    pts = line.get("points", []) if isinstance(line, dict) else []
+                    if len(pts) < 2:
+                        problems.append(f"gold entry {i} ({e.get('filename')}): polyline requires at least 2 points")`,
   },
   {
     key: "ellipse",
@@ -380,6 +526,17 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     },
     description: "Same bounds rules as bounding_box. For video, add `time` to every ellipse.",
     schemaVersion: 1,
+    checkSnippet: `        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            ellipses = ans.get("ellipses")
+            if not isinstance(ellipses, list):
+                problems.append(f"gold entry {i} ({e.get('filename')}): 'ellipses' must be a list")
+            else:
+                for el in ellipses:
+                    if not isinstance(el, dict) or not el.get("id") or not el.get("label"):
+                        problems.append(f"gold entry {i} ({e.get('filename')}): ellipse missing id or label")
+                    elif el.get("x", 0) + el.get("width", 0) > 1.0001 or el.get("y", 0) + el.get("height", 0) > 1.0001:
+                        problems.append(f"gold entry {i} ({e.get('filename')}): ellipse exceeds media bounds")`,
   },
   {
     key: "keypoint",
@@ -399,6 +556,17 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
     },
     description: "Each `label` must be one of the user's point names. For video, add `time` to every keypoint.",
     schemaVersion: 1,
+    checkSnippet: `        for i, e in enumerate(gold):
+            ans = e.get("answer", {})
+            kps = ans.get("keypoints")
+            if not isinstance(kps, list):
+                problems.append(f"gold entry {i} ({e.get('filename')}): 'keypoints' must be a list")
+            else:
+                for kp in kps:
+                    if not isinstance(kp, dict) or not kp.get("id") or not kp.get("label"):
+                        problems.append(f"gold entry {i} ({e.get('filename')}): keypoint missing id or label")
+                    elif not (0 <= kp.get("x", -1) <= 1 and 0 <= kp.get("y", -1) <= 1):
+                        problems.append(f"gold entry {i} ({e.get('filename')}): keypoint coordinates must be in [0, 1]")`,
   },
 ];
 
@@ -433,16 +601,20 @@ export function assembleAgentPrompt(typeKey: string, options?: AssemblePromptOpt
   const maxRegions = options?.maxRegions
     ?? (defaultSchema && "max_regions" in defaultSchema ? (defaultSchema as any).max_regions : 500);
   const maxShapes = options?.maxShapes
-    ?? (defaultSchema && "max_shapes" in defaultSchema ? (defaultSchema as any).max_shapes : 500);
+    ?? (defaultSchema && "max_shapes" in defaultSchema ? (defaultSchema as any).max_shapes : 100);
   const maxZipGb = options?.maxZipGb ?? MAX_ZIP_GB;
 
-  // 1. Preamble with token substitutions
+  // 1. Build self check script with task-specific snippet if present
+  const selfCheckScript = buildSelfCheckScript(taskDef.checkSnippet);
+
+  // 2. Preamble with token substitutions
   const preamble = PREAMBLE_TEMPLATE
     .replace(/\{\{TASK_NAME\}\}/g, taskDef.taskName)
     .replace(/\{\{MEDIA_TYPES\}\}/g, taskDef.mediaTypes)
-    .replace(/\{\{MAX_ZIP_GB\}\}/g, String(maxZipGb));
+    .replace(/\{\{MAX_ZIP_GB\}\}/g, String(maxZipGb))
+    .replace(/\{\{SELF_CHECK_SCRIPT\}\}/g, selfCheckScript);
 
-  // 2. Shared fragments
+  // 3. Shared fragments
   const fragments = taskDef.uses.map(useKey => {
     let fragment: string = SHARED_FRAGMENTS[useKey];
     if (useKey === "TEMPORAL_REGIONS") {
@@ -454,7 +626,7 @@ export function assembleAgentPrompt(typeKey: string, options?: AssemblePromptOpt
     return fragment;
   });
 
-  // 3. Task section
+  // 4. Task section
   const usesText = taskDef.uses.length ? taskDef.uses.join(", ") : "none";
   const jsonBlock = `\`\`\`json\n${JSON.stringify(taskDef.exampleAnswer, null, 2)}\n\`\`\``;
   const taskSectionParts = [
