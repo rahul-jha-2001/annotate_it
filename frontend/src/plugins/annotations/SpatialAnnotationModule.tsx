@@ -182,7 +182,16 @@ export abstract class SpatialAnnotationModule<KeyT extends string> extends BaseA
   }
 
   goldAnswerShape() { return `{ ${this.collectionField}: [{ id: string, label: string, normalized geometry${this.tool === "polygon" || this.tool === "polyline" ? ", points" : ""}${""} }] }`; }
-  goldInstructions(schema: SpatialSchema<KeyT>) { return [`Coordinates are normalized from 0 to 1. IDs must be unique.${schema.frame_aware ? " Every shape also needs time in seconds." : " Do not include time for images."}`]; }
+  goldInstructions(schema: SpatialSchema<KeyT>) {
+    const specific = this.tool === "polygon"
+      ? " Polygons require at least 3 points in order around the perimeter (do not repeat the initial point at the end)."
+      : this.tool === "polyline"
+        ? " Polylines require at least 2 points in order along the line."
+        : "";
+    return [
+      `Coordinates are normalized from 0 to 1. IDs must be unique.${specific}${schema.frame_aware ? " Every shape also needs time in seconds." : " Do not include time for images."}`,
+    ];
+  }
 
   createGoldExample(schema: SpatialSchema<KeyT>): SpatialAnswer {
     const base = { id: `${this.tool}-1`, label: schema.choices[0] ?? this.defaultLabel, ...(schema.frame_aware ? { time: 1.25 } : {}) };

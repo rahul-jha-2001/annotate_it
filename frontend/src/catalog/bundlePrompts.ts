@@ -461,7 +461,7 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
         },
       ],
     },
-    description: "At least 3 points, in order, forming a valid polygon whose edges do not cross itself. For video, add `time` to every polygon.",
+    description: "At least 3 points, in order, forming a valid polygon whose edges do not cross itself. Do not repeat the initial point at the end. For video, add `time` to every polygon.",
     schemaVersion: 1,
     checkSnippet: `        for i, e in enumerate(gold):
             ans = e.get("answer", {})
@@ -472,7 +472,9 @@ export const TASK_SECTIONS: TaskSectionDefinition[] = [
                 for p in polys:
                     pts = p.get("points", []) if isinstance(p, dict) else []
                     if len(pts) < 3:
-                        problems.append(f"gold entry {i} ({e.get('filename')}): polygon requires at least 3 points")`,
+                        problems.append(f"gold entry {i} ({e.get('filename')}): polygon requires at least 3 points")
+                    elif len(pts) > 3 and pts[0] == pts[-1]:
+                        problems.append(f"gold entry {i} ({e.get('filename')}): do not repeat start point at the end of points list")`,
   },
   {
     key: "polyline",
