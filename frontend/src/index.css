@@ -529,6 +529,20 @@ input[type="checkbox"], input[type="radio"] {
   vector-effect: non-scaling-stroke;
 }
 
+.spatial-draft-vertex.can-close {
+  fill: #ffffff;
+  stroke: var(--accent-strong);
+  stroke-width: 2.5;
+  cursor: pointer;
+  pointer-events: auto;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.35));
+}
+
+.spatial-draft-vertex.can-close:hover {
+  fill: var(--accent);
+  stroke: #ffffff;
+}
+
 .spatial-resize-handle {
   fill: white;
   stroke: var(--accent-strong);

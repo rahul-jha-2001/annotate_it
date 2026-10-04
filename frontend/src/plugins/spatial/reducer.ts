@@ -77,14 +77,22 @@ export function spatialReducer(
       };
     case "complete-draft": {
       if (!state.draft) return state;
-      const uniquePoints = new Set(state.draft.points.map(point => `${point.x}:${point.y}`));
+      let points = [...state.draft.points];
+      if (state.draft.kind === "polygon" && points.length > 3) {
+        const first = points[0];
+        const last = points[points.length - 1];
+        if (Math.hypot(last.x - first.x, last.y - first.y) < 0.005) {
+          points = points.slice(0, -1);
+        }
+      }
+      const uniquePoints = new Set(points.map(point => `${point.x}:${point.y}`));
       const minimum = state.draft.kind === "polygon" ? 3 : 2;
       if (uniquePoints.size < minimum) {
         throw new Error(`${state.draft.kind} requires ${minimum === 3 ? "three" : "two"} unique points`);
       }
       const shape = {
         ...state.draft,
-        points: [...state.draft.points],
+        points,
       } as SpatialPolygon | SpatialPolyline;
       return {
         ...state,

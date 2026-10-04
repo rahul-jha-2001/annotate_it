@@ -141,6 +141,23 @@ export default function SpatialOverlay({
       return;
     }
     if (interaction.tool === "polygon" || interaction.tool === "polyline") {
+      if (
+        interaction.tool === "polygon" &&
+        state.draft &&
+        state.draft.kind === "polygon" &&
+        state.draft.points.length >= 3
+      ) {
+        const initial = state.draft.points[0];
+        const screenDist = Math.hypot(
+          (point.x - initial.x) * contentRect.width,
+          (point.y - initial.y) * contentRect.height,
+        );
+        const normDist = Math.hypot(point.x - initial.x, point.y - initial.y);
+        if (screenDist <= 20 || normDist < 0.035) {
+          completeDraft();
+          return;
+        }
+      }
       if (!state.draft || state.draft.kind !== interaction.tool) {
         apply({
           type: "start-draft",
@@ -253,6 +270,10 @@ export default function SpatialOverlay({
       tabIndex={interaction.readonly ? -1 : 0}
       onKeyDown={event => {
         if (event.key === "Escape") apply({ type: "cancel-draft" });
+        if (event.key === "Enter" && state.draft) {
+          event.preventDefault();
+          completeDraft();
+        }
         if ((event.key === "Delete" || event.key === "Backspace") && state.selectedId) {
           apply({ type: "delete", id: state.selectedId });
         }
@@ -313,11 +334,31 @@ export default function SpatialOverlay({
               stroke={labelColor(state.draft.label)}
               fill={state.draft.kind === "polygon" ? labelColor(state.draft.label, 0.12) : "none"}
             />
-            {state.draft.points.map((point, vertexIndex) => <circle
-              key={"draft-vertex-" + vertexIndex}
-              className="spatial-draft-vertex"
-              cx={x(point.x)} cy={y(point.y)} r={4}
-            />)}
+            {state.draft.points.map((point, vertexIndex) => {
+              const isInitial = vertexIndex === 0 && state.draft?.kind === "polygon";
+              const canClose = isInitial && Boolean(state.draft && state.draft.points.length >= 3);
+              return (
+                <circle
+                  key={"draft-vertex-" + vertexIndex}
+                  className={`spatial-draft-vertex${isInitial ? " initial" : ""}${canClose ? " can-close" : ""}`}
+                  cx={x(point.x)}
+                  cy={y(point.y)}
+                  r={canClose ? 7 : (isInitial ? 5 : 4)}
+                  style={{
+                    pointerEvents: canClose ? "auto" : "none",
+                    cursor: canClose ? "pointer" : "default",
+                  }}
+                  onPointerDown={event => {
+                    if (canClose) {
+                      event.stopPropagation();
+                      completeDraft();
+                    }
+                  }}
+                  role={canClose ? "button" : undefined}
+                  aria-label={canClose ? "Click initial point to complete polygon" : undefined}
+                />
+              );
+            })}
           </g>
         )}
         {!interaction.readonly && state.selectedId && (() => {

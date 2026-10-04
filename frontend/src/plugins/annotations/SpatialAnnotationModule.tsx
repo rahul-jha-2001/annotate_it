@@ -62,8 +62,13 @@ function SpatialConfiguration<KeyT extends string>({ schema, onChange }: Configu
 function SpatialControl<KeyT extends string>({ schema, answer, onChange }: TypedAnnotationControlProps<SpatialSchema<KeyT>, SpatialAnswer>) {
   const collection = Object.keys(answer)[0];
   const shapes = answer[collection] ?? [];
+  const helpText = schema.annotation_type === "polygon"
+    ? "Click to place vertices. Click the initial point, double-click, or press Enter to complete the polygon."
+    : schema.annotation_type === "polyline"
+      ? "Click to place points. Double-click or press Enter to complete the line."
+      : "Choose a label after drawing. Select a shape on the media to move, resize, or delete it.";
   return <div>
-    <p className="help-text">Choose a label after drawing. Select a shape on the media to move, resize, or delete it.</p>
+    <p className="help-text">{helpText}</p>
     <div className="region-list">{shapes.map((shape, index) => <div className="flex-row" key={shape.id}>
       <code>{shape.id}</code>
       <select className="form-select" value={shape.label} onChange={event => onChange({ [collection]: shapes.map((item, position) => position === index ? { ...item, label: event.target.value } : item) })}>

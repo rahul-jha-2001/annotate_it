@@ -63,6 +63,32 @@ describe("spatial reducer", () => {
     expect(completed.draft).toBeNull();
   });
 
+  it("strips trailing closing point when completing polygon draft", () => {
+    let state = spatialReducer(initialSpatialState(), {
+      type: "start-draft",
+      kind: "polygon",
+      label: "Car",
+      id: "polygon-1",
+    });
+    state = spatialReducer(state, { type: "add-draft-point", point: { x: 0.1, y: 0.1 } });
+    state = spatialReducer(state, { type: "add-draft-point", point: { x: 0.8, y: 0.1 } });
+    state = spatialReducer(state, { type: "add-draft-point", point: { x: 0.5, y: 0.8 } });
+    // Simulate user or tool adding the start point again at the end:
+    state = spatialReducer(state, { type: "add-draft-point", point: { x: 0.1, y: 0.1 } });
+    expect(state.draft?.points).toHaveLength(4);
+    const completed = spatialReducer(state, { type: "complete-draft" });
+    const poly = completed.shapes[0];
+    expect(poly.kind).toBe("polygon");
+    if (poly.kind === "polygon") {
+      expect(poly.points).toHaveLength(3);
+      expect(poly.points).toEqual([
+        { x: 0.1, y: 0.1 },
+        { x: 0.8, y: 0.1 },
+        { x: 0.5, y: 0.8 },
+      ]);
+    }
+  });
+
   it("does not emit changes in readonly mode", () => {
     const state = { ...initialSpatialState([box]), readonly: true };
     expect(spatialReducer(state, { type: "delete", id: "box-1" })).toBe(state);
