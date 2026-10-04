@@ -13,6 +13,7 @@ import { apiFetch } from "../api";
 import { getAnnotationPlugin } from "../plugins/annotations/registry";
 import type { AnnotationAnswer, LabelSchema } from "./annotator/types";
 import AnnotationOverlaySelector, { buildOverlayOptions } from "./AnnotationOverlaySelector";
+import PaginationBar from "./PaginationBar";
 
 interface QualificationQuestion {
   key: string;
@@ -42,6 +43,10 @@ interface AnnotatorListData {
     name: string;
     qualification_form: QualificationQuestion[];
   };
+  total_annotators?: number;
+  page?: number;
+  page_size?: number;
+  total_pages?: number;
   annotators: AnnotatorSummary[];
 }
 
@@ -69,6 +74,10 @@ interface AnnotatorDetailData {
     qualification_form: QualificationQuestion[];
   };
   annotator: AnnotatorSummary;
+  total_annotations?: number;
+  page?: number;
+  page_size?: number;
+  total_pages?: number;
   annotations: AnnotatorAnnotation[];
 }
 
@@ -98,10 +107,12 @@ export default function ExperimentAnnotators({ experimentId }: { experimentId: s
   const [data, setData] = useState<AnnotatorListData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (targetPage: number = 1) => {
     try {
-      const response = await apiFetch(`/api/experiments/${experimentId}/annotators`);
+      const response = await apiFetch(`/api/experiments/${experimentId}/annotators?page=${targetPage}&page_size=${pageSize}`);
       if (!response.ok) throw new Error(await responseError(response, "Could not load annotators"));
       setData(await response.json());
       setError(null);
@@ -112,10 +123,13 @@ export default function ExperimentAnnotators({ experimentId }: { experimentId: s
     }
   }, [experimentId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(page); }, [load, page]);
 
-  if (loading) return <div className="container text-center">Loading annotators…</div>;
-  if (!data) return <div className="container text-center">{error || "Experiment not found"}</div>;
+  if (loading) return <div className="container text-center" style={{ padding: "40px 0" }}>Loading annotators…</div>;
+  if (!data) return <div className="container text-center" style={{ padding: "40px 0" }}>{error || "Experiment not found"}</div>;
+
+  const totalAnnotators = data.total_annotators ?? data.annotators.length;
+  const totalPages = data.total_pages ?? 1;
 
   return (
     <div className="container animate-fade-in" style={{ maxWidth: "1200px" }}>
@@ -129,7 +143,7 @@ export default function ExperimentAnnotators({ experimentId }: { experimentId: s
           <Link href={`/experiments/${experimentId}`} className="btn btn-secondary">
             <BarChart3 size={16} /> Statistics
           </Link>
-          <button className="btn btn-primary" onClick={load}>
+          <button className="btn btn-primary" onClick={() => load(page)}>
             <RefreshCw size={16} /> Refresh
           </button>
         </div>
@@ -138,7 +152,7 @@ export default function ExperimentAnnotators({ experimentId }: { experimentId: s
       {error && <p className="form-error">{error}</p>}
       <section className="glass-panel annotator-table-panel">
         <div className="section-heading-inline">
-          <div><h2>Annotators</h2><p>{data.annotators.length} participant(s)</p></div>
+          <div><h2>Annotators</h2><p>{totalAnnotators} participant(s)</p></div>
           <Users size={24} aria-hidden="true" />
         </div>
         <div className="table-scroll">
@@ -187,6 +201,14 @@ export default function ExperimentAnnotators({ experimentId }: { experimentId: s
             </tbody>
           </table>
         </div>
+        <PaginationBar
+          page={data.page ?? page}
+          totalPages={totalPages}
+          totalItems={totalAnnotators}
+          pageSize={data.page_size ?? pageSize}
+          onPageChange={newPage => setPage(newPage)}
+          itemName="annotators"
+        />
       </section>
     </div>
   );
@@ -196,10 +218,12 @@ export function AnnotatorDetail({ experimentId, annotatorId }: { experimentId: s
   const [data, setData] = useState<AnnotatorDetailData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (targetPage: number = 1) => {
     try {
-      const response = await apiFetch(`/api/experiments/${experimentId}/annotators/${annotatorId}`);
+      const response = await apiFetch(`/api/experiments/${experimentId}/annotators/${annotatorId}?page=${targetPage}&page_size=${pageSize}`);
       if (!response.ok) throw new Error(await responseError(response, "Could not load annotator activity"));
       setData(await response.json());
       setError(null);
@@ -210,14 +234,17 @@ export function AnnotatorDetail({ experimentId, annotatorId }: { experimentId: s
     }
   }, [annotatorId, experimentId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(page); }, [load, page]);
 
-  if (loading) return <div className="container text-center">Loading annotator activity…</div>;
-  if (!data) return <div className="container text-center">{error || "Annotator not found"}</div>;
+  if (loading) return <div className="container text-center" style={{ padding: "40px 0" }}>Loading annotator activity…</div>;
+  if (!data) return <div className="container text-center" style={{ padding: "40px 0" }}>{error || "Annotator not found"}</div>;
 
   const annotationPlugin = getAnnotationPlugin(data.experiment.label_schema.annotation_type);
   const AnswerView = annotationPlugin?.AnswerView;
   const annotator = data.annotator;
+  const totalAnnotations = data.total_annotations ?? data.annotations.length;
+  const totalPages = data.total_pages ?? 1;
+  const baseSubmissionNumber = totalAnnotations - ((data.page ?? page) - 1) * (data.page_size ?? pageSize);
 
   return (
     <div className="container animate-fade-in" style={{ maxWidth: "1100px" }}>
@@ -231,7 +258,7 @@ export function AnnotatorDetail({ experimentId, annotatorId }: { experimentId: s
           <Link href={`/experiments/${experimentId}/annotators`} className="btn btn-secondary">
             <ArrowLeft size={16} /> All annotators
           </Link>
-          <button className="btn btn-primary" onClick={load}><RefreshCw size={16} /> Refresh</button>
+          <button className="btn btn-primary" onClick={() => load(page)}><RefreshCw size={16} /> Refresh</button>
         </div>
       </div>
 
@@ -255,58 +282,72 @@ export function AnnotatorDetail({ experimentId, annotatorId }: { experimentId: s
       )}
 
       <div className="section-heading-inline annotation-history-heading">
-        <div><h2>Annotation history</h2><p>{data.annotations.length} submission(s), newest first</p></div>
+        <div><h2>Annotation history</h2><p>{totalAnnotations} submission(s), newest first</p></div>
         <UserRound size={24} aria-hidden="true" />
       </div>
       {data.annotations.length === 0 ? (
         <div className="glass-panel text-center"><p>No annotations were submitted.</p></div>
       ) : (
-        <div className="flex-col" style={{ gap: "20px" }}>
-          {data.annotations.map((annotation, index) => (
-            <section key={annotation.id} className="glass-panel sample-review-card">
-              <div className="sample-review-header">
-                <div><p className="sample-number">Submission {data.annotations.length - index}</p><h2 title={annotation.raw_uri}>{annotation.filename}</h2></div>
-                <div className="sample-metadata">
-                  {annotation.is_gold ? (
-                    <><span className="metadata-chip gold-chip">Gold item</span><span className="metadata-chip gold-chip">Gold score: {formatScore(annotation.gold_score)}</span></>
-                  ) : (
-                    <span className="metadata-chip">Sample agreement: {formatScore(annotation.agreement_score)}</span>
-                  )}
-                  <span className="metadata-chip">{formatDate(annotation.submitted_at)}</span>
+        <>
+          <div className="flex-col" style={{ gap: "20px" }}>
+            {data.annotations.map((annotation, index) => (
+              <section key={annotation.id} className="glass-panel sample-review-card">
+                <div className="sample-review-header">
+                  <div><p className="sample-number">Submission {baseSubmissionNumber - index}</p><h2 title={annotation.raw_uri}>{annotation.filename}</h2></div>
+                  <div className="sample-metadata">
+                    {annotation.is_gold ? (
+                      <><span className="metadata-chip gold-chip">Gold item</span><span className="metadata-chip gold-chip">Gold score: {formatScore(annotation.gold_score)}</span></>
+                    ) : (
+                      <span className="metadata-chip">Sample agreement: {formatScore(annotation.agreement_score)}</span>
+                    )}
+                    <span className="metadata-chip">{formatDate(annotation.submitted_at)}</span>
+                  </div>
                 </div>
-              </div>
 
-              <AnnotationOverlaySelector
-                modality={data.experiment.modality}
-                schema={data.experiment.label_schema}
-                mediaUrl={annotation.media_url}
-                title={annotation.filename}
-                options={buildOverlayOptions(annotation.gold_answer, [{
-                  id: annotation.id,
-                  label: "Submitted answer",
-                  answer: annotation.answer,
-                }])}
-              />
-              {Object.keys(annotation.metadata).length > 0 && (
-                <div className="sample-metadata annotation-metadata">
-                  {Object.entries(annotation.metadata).map(([key, value]) => <span key={key} className="metadata-chip">{key}: {formatAnswer(value)}</span>)}
-                </div>
-              )}
-              <div className="annotation-comparison">
-                <div className="annotation-row">
-                  <span className="annotation-label">Submitted answer</span>
-                  {AnswerView ? <AnswerView answer={annotation.answer} /> : <code>{JSON.stringify(annotation.answer)}</code>}
-                </div>
-                {annotation.gold_answer && (
-                  <div className="gold-answer">
-                    <span className="annotation-label">Expected gold answer</span>
-                    {AnswerView ? <AnswerView answer={annotation.gold_answer} /> : <code>{JSON.stringify(annotation.gold_answer)}</code>}
+                <AnnotationOverlaySelector
+                  modality={data.experiment.modality}
+                  schema={data.experiment.label_schema}
+                  mediaUrl={annotation.media_url}
+                  title={annotation.filename}
+                  options={buildOverlayOptions(annotation.gold_answer, [{
+                    id: annotation.id,
+                    label: "Submitted answer",
+                    answer: annotation.answer,
+                  }])}
+                />
+                {Object.keys(annotation.metadata).length > 0 && (
+                  <div className="sample-metadata annotation-metadata">
+                    {Object.entries(annotation.metadata).map(([key, value]) => <span key={key} className="metadata-chip">{key}: {formatAnswer(value)}</span>)}
                   </div>
                 )}
-              </div>
-            </section>
-          ))}
-        </div>
+                <div className="annotation-comparison">
+                  <div className="annotation-row">
+                    <span className="annotation-label">Submitted answer</span>
+                    {AnswerView ? <AnswerView answer={annotation.answer} /> : <code>{JSON.stringify(annotation.answer)}</code>}
+                  </div>
+                  {annotation.gold_answer && (
+                    <div className="gold-answer">
+                      <span className="annotation-label">Expected gold answer</span>
+                      {AnswerView ? <AnswerView answer={annotation.gold_answer} /> : <code>{JSON.stringify(annotation.gold_answer)}</code>}
+                    </div>
+                  )}
+                </div>
+              </section>
+            ))}
+          </div>
+
+          <PaginationBar
+            page={data.page ?? page}
+            totalPages={totalPages}
+            totalItems={totalAnnotations}
+            pageSize={data.page_size ?? pageSize}
+            onPageChange={newPage => {
+              setPage(newPage);
+              window.scrollTo({ top: 0, behavior: "smooth" });
+            }}
+            itemName="submissions"
+          />
+        </>
       )}
     </div>
   );

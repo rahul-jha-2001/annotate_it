@@ -3,6 +3,7 @@ import { Download, Eye, Pause, Play, RefreshCw, Settings, Users, Share2, Layers,
 import { Link } from "wouter";
 import { apiFetch } from "../api";
 import ExportDatasetModal from "./ExportDatasetModal";
+import ReviewAnnotations from "./ReviewAnnotations";
 import {
   ExperimentStatusBanner,
   ExperimentDeploySection,
@@ -75,7 +76,7 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showExportModal, setShowExportModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<"overview" | "dataset" | "quality" | "qualifications" | "teaching" | "settings">("overview");
+  const [activeTab, setActiveTab] = useState<"overview" | "samples" | "dataset" | "quality" | "qualifications" | "teaching" | "settings">("overview");
   const [refreshing, setRefreshing] = useState(false);
 
   const loadExperiment = useCallback(async () => {
@@ -187,9 +188,14 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
               <Link href={`/experiments/${experimentId}/annotators`} className="btn btn-secondary">
                 <Users size={16} /> Annotators
               </Link>
-              <Link href={`/experiments/${experimentId}/review`} className="btn btn-secondary">
+              <button
+                type="button"
+                className={`btn ${activeTab === "samples" ? "btn-primary" : "btn-secondary"}`}
+                onClick={() => setActiveTab("samples")}
+                title="Review all samples and annotations"
+              >
                 <Eye size={16} /> Review
-              </Link>
+              </button>
               <button className="btn btn-primary" onClick={() => setShowExportModal(true)}>
                 <Download size={16} /> Export
               </button>
@@ -229,6 +235,15 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
             onClick={() => setActiveTab("overview")}
           >
             Overview &amp; Live Stats
+          </button>
+        )}
+        {isDeployed && (
+          <button
+            type="button"
+            className={`btn ${activeTab === "samples" ? "btn-primary" : "btn-secondary"}`}
+            onClick={() => setActiveTab("samples")}
+          >
+            <Eye size={15} /> Samples &amp; Annotations
           </button>
         )}
         <button
@@ -348,6 +363,13 @@ export default function ExperimentDashboard({ experimentId }: { experimentId: st
           isLocked={isDeployed}
           onUpdated={loadExperiment}
         />
+      )}
+
+      {/* Tab: Samples & Annotations */}
+      {isDeployed && activeTab === "samples" && (
+        <section className="glass-panel" style={{ padding: "24px", marginBottom: "24px" }}>
+          <ReviewAnnotations experimentId={experimentId} embedded={true} />
+        </section>
       )}
 
       {/* Tab 3: Qualifications */}

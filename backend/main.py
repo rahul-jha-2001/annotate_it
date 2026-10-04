@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import os
 import secrets
 import time
@@ -11,7 +12,7 @@ from typing import List
 
 import boto3
 from botocore.client import Config
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.exception_handlers import (
     http_exception_handler,
     request_validation_exception_handler,
@@ -2099,21 +2100,30 @@ def update_annotator(
 @app.get("/experiments/{experiment_id}/annotators")
 def list_experiment_annotators(
     experiment_id: uuid.UUID,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     experiment = get_owned_experiment(experiment_id, db, user)
     ensure_current_schema(experiment)
-    annotators = (
+    base_query = (
         db.query(Annotator)
-        .options(selectinload(Annotator.user), selectinload(Annotator.score))
         .filter(
             Annotator.experiment_id == experiment.id,
             Annotator.annotations.any(),
         )
+    )
+    total_annotators = base_query.count()
+    total_pages = math.ceil(total_annotators / page_size) if total_annotators > 0 else 1
+    annotators = (
+        base_query.options(selectinload(Annotator.user), selectinload(Annotator.score))
         .order_by(Annotator.created_at)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
         .all()
     )
+    annotator_ids = [annotator.id for annotator in annotators]
     activity_rows = (
         db.query(
             Annotation.annotator_id,
@@ -2121,10 +2131,13 @@ def list_experiment_annotators(
             func.max(Annotation.submitted_at),
         )
         .join(DataUnit, DataUnit.id == Annotation.data_unit_id)
-        .filter(DataUnit.experiment_id == experiment.id)
+        .filter(
+            DataUnit.experiment_id == experiment.id,
+            Annotation.annotator_id.in_(annotator_ids),
+        )
         .group_by(Annotation.annotator_id)
         .all()
-    )
+    ) if annotator_ids else []
     activity = {
         annotator_id: {"count": count, "last_submission": last_submission}
         for annotator_id, count, last_submission in activity_rows
@@ -2135,11 +2148,15 @@ def list_experiment_annotators(
             "name": experiment.name,
             "qualification_form": experiment.qualification_form or [],
         },
+        "total_annotators": total_annotators,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
         "annotators": [
             serialize_annotator_summary(
                 annotator,
-                activity[annotator.id]["last_submission"],
-                activity[annotator.id]["count"],
+                activity.get(annotator.id, {}).get("last_submission", annotator.created_at),
+                activity.get(annotator.id, {}).get("count", 0),
             )
             for annotator in annotators
         ],
@@ -2150,6 +2167,8 @@ def list_experiment_annotators(
 def get_experiment_annotator(
     experiment_id: uuid.UUID,
     annotator_id: uuid.UUID,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -2164,21 +2183,38 @@ def get_experiment_annotator(
     if annotator is None:
         raise HTTPException(status_code=404, detail="Annotator not found")
 
-    annotations = (
+    base_query = (
         db.query(Annotation)
-        .options(
-            selectinload(Annotation.data_unit).selectinload(DataUnit.agreement),
-        )
         .join(DataUnit, DataUnit.id == Annotation.data_unit_id)
         .filter(
             Annotation.annotator_id == annotator.id,
             DataUnit.experiment_id == experiment.id,
         )
+    )
+    total_annotations = base_query.count()
+    total_pages = math.ceil(total_annotations / page_size) if total_annotations > 0 else 1
+
+    last_sub = (
+        db.query(func.max(Annotation.submitted_at))
+        .join(DataUnit, DataUnit.id == Annotation.data_unit_id)
+        .filter(
+            Annotation.annotator_id == annotator.id,
+            DataUnit.experiment_id == experiment.id,
+        )
+        .scalar()
+    )
+    last_activity_at = last_sub if last_sub is not None else annotator.created_at
+
+    annotations = (
+        base_query.options(
+            selectinload(Annotation.data_unit).selectinload(DataUnit.agreement),
+        )
         .order_by(Annotation.submitted_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
         .all()
     )
     annotation_type = get_type(experiment.label_schema["annotation_type"])
-    last_activity_at = annotations[0].submitted_at if annotations else annotator.created_at
     return {
         "experiment": {
             "id": experiment.id,
@@ -2188,8 +2224,12 @@ def get_experiment_annotator(
             "qualification_form": experiment.qualification_form or [],
         },
         "annotator": serialize_annotator_summary(
-            annotator, last_activity_at, len(annotations)
+            annotator, last_activity_at, total_annotations
         ),
+        "total_annotations": total_annotations,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
         "annotations": [
             {
                 "id": annotation.id,
@@ -2225,19 +2265,24 @@ def get_experiment_annotator(
 @app.get("/experiments/{experiment_id}/review")
 def review_experiment_annotations(
     experiment_id: uuid.UUID,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     experiment = get_owned_experiment(experiment_id, db, user)
     ensure_current_schema(experiment)
+    base_query = db.query(DataUnit).filter_by(experiment_id=experiment.id)
+    total_samples = base_query.count()
+    total_pages = math.ceil(total_samples / page_size) if total_samples > 0 else 1
     units = (
-        db.query(DataUnit)
-        .options(
+        base_query.options(
             selectinload(DataUnit.annotations),
             selectinload(DataUnit.agreement),
         )
-        .filter_by(experiment_id=experiment.id)
         .order_by(DataUnit.raw_uri)
+        .offset((page - 1) * page_size)
+        .limit(page_size)
         .all()
     )
     return {
@@ -2247,6 +2292,10 @@ def review_experiment_annotations(
             "modality": experiment.modality,
             "label_schema": experiment.label_schema,
         },
+        "total_samples": total_samples,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages,
         "samples": [
             {
                 "id": unit.id,
