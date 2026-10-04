@@ -231,7 +231,7 @@ export default function ReviewAnnotations({
         </>
       )}
       {!embedded && (
-        <Link href="/" className="btn btn-secondary" style={{ marginTop: "24px" }}>
+        <Link href="/dashboard" className="btn btn-secondary" style={{ marginTop: "24px" }}>
           <ArrowLeft size={16} /> Back to experiments
         </Link>
       )}

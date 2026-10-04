@@ -11,6 +11,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     {publishableKey ? (
       <ClerkProvider
         publishableKey={publishableKey}
+        signInFallbackRedirectUrl="/dashboard"
+        signUpFallbackRedirectUrl="/dashboard"
         appearance={{
           variables: {
             colorPrimary: '#087796',

@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
 import { RedirectToSignIn, useAuth, useClerk, useUser } from "@clerk/react";
-import { Route, Switch, Link, useLocation } from "wouter";
+import { Route, Switch, Link, Redirect, useLocation } from "wouter";
 import { Activity, BookOpen, LayoutDashboard, LogIn, LogOut, Plus, UserRound } from "lucide-react";
 import Dashboard from "./components/Dashboard";
 import CreateExperiment from "./components/CreateExperiment";
@@ -20,7 +20,17 @@ import { setAuthTokenGetter } from "./api";
 function Protected({ children }: { children: ReactNode }) {
   const { isLoaded, isSignedIn } = useAuth();
   if (!isLoaded) return <div className="container text-center">Loading account…</div>;
-  if (!isSignedIn) return <RedirectToSignIn />;
+  if (!isSignedIn) {
+    const currentUrl = typeof window !== "undefined" ? window.location.pathname + window.location.search : "/dashboard";
+    return (
+      <RedirectToSignIn
+        signInFallbackRedirectUrl={currentUrl}
+        signInForceRedirectUrl={currentUrl}
+        signUpFallbackRedirectUrl={currentUrl}
+        signUpForceRedirectUrl={currentUrl}
+      />
+    );
+  }
   return <>{children}</>;
 }
 
@@ -30,6 +40,16 @@ function App() {
   const { signOut } = useClerk();
   const [location, navigate] = useLocation();
   setAuthTokenGetter(() => getToken());
+
+  useEffect(() => {
+    if (!isSignedIn) return;
+    const pendingAnnotatorUrl = typeof window !== "undefined" ? sessionStorage.getItem("annotator_return_url") : null;
+    if (pendingAnnotatorUrl && (location === "/" || location === "/dashboard")) {
+      sessionStorage.removeItem("annotator_return_url");
+      navigate(pendingAnnotatorUrl);
+    }
+  }, [isSignedIn, location, navigate]);
+
   const ContentWrapper = wrapInAppMain(location) ? "main" : "div";
   const displayName = user?.fullName || user?.username || user?.primaryEmailAddress?.emailAddress || "Account";
   const isAnnotating = location.startsWith("/annotate");
@@ -54,7 +74,7 @@ function App() {
                 <span className="nav-link" style={{ cursor: "default", opacity: 0.85 }}>
                   <UserRound size={17} /> {displayName}
                 </span>
-                <button className="nav-link nav-button" onClick={async () => { await signOut(); }}><LogOut size={17} /> Sign out</button>
+                <button className="nav-link nav-button" onClick={async () => { await signOut({ redirectUrl: location }); }}><LogOut size={17} /> Sign out</button>
               </>
             ) : null
           ) : isSignedIn ? (
@@ -63,7 +83,7 @@ function App() {
               <Link href="/catalog" className="nav-link"><BookOpen size={17} /> Annotation Catalog</Link>
               <Link href="/experiments/new" className="nav-link nav-link-primary"><Plus size={17} /> New Experiment</Link>
               <Link href="/profile" className="nav-link"><UserRound size={17} /> {displayName}</Link>
-              <button className="nav-link nav-button" onClick={async () => { await signOut(); navigate("/login"); }}><LogOut size={17} /> Sign out</button>
+              <button className="nav-link nav-button" onClick={async () => { await signOut({ redirectUrl: "/login" }); }}><LogOut size={17} /> Sign out</button>
             </>
           ) : <Link href="/login" className="nav-link nav-link-primary"><LogIn size={17} /> Sign in</Link>}
         </nav>
@@ -78,7 +98,9 @@ function App() {
             {(params) => <AnnotationCatalogDetail presetSlug={params.presetSlug!} />}
           </Route>
           <Route path="/catalog"><AnnotationCatalog /></Route>
-          <Route path="/"><LandingPage isSignedIn={Boolean(isSignedIn)} /></Route>
+          <Route path="/">
+            {isSignedIn ? <Redirect to="/dashboard" /> : <LandingPage isSignedIn={false} />}
+          </Route>
           <Route path="/dashboard"><Protected><Dashboard /></Protected></Route>
           <Route path="/experiments/new">
             <Protected><div className="container animate-fade-in">
